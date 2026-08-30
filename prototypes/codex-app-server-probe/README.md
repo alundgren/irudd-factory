@@ -1,6 +1,6 @@
 # Codex App Server probe
 
-This directory contains an isolated Bun prototype for later, human-run Codex App Server experiments. It launches `codex app-server` over JSON-RPC stdio with an argument array. It does not use a shell to construct the provider command.
+This directory contains an isolated Bun prototype that runs live Codex App Server experiments unattended. It launches `codex app-server` over JSON-RPC stdio with an argument array. It does not use a shell to construct the provider command.
 
 The automated checks use a fake executable and synthetic schemas. They do not run a Codex turn, contact GitHub, or read the private testing repository. Passing them proves the probe code, not the live provider contract or the operating-system sandbox.
 
@@ -71,7 +71,7 @@ The campaign contains:
 
 The parent probe writes only inside the campaign and OS-created temporary locations used by its processes. `read` runs with a read-only policy. `edit`, `pr`, `fail`, and `interrupt` get write access to their workspace, with `/tmp` and the inherited temporary directory excluded. The released App Server runtime does not restrict reads to the scenario workspace. Agent commands may read `codex-home`, artifacts, sibling runs, and other files available to the current operating-system user. Run the probe only in the documented single-user development environment and keep unrelated data off that host.
 
-The App Server child receives only `PATH`, locale and terminal basics, a `HOME`, the isolated `CODEX_HOME`, and fixed noninteractive flags. The probe removes operator GitHub variables, cloud credentials, `SSH_AUTH_SOCK`, OpenAI variables, Claude variables, and unrelated Codex variables. `read`, `edit`, `fail`, and `interrupt` get an empty run-local `HOME`. `pr` gets the operator `HOME` for the reason described below.
+The App Server child receives only `PATH`, locale and terminal basics, a `HOME`, the isolated `CODEX_HOME`, and fixed noninteractive flags. The probe removes operator GitHub variables, cloud credentials, `SSH_AUTH_SOCK`, OpenAI variables, other agent-harness variables, and unrelated Codex variables. `read`, `edit`, `fail`, and `interrupt` get an empty run-local `HOME`. `pr` gets the operator `HOME` for the reason described below.
 
 Every scenario runs unattended, because the dispatcher this probe informs will have nobody at the terminal. Turns use `approvalPolicy: "never"`, and every run asserts that nothing asked for an approval. Workspace write refuses Git metadata writes unless the directory is named, so write scenarios list both the workspace and its `.git` directory as writable roots. Agent command networking stays disabled everywhere except `pr`, which needs it to push and open the pull request without an approval nobody is there to give. The approval handling code remains, covered by the automated tests, for the day a policy needs it back.
 
@@ -135,4 +135,4 @@ The configurable fields are `childStartupMs`, `initializationMs`, `modelSchemaMs
 
 ## Limits
 
-No automated check here establishes the real model catalog, provider authentication flow, operating-system write policy, approval request details, network enforcement, interruption timing, push, or pull-request behavior. Those checks belong to the human-run scenarios. The prototype does not claim filesystem read isolation. It intentionally has no Effect, SQLite, React, WebSockets, scheduler, Claude integration, service installation, or VM-specific path.
+No automated check here establishes the real model catalog, provider authentication flow, operating-system write policy, approval request details, network enforcement, interruption timing, push, or pull-request behavior. Those checks belong to the live scenarios. The prototype does not claim filesystem read isolation. It intentionally has no Effect, SQLite, React, WebSockets, scheduler, service installation, or VM-specific path.
