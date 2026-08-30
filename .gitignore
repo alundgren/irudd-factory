@@ -1,3 +1,12 @@
+node_modules/
+dist/
+.factory/
+factory.json
+*.db
+*.db-shm
+*.db-wal
+coverage/
+apps/console/dist/
 prototypes/codex-app-server-probe/.probe-campaigns/
 prototypes/codex-app-server-probe/node_modules/
 prototypes/codex-app-server-probe/*.tgz
