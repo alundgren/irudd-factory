@@ -9,13 +9,10 @@ import {
   type CliOptions,
   initializeCampaign,
   operatorCodexHome,
+  operatorHome,
   providerAuthReady,
 } from "./config.ts";
-import {
-  buildChildEnvironment,
-  buildKeychainEnvironment,
-  leakedKeys,
-} from "./environment.ts";
+import { buildChildEnvironment, leakedKeys } from "./environment.ts";
 import {
   gitGlobalConfigPath,
   sanitizeCopiedGitDirectory,
@@ -30,6 +27,7 @@ import { Redactor } from "./redaction.ts";
 import { RpcClient } from "./rpc.ts";
 import { inspectSchemas, requireScenarioSandboxSchema } from "./schema.ts";
 import {
+  type ApprovalRecord,
   ProbeError,
   type AssertionRecord,
   type ResultName,
@@ -85,40 +83,6 @@ async function command(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
-
-async function readKeychainToken(
-  service: string,
-  account: string,
-): Promise<string> {
-  if (process.platform !== "darwin") {
-    throw new ProbeError(
-      "rejected",
-      "keychain_unavailable",
-      "The pr scenario requires macOS /usr/bin/security",
-    );
-  }
-  const result = await command(
-    [
-      "/usr/bin/security",
-      "find-generic-password",
-      "-w",
-      "-s",
-      service,
-      "-a",
-      account,
-    ],
-    { cwd: "/tmp", env: buildKeychainEnvironment() },
-  );
-  const token = result.stdout.trim();
-  if (result.code !== 0 || !token) {
-    throw new ProbeError(
-      "rejected",
-      "keychain_entry_missing",
-      `No nonempty Keychain entry for service ${service}`,
-    );
-  }
-  return token;
 }
 
 async function prepareWorkspace(
@@ -225,8 +189,11 @@ function sandboxFor(
     ? { type: "readOnly", networkAccess: false }
     : {
         type: "workspaceWrite",
-        writableRoots: [workspace],
-        networkAccess: false,
+        // Workspace write refuses Git metadata writes unless the directory is
+        // named, and an unattended run has nobody to approve the escalation.
+        writableRoots: [workspace, join(workspace, ".git")],
+        // Only pr needs the network, and it needs it without an approval.
+        networkAccess: scenario === "pr",
         excludeSlashTmp: true,
         excludeTmpdirEnvVar: true,
       };
@@ -289,6 +256,7 @@ export function providerContractAssertions(
   scenario: ScenarioName,
   threadSettings: unknown,
   runtimeIntegrations: Map<string, string>,
+  approvals: ApprovalRecord[] = [],
 ): AssertionRecord[] {
   const observed = [...runtimeIntegrations.entries()]
     .map(([name, status]) => `${name}=${status}`)
@@ -299,6 +267,13 @@ export function providerContractAssertions(
   const settings = threadSettings as any;
   const policy = settings?.sandboxPolicy;
   const records: AssertionRecord[] = [
+    {
+      name: "no_approvals_requested",
+      passed: approvals.length === 0,
+      detail: approvals.length
+        ? approvals.map((record) => record.action).join("; ")
+        : "the unattended policy asked for nothing",
+    },
     {
       name: "runtime_integrations",
       passed: unexpected.length === 0,
@@ -319,9 +294,11 @@ export function providerContractAssertions(
       name: "effective_turn_sandbox",
       passed:
         scenario === "read"
-          ? policy.type === "readOnly"
+          ? policy.type === "readOnly" && policy.networkAccess === false
           : policy.type === "workspaceWrite" &&
-            policy.networkAccess === false &&
+            // Only pr may reach the network, and only to push and open the
+            // pull request without an approval nobody is there to give.
+            policy.networkAccess === (scenario === "pr") &&
             policy.excludeSlashTmp === true &&
             policy.excludeTmpdirEnvVar === true,
       detail: `${policy.type}, network ${policy.networkAccess}, echoed writableRoots ${JSON.stringify(policy.writableRoots ?? null)}; the working directory is writable without being echoed`,
@@ -714,7 +691,6 @@ export async function runScenario(
     "run root",
   );
   await mkdir(runRoot, { recursive: false });
-  let token: string | undefined;
   const redactor = new Redactor([]);
   const artifacts = new RunArtifacts(runRoot, redactor);
   await artifacts.initialize();
@@ -752,13 +728,6 @@ export async function runScenario(
         "No usable Codex credentials were found; run `codex login` normally, then rerun doctor",
       );
     }
-    if (scenario === "pr") {
-      token = await readKeychainToken(
-        options.keychainService,
-        options.keychainAccount,
-      );
-      redactor.add(token);
-    }
     workspace = await prepareWorkspace(scenario, runRoot, options.source);
     const agentHome = plannedWithin(
       runRoot,
@@ -766,38 +735,11 @@ export async function runScenario(
       "agent home",
     );
     await mkdir(agentHome, { recursive: true, mode: 0o700 });
-    const gitAskpass =
-      scenario === "pr"
-        ? plannedWithin(
-            workspace,
-            join(workspace, ".git", "probe-askpass"),
-            "Git askpass",
-          )
-        : null;
-    if (gitAskpass) {
-      await writeFile(
-        gitAskpass,
-        [
-          "#!/bin/sh",
-          'case "$1" in',
-          '  *Username*) printf "%s\\n" "x-access-token" ;;',
-          '  *Password*) printf "%s\\n" "$GH_TOKEN" ;;',
-          "  *) exit 1 ;;",
-          "esac",
-          "",
-        ].join("\n"),
-        { mode: 0o700 },
-      );
-    }
     const env = buildChildEnvironment({
       codexHome: campaign.codexHome,
       agentHome,
       scenario,
-      ...(token ? { githubToken: token } : {}),
-      ...(gitAskpass ? { gitAskpass } : {}),
-      ...(scenario === "pr"
-        ? { gitGlobalConfig: gitGlobalConfigPath(workspace) }
-        : {}),
+      ...(scenario === "pr" ? { operatorHome: operatorHome() } : {}),
     });
     const leaks = leakedKeys(env);
     if (leaks.length > 0) {
@@ -973,7 +915,7 @@ export async function runScenario(
       {
         model: EXPECTED_MODEL,
         cwd: workspace,
-        approvalPolicy: "on-request",
+        approvalPolicy: "never",
         sandbox: scenario === "read" ? "read-only" : "workspace-write",
         serviceName: "irudd_codex_app_server_probe",
       },
@@ -1013,7 +955,7 @@ export async function runScenario(
         threadId,
         input: [{ type: "text", text: prompt }],
         cwd: workspace,
-        approvalPolicy: "on-request",
+        approvalPolicy: "never",
         sandboxPolicy,
         model: EXPECTED_MODEL,
         effort: EXPECTED_EFFORT,
@@ -1046,6 +988,7 @@ export async function runScenario(
           scenario,
           threadSettings,
           runtimeIntegrations,
+          client?.approvals ?? [],
         ),
       ];
       effects = {
@@ -1138,6 +1081,7 @@ export async function runScenario(
         scenario,
         threadSettings,
         runtimeIntegrations,
+        client?.approvals ?? [],
       ),
     ];
     effects = {
@@ -1237,7 +1181,6 @@ export async function runScenario(
       timeouts: options.timeouts,
     };
     await artifacts.finish(manifest);
-    token = undefined;
   }
   return { result, runRoot };
 }

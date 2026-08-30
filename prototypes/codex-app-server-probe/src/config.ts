@@ -129,6 +129,20 @@ export function operatorCodexHome(
   return home && home.startsWith("/") ? join(resolve(home), ".codex") : null;
 }
 
+export function operatorHome(
+  environment: Record<string, string | undefined> = process.env,
+): string {
+  const home = environment.HOME;
+  if (!home || !home.startsWith("/")) {
+    throw new ProbeError(
+      "rejected",
+      "operator_home_missing",
+      "The pr scenario needs the operator HOME to reach the ambient gh and Git credentials",
+    );
+  }
+  return resolve(home);
+}
+
 export async function initializeCampaign(
   campaignRoot: string,
   seedAuthFrom: string | null = null,

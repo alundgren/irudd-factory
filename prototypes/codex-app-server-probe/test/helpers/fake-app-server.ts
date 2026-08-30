@@ -146,8 +146,7 @@ for await (const line of reader) {
     }
   } else if (message.method === "thread/start") {
     if (
-      (validateScenarioPolicy &&
-        message.params?.approvalPolicy !== "on-request") ||
+      (validateScenarioPolicy && message.params?.approvalPolicy !== "never") ||
       (validateScenarioPolicy &&
         !["read-only", "workspace-write"].includes(message.params?.sandbox))
     ) {
@@ -175,13 +174,13 @@ for await (const line of reader) {
           sandboxPolicy?.writableRoots === undefined
         : sandboxPolicy?.type === "workspaceWrite" &&
           JSON.stringify(sandboxPolicy?.writableRoots) ===
-            JSON.stringify([process.cwd()]) &&
+            JSON.stringify([process.cwd(), join(process.cwd(), ".git")]) &&
           sandboxPolicy?.networkAccess === false &&
           sandboxPolicy?.excludeSlashTmp === true &&
           sandboxPolicy?.excludeTmpdirEnvVar === true;
     if (
       validateScenarioPolicy &&
-      (message.params?.approvalPolicy !== "on-request" || !validSandbox)
+      (message.params?.approvalPolicy !== "never" || !validSandbox)
     ) {
       send({
         id: message.id,

@@ -29,9 +29,7 @@ export function buildChildEnvironment(options: {
   codexHome: string;
   agentHome: string;
   scenario: ScenarioName | "doctor";
-  githubToken?: string;
-  gitAskpass?: string;
-  gitGlobalConfig?: string;
+  operatorHome?: string;
 }): Record<string, string> {
   const source = options.source ?? process.env;
   const environment: Record<string, string> = {};
@@ -39,51 +37,29 @@ export function buildChildEnvironment(options: {
     const value = source[key];
     if (value) environment[key] = value;
   }
-  environment.HOME = options.agentHome;
+  // The pr scenario uses the ambient gh and git credentials of the operator,
+  // which macOS keeps in the login keychain and gh keyring. Both are reached
+  // through the operator HOME, so pr runs with it and every other scenario
+  // keeps the empty run-local home.
+  environment.HOME =
+    options.scenario === "pr" && options.operatorHome
+      ? options.operatorHome
+      : options.agentHome;
   environment.CODEX_HOME = options.codexHome;
   environment.NO_COLOR = "1";
   environment.CI = "1";
-  if (options.scenario === "pr" && options.githubToken) {
-    if (!options.gitGlobalConfig) {
-      throw new Error(
-        "pr child environment requires an empty global Git config",
-      );
+  if (options.scenario === "pr") {
+    if (!options.operatorHome) {
+      throw new Error("The pr scenario requires the operator HOME");
     }
-    environment.GH_TOKEN = options.githubToken;
     environment.GH_PROMPT_DISABLED = "1";
     environment.GIT_TERMINAL_PROMPT = "0";
-    environment.GIT_CONFIG_NOSYSTEM = "1";
-    environment.GIT_CONFIG_GLOBAL = options.gitGlobalConfig;
-    if (options.gitAskpass) environment.GIT_ASKPASS = options.gitAskpass;
   }
-  return environment;
-}
-
-export function buildKeychainEnvironment(
-  source: Record<string, string | undefined> = process.env,
-): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const key of SAFE_INHERITED_KEYS) {
-    const value = source[key];
-    if (value) environment[key] = value;
-  }
-  // macOS resolves the keychain search list from the operator HOME, so this
-  // parent-side lookup keeps it. The child environment never receives it.
-  const home = source.HOME;
-  if (!home) {
-    throw new Error("Reading the Keychain requires the operator HOME");
-  }
-  environment.HOME = home;
-  environment.NO_COLOR = "1";
   return environment;
 }
 
 export function leakedKeys(environment: Record<string, string>): string[] {
-  const namedExceptions = new Set([
-    "GH_TOKEN",
-    "GH_PROMPT_DISABLED",
-    "CODEX_HOME",
-  ]);
+  const namedExceptions = new Set(["GH_PROMPT_DISABLED", "CODEX_HOME"]);
   return Object.keys(environment).filter(
     (key) =>
       !namedExceptions.has(key) &&

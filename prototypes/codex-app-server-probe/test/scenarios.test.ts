@@ -89,14 +89,16 @@ describe("scenario policies and assertions", () => {
     const root = await workspace();
     const read = scenarioInternals.sandboxFor("read", root) as any;
     const edit = scenarioInternals.sandboxFor("edit", root) as any;
+    const pr = scenarioInternals.sandboxFor("pr", root) as any;
     expect(read).toEqual({ type: "readOnly", networkAccess: false });
     expect(edit).toEqual({
       type: "workspaceWrite",
-      writableRoots: [root],
+      writableRoots: [root, join(root, ".git")],
       networkAccess: false,
       excludeSlashTmp: true,
       excludeTmpdirEnvVar: true,
     });
+    expect(pr.networkAccess).toBe(true);
   });
 
   test("read requires an exact heading and a clean workspace", async () => {

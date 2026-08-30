@@ -7,11 +7,7 @@ import {
   parseArgs,
   providerAuthReady,
 } from "../src/config.ts";
-import {
-  buildChildEnvironment,
-  buildKeychainEnvironment,
-  leakedKeys,
-} from "../src/environment.ts";
+import { buildChildEnvironment, leakedKeys } from "../src/environment.ts";
 import {
   readLocalOrigin,
   sanitizeCopiedGitDirectory,
@@ -67,26 +63,37 @@ describe("configuration and containment", () => {
     expect(leakedKeys(environment)).toEqual([]);
   });
 
-  test("adds only the dedicated pr credential exception", () => {
+  test("gives pr the operator home and no credential variables", () => {
     const environment = buildChildEnvironment({
-      source: { PATH: "/bin", GH_TOKEN: "operator" },
+      source: { PATH: "/bin", GH_TOKEN: "operator", HOME: "/Users/operator" },
       codexHome: "/campaign/codex-home",
       agentHome: "/campaign/run/agent-home",
       scenario: "pr",
-      githubToken: "dedicated",
-      gitAskpass: "/campaign/run/workspace/.git/probe-askpass",
-      gitGlobalConfig: "/campaign/run/workspace/.git/probe-global-config",
+      operatorHome: "/Users/operator",
     });
-    expect(environment.GH_TOKEN).toBe("dedicated");
-    expect(environment.GIT_ASKPASS).toBe(
-      "/campaign/run/workspace/.git/probe-askpass",
-    );
+    expect(environment.HOME).toBe("/Users/operator");
+    expect(environment.GH_TOKEN).toBeUndefined();
     expect(environment.GIT_TERMINAL_PROMPT).toBe("0");
-    expect(environment.GIT_CONFIG_NOSYSTEM).toBe("1");
-    expect(environment.GIT_CONFIG_GLOBAL).toBe(
-      "/campaign/run/workspace/.git/probe-global-config",
-    );
     expect(leakedKeys(environment)).toEqual([]);
+    expect(() =>
+      buildChildEnvironment({
+        source: { PATH: "/bin" },
+        codexHome: "/campaign/codex-home",
+        agentHome: "/campaign/run/agent-home",
+        scenario: "pr",
+      }),
+    ).toThrow();
+  });
+
+  test("keeps every other scenario in the empty run-local home", () => {
+    expect(
+      buildChildEnvironment({
+        source: { PATH: "/bin", HOME: "/Users/operator" },
+        codexHome: "/campaign/codex-home",
+        agentHome: "/campaign/run/agent-home",
+        scenario: "edit",
+      }).HOME,
+    ).toBe("/campaign/run/agent-home");
   });
 
   for (const linkedPath of ["config", "refs", "objects"]) {
@@ -112,24 +119,6 @@ describe("configuration and containment", () => {
       ).rejects.toMatchObject({ code: "git_metadata_link_rejected" });
     });
   }
-
-  test("reads the Keychain with the operator home and never leaks it to the child", () => {
-    const source = {
-      PATH: "/usr/bin",
-      HOME: "/Users/operator",
-      TMPDIR: "/tmp",
-    };
-    expect(buildKeychainEnvironment(source).HOME).toBe("/Users/operator");
-    expect(
-      buildChildEnvironment({
-        source,
-        codexHome: "/campaign/codex-home",
-        agentHome: "/campaign/runs/run/agent-home",
-        scenario: "pr",
-      }).HOME,
-    ).toBe("/campaign/runs/run/agent-home");
-    expect(() => buildKeychainEnvironment({ PATH: "/usr/bin" })).toThrow();
-  });
 
   test("requires usable data in the isolated file credential store", async () => {
     const root = await mkdtemp(join(tmpdir(), "probe-auth-"));
