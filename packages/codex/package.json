@@ -1,0 +1,17 @@
+{
+  "name": "@irudd-factory/codex",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "bun ../../scripts/test-suite.ts packages/codex"
+  },
+  "dependencies": {
+    "@irudd-factory/application": "workspace:*",
+    "@irudd-factory/contracts": "workspace:*",
+    "effect": "3.22.1"
+  }
+}

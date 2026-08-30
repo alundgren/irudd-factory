@@ -23,6 +23,14 @@
         "effect": "3.22.1",
       },
     },
+    "packages/codex": {
+      "name": "@irudd-factory/codex",
+      "dependencies": {
+        "@irudd-factory/application": "workspace:*",
+        "@irudd-factory/contracts": "workspace:*",
+        "effect": "3.22.1",
+      },
+    },
     "packages/contracts": {
       "name": "@irudd-factory/contracts",
       "dependencies": {
@@ -72,6 +80,8 @@
     "@effect/workflow": ["@effect/workflow@0.19.1", "", { "peerDependencies": { "@effect/experimental": "^0.61.1", "@effect/platform": "^0.97.1", "@effect/rpc": "^0.76.2", "effect": "^3.22.1" } }, "sha512-irU6ddHdIxYOhv0cJiJTk2AUxRmPYjRJ5JdB5UCvpJC4vLCyR2XyKspiCNDiEX1aSGPhVWEXhVMWXR1cErMS3A=="],
 
     "@irudd-factory/application": ["@irudd-factory/application@workspace:packages/application"],
+
+    "@irudd-factory/codex": ["@irudd-factory/codex@workspace:packages/codex"],
 
     "@irudd-factory/contracts": ["@irudd-factory/contracts@workspace:packages/contracts"],
 
