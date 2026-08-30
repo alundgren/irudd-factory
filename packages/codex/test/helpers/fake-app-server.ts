@@ -78,7 +78,11 @@ async function handle(line: string): Promise<void> {
     respond(message.id, {
       thread: { id: "thread-1" },
       model: mode === "model-mismatch" ? "another-model" : "gpt-5.6-luna",
-      reasoningEffort: mode === "effort-mismatch" ? "high" : "low",
+      ...(mode === "effort-missing"
+        ? {}
+        : {
+            reasoningEffort: mode === "effort-mismatch" ? "high" : "low",
+          }),
     });
     return;
   }
@@ -87,7 +91,10 @@ async function handle(line: string): Promise<void> {
     send({
       method: "thread/settings/updated",
       params: {
-        threadSettings: { model: "gpt-5.6-luna", effort: "low" },
+        threadSettings: {
+          model: "gpt-5.6-luna",
+          ...(mode === "effort-missing" ? {} : { effort: "low" }),
+        },
       },
     });
     if (mode === "approval") {

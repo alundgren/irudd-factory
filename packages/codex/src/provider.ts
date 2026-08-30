@@ -415,6 +415,23 @@ export function makeCodexProvider(
                 message: "thread/start returned no thread ID",
               });
             }
+            await Effect.runPromise(
+              emit({
+                type: "provider.settings.observed",
+                timestamp: new Date().toISOString(),
+                detail: {
+                  threadId,
+                  ...(observedModel ? { observedModel } : {}),
+                  ...(observedEffort ? { observedEffort } : {}),
+                },
+                patch: {
+                  threadId,
+                  codexVersion,
+                  ...(observedModel ? { observedModel } : {}),
+                  ...(observedEffort ? { observedEffort } : {}),
+                },
+              }),
+            );
             if (observedModel !== options.model) {
               throw new FactoryError({
                 code: "observed_model_mismatch",
@@ -511,13 +528,32 @@ export function makeCodexProvider(
                 message: `Codex turn finished with ${status}`,
               });
             }
+            await Effect.runPromise(
+              emit({
+                type: "provider.settings.observed",
+                timestamp: new Date().toISOString(),
+                detail: {
+                  ...(observedModel ? { observedModel } : {}),
+                  ...(observedEffort ? { observedEffort } : {}),
+                },
+                patch: {
+                  ...(observedModel ? { observedModel } : {}),
+                  ...(observedEffort ? { observedEffort } : {}),
+                },
+              }),
+            );
             if (observedModel !== options.model) {
               throw new FactoryError({
                 code: "observed_model_mismatch",
                 message: `Requested ${options.model}, observed ${observedModel ?? "none"}`,
               });
             }
-            observedEffort ??= options.reasoningEffort;
+            if (observedEffort === null) {
+              throw new FactoryError({
+                code: "observed_effort_missing",
+                message: "Codex did not report the observed reasoning effort",
+              });
+            }
             if (observedEffort !== options.reasoningEffort) {
               throw new FactoryError({
                 code: "observed_effort_mismatch",
@@ -607,7 +643,7 @@ export function makeCodexProvider(
                 message:
                   primary instanceof FactoryError
                     ? primary.message
-                    : String(primary),
+                    : "Codex provider failed unexpectedly",
                 detail: "cleanup_timeout",
               });
             }

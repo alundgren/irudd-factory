@@ -32,6 +32,16 @@ const ok = (value: unknown): CommandResult => ({
   exitCode: 0,
 });
 
+const included = (
+  status: number,
+  value: unknown,
+  exitCode = status >= 400 ? 1 : 0,
+): CommandResult => ({
+  stdout: `HTTP/2.0 ${status} Test\nContent-Type: application/json\n\n${JSON.stringify(value)}`,
+  stderr: exitCode === 0 ? "" : `HTTP ${status}`,
+  exitCode,
+});
+
 const lastPage = { hasNextPage: false, endCursor: null };
 
 function discovery(
@@ -189,7 +199,7 @@ describe("GitHub adapter", () => {
   test("reconciles a failed claim with exactly one read", async () => {
     const runner = new FakeRunner([
       { stdout: "", stderr: "timeout", exitCode: 1 },
-      ok([{ name: "claimed" }]),
+      included(200, { name: "claimed" }),
     ]);
     const outcome = await Effect.runPromise(
       makeGitHubService(runner).claimIssue({
@@ -203,12 +213,16 @@ describe("GitHub adapter", () => {
     expect(outcome).toBe("confirmed");
     expect(runner.calls).toHaveLength(2);
     expect(runner.calls[0]?.input).toBe('{"labels":["claimed"]}');
+    expect(runner.calls[1]?.args).toContain(
+      "repos/owner/repository/issues/1/labels/claimed",
+    );
+    expect(runner.calls[1]?.args).toContain("--include");
   });
 
   test("distinguishes unclaimed and unknown reconciliation", async () => {
     const unclaimed = new FakeRunner([
       { stdout: "", stderr: "failed", exitCode: 1 },
-      ok([{ name: "ready-for-agent" }]),
+      included(404, { message: "Not Found", status: "404" }),
     ]);
     const unknown = new FakeRunner([
       { stdout: "", stderr: "failed", exitCode: 1 },
@@ -237,6 +251,7 @@ describe("GitHub adapter", () => {
             pullRequests: {
               nodes: [
                 {
+                  id: "PR_7",
                   number: 7,
                   url: "https://github.com/owner/repository/pull/7",
                   isDraft: true,
@@ -248,9 +263,11 @@ describe("GitHub adapter", () => {
                         repository: { nameWithOwner: "owner/repository" },
                       },
                     ],
+                    pageInfo: lastPage,
                   },
                 },
               ],
+              pageInfo: lastPage,
             },
           },
         },
@@ -268,5 +285,59 @@ describe("GitHub adapter", () => {
       number: 7,
       draft: true,
     });
+  });
+
+  test("finds the assigned issue on a later closing-reference page", async () => {
+    const runner = new FakeRunner([
+      ok({
+        data: {
+          repository: {
+            pullRequests: {
+              nodes: [
+                {
+                  id: "PR_8",
+                  number: 8,
+                  url: "https://github.com/owner/repository/pull/8",
+                  isDraft: false,
+                  headRefName: "factory/assignment-1",
+                  closingIssuesReferences: {
+                    nodes: [],
+                    pageInfo: {
+                      hasNextPage: true,
+                      endCursor: "closing-page-2",
+                    },
+                  },
+                },
+              ],
+              pageInfo: lastPage,
+            },
+          },
+        },
+      }),
+      ok({
+        data: {
+          node: {
+            closingIssuesReferences: {
+              nodes: [
+                {
+                  number: 1,
+                  repository: { nameWithOwner: "owner/repository" },
+                },
+              ],
+              pageInfo: lastPage,
+            },
+          },
+        },
+      }),
+    ]);
+    const pull = await Effect.runPromise(
+      makeGitHubService(runner).verifyPullRequest(
+        "owner/repository",
+        "factory/assignment-1",
+        1,
+      ),
+    );
+    expect(pull.number).toBe(8);
+    expect(runner.calls[1]?.args).toContain("cursor=closing-page-2");
   });
 });

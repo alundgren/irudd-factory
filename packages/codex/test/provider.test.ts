@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import type { Assignment, WorkspacePaths } from "@irudd-factory/contracts";
+import type { AssignmentPatch } from "@irudd-factory/application";
 import { Effect, Either } from "effect";
 import { makeCodexProvider } from "../src/index.ts";
 
@@ -96,8 +97,10 @@ describe("Codex provider", () => {
     );
     expect(events).toEqual([
       "provider.process.started",
+      "provider.settings.observed",
       "provider.thread.started",
       "provider.turn.started",
+      "provider.settings.observed",
     ]);
     expect(result).toMatchObject({
       codexVersion: "codex-cli fake-1.0.0",
@@ -134,6 +137,7 @@ describe("Codex provider", () => {
     ["reroute", "model_rerouted"],
     ["model-mismatch", "observed_model_mismatch"],
     ["effort-mismatch", "observed_effort_mismatch"],
+    ["effort-missing", "observed_effort_missing"],
     ["malformed", "provider_protocol_error"],
     ["provider-error", "provider_error_notification"],
     ["provider-exit", "provider_exited"],
@@ -158,6 +162,28 @@ describe("Codex provider", () => {
       if (Either.isLeft(outcome)) expect(outcome.left.code).toBe(code);
     });
   }
+
+  test("emits observed mismatch values before failing", async () => {
+    for (const [mode, field, value] of [
+      ["model-mismatch", "observedModel", "another-model"],
+      ["effort-mismatch", "observedEffort", "high"],
+    ] as const) {
+      const { provider, assignment, workspace } = await fixture(mode);
+      const patches: AssignmentPatch[] = [];
+      await Effect.runPromise(
+        Effect.either(
+          provider.run(
+            { assignment, workspace, prompt: "Implement it." },
+            (event) =>
+              Effect.sync(() => {
+                if (event.patch) patches.push(event.patch);
+              }),
+          ),
+        ),
+      );
+      expect(patches.some((patch) => patch[field] === value)).toBe(true);
+    }
+  });
 
   test("does not retain command stderr in normalized failures", async () => {
     for (const mode of ["version-failure", "schema-failure"]) {

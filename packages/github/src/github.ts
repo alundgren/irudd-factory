@@ -84,28 +84,47 @@ const WorkflowResponse = Schema.Struct({
   content: Schema.String,
 });
 const LabelsResponse = Schema.Array(Schema.Struct({ name: Schema.String }));
+const LabelResponse = Schema.Struct({ name: Schema.String });
+const NotFoundResponse = Schema.Struct({
+  message: Schema.String,
+  status: Schema.Union(Schema.String, Schema.Number),
+});
+const ClosingIssueNode = Schema.Struct({
+  number: Schema.Number,
+  repository: Schema.Struct({ nameWithOwner: Schema.String }),
+});
+const PullRequestNode = Schema.Struct({
+  id: Schema.String,
+  number: Schema.Number,
+  url: Schema.String,
+  isDraft: Schema.Boolean,
+  headRefName: Schema.String,
+  closingIssuesReferences: Schema.Struct({
+    nodes: Schema.Array(ClosingIssueNode),
+    pageInfo: PageInfo,
+  }),
+});
+type PullRequestNode = typeof PullRequestNode.Type;
 const PullRequestsResponse = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
       pullRequests: Schema.Struct({
-        nodes: Schema.Array(
-          Schema.Struct({
-            number: Schema.Number,
-            url: Schema.String,
-            isDraft: Schema.Boolean,
-            headRefName: Schema.String,
-            closingIssuesReferences: Schema.Struct({
-              nodes: Schema.Array(
-                Schema.Struct({
-                  number: Schema.Number,
-                  repository: Schema.Struct({ nameWithOwner: Schema.String }),
-                }),
-              ),
-            }),
-          }),
-        ),
+        nodes: Schema.Array(PullRequestNode),
+        pageInfo: PageInfo,
       }),
     }),
+  }),
+});
+const ClosingIssuesPageResponse = Schema.Struct({
+  data: Schema.Struct({
+    node: Schema.NullOr(
+      Schema.Struct({
+        closingIssuesReferences: Schema.Struct({
+          nodes: Schema.Array(ClosingIssueNode),
+          pageInfo: PageInfo,
+        }),
+      }),
+    ),
   }),
 });
 
@@ -151,14 +170,27 @@ const BLOCKERS_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
   }
 }`;
 
-const PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: String!) {
+const PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: String!, $pullCursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(first: 50, states: OPEN, headRefName: $branch) {
+    pullRequests(first: 50, after: $pullCursor, states: OPEN, headRefName: $branch) {
       nodes {
-        number url isDraft headRefName
+        id number url isDraft headRefName
         closingIssuesReferences(first: 50) {
           nodes { number repository { nameWithOwner } }
+          pageInfo { hasNextPage endCursor }
         }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+const CLOSING_ISSUES_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on PullRequest {
+      closingIssuesReferences(first: 50, after: $cursor) {
+        nodes { number repository { nameWithOwner } }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -186,6 +218,23 @@ function decodeJson<A, I>(schema: Schema.Schema<A, I>, source: string): A {
       detail: String(error),
     });
   }
+}
+
+function decodeIncludedJson<A, I>(
+  schema: Schema.Schema<A, I>,
+  source: string,
+  expectedStatus: number,
+): A {
+  const normalized = source.replaceAll("\r\n", "\n");
+  const status = Number(normalized.match(/^HTTP\/\S+\s+(\d{3})/)?.[1]);
+  const separator = normalized.indexOf("\n\n");
+  if (status !== expectedStatus || separator < 0) {
+    throw new FactoryError({
+      code: "github_response_invalid",
+      message: "GitHub returned an invalid included response",
+    });
+  }
+  return decodeJson(schema, normalized.slice(separator + 2));
 }
 
 async function checked(
@@ -276,6 +325,58 @@ async function allBlockerStates(
     cursor = nextCursor(response.data.node.blockedBy.pageInfo, "blockers");
   }
   return states;
+}
+
+function includesClosingIssue(
+  nodes: ReadonlyArray<typeof ClosingIssueNode.Type>,
+  repository: string,
+  issueNumber: number,
+): boolean {
+  return nodes.some(
+    (issue) =>
+      issue.number === issueNumber &&
+      issue.repository.nameWithOwner === repository,
+  );
+}
+
+async function pullClosesIssue(
+  runner: CommandRunner,
+  pull: PullRequestNode,
+  repository: string,
+  issueNumber: number,
+): Promise<boolean> {
+  if (
+    includesClosingIssue(
+      pull.closingIssuesReferences.nodes,
+      repository,
+      issueNumber,
+    )
+  ) {
+    return true;
+  }
+  let cursor = nextCursor(
+    pull.closingIssuesReferences.pageInfo,
+    "closing issues",
+  );
+  while (cursor) {
+    const response = decodeJson(
+      ClosingIssuesPageResponse,
+      await graphql(runner, CLOSING_ISSUES_PAGE_QUERY, {
+        id: pull.id,
+        cursor,
+      }),
+    );
+    if (!response.data.node) {
+      throw new FactoryError({
+        code: "github_response_invalid",
+        message: `GitHub pull request node ${pull.id} disappeared during closing-issue pagination`,
+      });
+    }
+    const page = response.data.node.closingIssuesReferences;
+    if (includesClosingIssue(page.nodes, repository, issueNumber)) return true;
+    cursor = nextCursor(page.pageInfo, "closing issues");
+  }
+  return false;
 }
 
 function makeService(runner: CommandRunner): GitHubService {
@@ -410,15 +511,22 @@ function makeService(runner: CommandRunner): GitHubService {
         }
 
         try {
-          const read = await checked(runner, [
+          const read = await runner.run([
             "gh",
             "api",
-            `repos/${issue.repository}/issues/${issue.number}/labels`,
+            "--include",
+            `repos/${issue.repository}/issues/${issue.number}/labels/claimed`,
           ]);
-          const labels = decodeJson(LabelsResponse, read);
-          return labels.some(({ name }) => name === "claimed")
-            ? "confirmed"
-            : "unclaimed";
+          if (read.exitCode === 0) {
+            const label = decodeIncludedJson(LabelResponse, read.stdout, 200);
+            return label.name === "claimed" ? "confirmed" : "unknown";
+          }
+          try {
+            decodeIncludedJson(NotFoundResponse, read.stdout, 404);
+            return "unclaimed";
+          } catch {
+            return "unknown";
+          }
         } catch {
           return "unknown";
         }
@@ -427,49 +535,45 @@ function makeService(runner: CommandRunner): GitHubService {
       Effect.tryPromise({
         try: async (): Promise<PullRequest> => {
           const [owner, name] = splitRepository(repository);
-          const response = decodeJson(
-            PullRequestsResponse,
-            await checked(runner, [
-              "gh",
-              "api",
-              "graphql",
-              "-f",
-              `query=${PULL_REQUEST_QUERY}`,
-              "-F",
-              `owner=${owner}`,
-              "-F",
-              `name=${name}`,
-              "-F",
-              `branch=${branch}`,
-            ]),
-          );
-          const pullRequest = response.data.repository.pullRequests.nodes.find(
-            (pull) =>
-              pull.headRefName === branch &&
-              pull.closingIssuesReferences.nodes.some(
-                (issue) =>
-                  issue.number === issueNumber &&
-                  issue.repository.nameWithOwner === repository,
-              ),
-          );
-          if (!pullRequest) {
-            throw new FactoryError({
-              code: "pull_request_unverified",
-              message: `No pull request from ${branch} closes ${repository}#${issueNumber}`,
-            });
-          }
-          return {
-            url: pullRequest.url,
-            number: pullRequest.number,
-            draft: pullRequest.isDraft,
-          };
+          let pullCursor: string | null = null;
+          do {
+            const response = decodeJson(
+              PullRequestsResponse,
+              await graphql(runner, PULL_REQUEST_QUERY, {
+                owner,
+                name,
+                branch,
+                ...(pullCursor ? { pullCursor } : {}),
+              }),
+            );
+            for (const pull of response.data.repository.pullRequests.nodes) {
+              if (
+                pull.headRefName === branch &&
+                (await pullClosesIssue(runner, pull, repository, issueNumber))
+              ) {
+                return {
+                  url: pull.url,
+                  number: pull.number,
+                  draft: pull.isDraft,
+                };
+              }
+            }
+            pullCursor = nextCursor(
+              response.data.repository.pullRequests.pageInfo,
+              "pull requests",
+            );
+          } while (pullCursor);
+          throw new FactoryError({
+            code: "pull_request_unverified",
+            message: `No pull request from ${branch} closes ${repository}#${issueNumber}`,
+          });
         },
         catch: (error) =>
           error instanceof FactoryError
             ? error
             : new FactoryError({
                 code: "pull_request_verification_failed",
-                message: String(error),
+                message: "Pull request verification failed unexpectedly",
               }),
       }),
   };

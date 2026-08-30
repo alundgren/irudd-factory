@@ -6,6 +6,7 @@ import type {
 } from "@irudd-factory/application";
 import {
   Clock,
+  FactoryError,
   GitHub,
   IdGenerator,
   Provider,
@@ -25,6 +26,10 @@ export interface FixtureControls {
   readonly onClaim?: () => void;
   readonly onWorkspace?: () => void;
   readonly onProviderRun?: () => void;
+  readonly failAfterObservation?: {
+    readonly model?: string;
+    readonly effort?: string;
+  };
 }
 
 export function fixtureDependencies(
@@ -74,6 +79,27 @@ export function fixtureDependencies(
     run: (_input, emit) =>
       Effect.gen(function* () {
         controls.onProviderRun?.();
+        if (controls.failAfterObservation) {
+          const observed = controls.failAfterObservation;
+          yield* emit({
+            type: "provider.settings.observed",
+            timestamp: scenario.now,
+            detail: {
+              ...(observed.model ? { observedModel: observed.model } : {}),
+              ...(observed.effort ? { observedEffort: observed.effort } : {}),
+            },
+            patch: {
+              ...(observed.model ? { observedModel: observed.model } : {}),
+              ...(observed.effort ? { observedEffort: observed.effort } : {}),
+            },
+          });
+          return yield* Effect.fail(
+            new FactoryError({
+              code: "observed_model_mismatch",
+              message: "Fixture observed a provider mismatch",
+            }),
+          );
+        }
         yield* controls.beforeRunning
           ? Effect.promise(controls.beforeRunning)
           : Effect.sleep("300 millis");

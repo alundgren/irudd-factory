@@ -189,6 +189,46 @@ describe("Factory RPC service", () => {
     expect(calls).toEqual({ claim: 1, workspace: 1, provider: 1 });
   });
 
+  test("persists observed provider values before mismatch failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-mismatch-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repository: "factory/fixture",
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: await availablePort(),
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, "runnable", {
+        failAfterObservation: {
+          model: "unexpected-model",
+          effort: "high",
+        },
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+    await runNextEligibleIssue(rpcUrl, "mismatch-command");
+
+    const snapshot = await waitForAssignmentState(rpcUrl, "failed");
+    expect(snapshot.assignment).toMatchObject({
+      observedModel: "unexpected-model",
+      observedEffort: "high",
+      error: { code: "observed_model_mismatch" },
+    });
+  });
+
   test("returns every command result through the same RPC", async () => {
     for (const [scenarioName, expected] of [
       ["empty", "no_candidate"],
