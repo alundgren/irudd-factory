@@ -1,0 +1,5 @@
+{
+  "path": "src/greet.ts",
+  "before": "return \"Hello, probe!\";",
+  "after": "return \"Hello, Codex probe!\";"
+}

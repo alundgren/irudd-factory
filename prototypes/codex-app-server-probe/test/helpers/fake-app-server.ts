@@ -1,0 +1,333 @@
+#!/usr/bin/env bun
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { createInterface } from "node:readline";
+
+const args = Bun.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("codex-cli fake-1.0.0");
+  process.exit(0);
+}
+
+if (args[0] === "app-server" && args[1] === "generate-json-schema") {
+  const outIndex = args.indexOf("--out");
+  const root = args[outIndex + 1];
+  if (!root) process.exit(2);
+  const names = [
+    "v1/InitializeParams.json",
+    "v2/ThreadStartParams.json",
+    "v2/ThreadStartedNotification.json",
+    "v2/TurnStartParams.json",
+    "v2/TurnCompletedNotification.json",
+    "v2/TurnInterruptParams.json",
+    "v2/ItemStartedNotification.json",
+    "v2/ItemCompletedNotification.json",
+    "CommandExecutionRequestApprovalParams.json",
+    "FileChangeRequestApprovalParams.json",
+    "PermissionsRequestApprovalParams.json",
+    "v2/ServerRequestResolvedNotification.json",
+    "v2/ThreadTokenUsageUpdatedNotification.json",
+    "v2/ErrorNotification.json",
+    "v2/ModelReroutedNotification.json",
+  ];
+  for (const name of names) {
+    const path = join(root, name);
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({
+        title: name,
+        ...(name === "v2/TurnStartParams.json"
+          ? {
+              type: "object",
+              properties: {
+                sandboxPolicy: {
+                  anyOf: [
+                    { $ref: "#/definitions/SandboxPolicy" },
+                    { type: "null" },
+                  ],
+                },
+              },
+              definitions: {
+                SandboxPolicy: {
+                  oneOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        type: { enum: ["readOnly"] },
+                        access: { $ref: "#/definitions/ReadAccess" },
+                      },
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        type: { enum: ["workspaceWrite"] },
+                        writableRoots: { type: "array" },
+                        readOnlyAccess: {
+                          $ref: "#/definitions/ReadAccess",
+                        },
+                        networkAccess: { type: "boolean" },
+                      },
+                    },
+                  ],
+                },
+                ReadAccess: {
+                  oneOf: [
+                    {
+                      type: "object",
+                      properties: { type: { enum: ["fullAccess"] } },
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        type: { enum: ["restricted"] },
+                        readableRoots: { type: "array" },
+                        includePlatformDefaults: { type: "boolean" },
+                      },
+                    },
+                  ],
+                },
+              },
+            }
+          : {}),
+      }),
+    );
+  }
+  process.exit(0);
+}
+
+const executableName = basename(Bun.argv[1] ?? "");
+const mode =
+  process.env.FAKE_MODE ??
+  (executableName.includes("unsupported-effort")
+    ? "unsupported-effort"
+    : executableName.includes("model-rejected")
+      ? "model-rejected"
+      : executableName.includes("rerouted-hang")
+        ? "rerouted-hang"
+        : executableName.includes("no-activation")
+          ? "no-activation"
+          : process.cwd().includes("-fail") ||
+              process.cwd().includes("-interrupt")
+            ? "interrupt"
+            : process.cwd().includes("-edit")
+              ? "edit"
+              : "success");
+const reader = createInterface({ input: process.stdin });
+let interruptCount = 0;
+const validateScenarioPolicy = process.cwd().includes("probe-campaign-");
+
+function send(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+for await (const line of reader) {
+  if (!line.trim()) continue;
+  const message = JSON.parse(line) as {
+    id?: number;
+    method?: string;
+    params?: any;
+  };
+  if (message.method === "initialize") {
+    send({ id: message.id, result: { userAgent: "fake" } });
+  } else if (message.method === "model/list") {
+    if (mode === "malformed") {
+      process.stdout.write("{not-json}\n");
+      continue;
+    }
+    if (mode === "model-rejected") {
+      send({
+        id: message.id,
+        error: { code: -32000, message: "model rejected" },
+      });
+    } else {
+      send({
+        id: message.id,
+        result: {
+          data: [
+            {
+              id: "gpt-5.6-luna",
+              model: "gpt-5.6-luna",
+              supportedReasoningEfforts:
+                mode === "unsupported-effort"
+                  ? [{ reasoningEffort: "medium" }]
+                  : [{ reasoningEffort: "low" }],
+            },
+          ],
+        },
+      });
+    }
+  } else if (message.method === "thread/start") {
+    if (
+      (validateScenarioPolicy &&
+        message.params?.approvalPolicy !== "on-request") ||
+      (validateScenarioPolicy &&
+        !["read-only", "workspace-write"].includes(message.params?.sandbox))
+    ) {
+      send({
+        id: message.id,
+        error: { code: -32602, message: "invalid thread policy" },
+      });
+      continue;
+    }
+    send({
+      id: message.id,
+      result: { thread: { id: "thread-fake", model: "gpt-5.6-luna" } },
+    });
+  } else if (message.method === "turn/start") {
+    const sandboxPolicy = message.params?.sandboxPolicy;
+    const readAccess =
+      sandboxPolicy?.type === "readOnly"
+        ? sandboxPolicy?.access
+        : sandboxPolicy?.readOnlyAccess;
+    const readableRoots = readAccess?.readableRoots;
+    const validSandbox =
+      readAccess?.type === "restricted" &&
+      typeof readAccess?.includePlatformDefaults === "boolean" &&
+      Array.isArray(readableRoots) &&
+      readableRoots.length === 3 &&
+      readableRoots[0] === process.cwd() &&
+      String(readableRoots[1]).endsWith("/fixture") &&
+      String(readableRoots[2]).endsWith("/prompts") &&
+      (sandboxPolicy?.type === "readOnly"
+        ? sandboxPolicy?.writableRoots === undefined &&
+          sandboxPolicy?.networkAccess === undefined
+        : sandboxPolicy?.type === "workspaceWrite" &&
+          JSON.stringify(sandboxPolicy?.writableRoots) ===
+            JSON.stringify([process.cwd()]) &&
+          sandboxPolicy?.networkAccess === false);
+    if (
+      validateScenarioPolicy &&
+      (message.params?.approvalPolicy !== "on-request" || !validSandbox)
+    ) {
+      send({
+        id: message.id,
+        error: { code: -32602, message: "invalid turn policy" },
+      });
+      continue;
+    }
+    if (mode === "exit-pending") {
+      process.exit(7);
+    }
+    send({
+      id: message.id,
+      result: { turn: { id: "turn-fake", status: "inProgress" } },
+    });
+    if (mode === "rerouted" || mode === "rerouted-hang") {
+      send({
+        method: "model/rerouted",
+        params: {
+          threadId: "thread-fake",
+          turnId: "turn-fake",
+          fromModel: "gpt-5.6-luna",
+          toModel: "other",
+        },
+      });
+      if (mode === "rerouted") {
+        send({
+          method: "turn/completed",
+          params: {
+            turn: { id: "turn-fake", status: "completed", model: "other" },
+          },
+        });
+      }
+    } else if (
+      mode === "interrupt" ||
+      mode === "approval-interrupt" ||
+      mode === "approval-timeout"
+    ) {
+      send({
+        method: "item/started",
+        params: {
+          item: {
+            id: "command-1",
+            type: "commandExecution",
+            command: "bun run probe-long-running",
+          },
+        },
+      });
+      if (mode === "approval-interrupt" || mode === "approval-timeout") {
+        send({
+          id: 900,
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-fake",
+            turnId: "turn-fake",
+            itemId: "command-1",
+            command: "bun run probe-long-running",
+            cwd: process.cwd(),
+            availableDecisions: ["accept", "decline", "cancel"],
+          },
+        });
+      }
+    } else if (mode !== "no-activation") {
+      if (mode === "edit") {
+        await writeFile(
+          join(process.cwd(), "src", "greet.ts"),
+          'export function greeting(): string {\n  return "Hello, Codex probe!";\n}\n',
+        );
+        await writeFile(
+          join(process.cwd(), "test", "greet.test.ts"),
+          'import { expect, test } from "bun:test";\nimport { greeting } from "../src/greet.ts";\n\ntest("returns the fixture greeting", () => {\n  expect(greeting()).toBe("Hello, Codex probe!");\n});\n',
+        );
+      }
+      send({
+        method: "unknown/futureNotification",
+        params: { accepted: true },
+      });
+      send({
+        method: "item/agentMessage/delta",
+        params: { itemId: "agent-1", delta: "# Codex" },
+      });
+      send({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-fake",
+          tokenUsage: { total: { totalTokens: 12 } },
+        },
+      });
+      send({
+        method: "item/completed",
+        params: {
+          item: {
+            id: "agent-1",
+            type: "agentMessage",
+            text: "# Codex App Server Probe Fixture",
+          },
+        },
+      });
+      send({
+        method: "rawResponse/completed",
+        params: { response: { model: "gpt-5.6-luna" } },
+      });
+      send({
+        method: "turn/completed",
+        params: {
+          turn: { id: "turn-fake", status: "completed", model: "gpt-5.6-luna" },
+        },
+      });
+    }
+  } else if (message.method === "turn/interrupt") {
+    interruptCount += 1;
+    if (interruptCount > 1) {
+      send({
+        id: message.id,
+        error: { code: -32602, message: "turn already interrupted" },
+      });
+      continue;
+    }
+    send({ id: message.id, result: {} });
+    if (mode === "approval-interrupt") {
+      send({
+        method: "serverRequest/resolved",
+        params: { threadId: "thread-fake", requestId: 900 },
+      });
+    }
+    send({
+      method: "turn/completed",
+      params: {
+        turn: { id: "turn-fake", status: "interrupted", model: "gpt-5.6-luna" },
+      },
+    });
+  }
+}
