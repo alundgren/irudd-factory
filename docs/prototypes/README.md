@@ -52,9 +52,48 @@ the operator's own MCP servers, hooks, and `AGENTS.md` are inherited.
 
 ## 2. Dispatcher slice (not started)
 
-Intent: prove the loop end to end on one repository. Poll, check eligibility
-including the author's write permission, reserve an issue exactly once, create
-the workspace, run one Codex session under the settings above, and record the
-result durably enough to explain a failure hours later.
+Intent: prove the loop end to end on one repository, with real processes and
+one real issue. Poll, check eligibility, reserve an issue exactly once, create
+the workspace, run one Codex session under the settings prototype 1 proved, and
+record the result durably enough to explain a failure hours later.
 
-It uses the probe's proven launch contract rather than rediscovering it.
+It uses the proven launch contract rather than rediscovering it, and the
+decisions in [stack.md](../stack.md) rather than choosing again.
+
+The path it proves:
+
+```text
+one configured GitHub issue
+  -> candidate query finds exactly it, author write permission checked
+  -> assignment.reserved committed
+  -> app-owned clone and worktree created, writable roots named
+  -> provider.start.requested committed
+  -> codex app-server runs one unattended turn in that worktree
+  -> provider.session.started and provider.turn.finished committed
+  -> the console shows each state change and survives a reload
+```
+
+Run it on the Mac first. The same Bun, `gh`, and Codex credentials as the
+future Linux service, without adding network, filesystem-sharing, and
+credential-forwarding problems before the flow itself works. Repeat on Linux
+before choosing the deployment image.
+
+| In scope | Out of scope |
+| --- | --- |
+| One repository, one label, one selected issue | Repository pool ordering, dependency checks, poll scheduling |
+| Reservation, workspace, one Codex session, projection, console | Retained workspaces, cleanup policy, attribution comments |
+| Event log, assignment projection, command receipt | Replay tooling, archival, log browsing |
+| One console page with assignment state and the run result | Controls beyond starting a run and reconnecting |
+| Bun, SQLite, Effect, Effect RPC, React | systemd, Tailscale, console authentication, deployment |
+
+Use a disposable repository and an issue you created yourself, so the write
+permission check passes for the reason it is meant to.
+
+Done when one command starts the service and console, the browser shows
+`reserved`, `starting`, `running`, then `completed`, and reloading it reads the
+same state back from SQLite. The stored record must identify the issue, the
+assignment, the Codex CLI version, the provider session, and the terminal
+outcome.
+
+It does not prove restart recovery, cancellation, provider pauses, or
+deployment. Those come after.
