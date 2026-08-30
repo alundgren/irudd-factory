@@ -1,0 +1,20 @@
+{
+  "name": "codex-app-server-probe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "probe": "bun run src/cli.ts",
+    "login": "bun run src/login.ts",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "prettier": "3.6.2",
+    "typescript": "5.9.2"
+  }
+}
