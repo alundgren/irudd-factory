@@ -48,6 +48,8 @@ describe("Redactor", () => {
       requestedModel: "gpt-5.6-luna",
       requestedEffort: "low",
       observedModel: "gpt-5.6-luna",
+      observedEffort: "low",
+      threadSettings: null,
       reroutes: [],
       codexVersion: "fake",
       schemaDigest: "digest",

@@ -84,18 +84,22 @@ const mode =
   process.env.FAKE_MODE ??
   (executableName.includes("unsupported-effort")
     ? "unsupported-effort"
-    : executableName.includes("model-rejected")
-      ? "model-rejected"
-      : executableName.includes("rerouted-hang")
-        ? "rerouted-hang"
-        : executableName.includes("no-activation")
-          ? "no-activation"
-          : process.cwd().includes("-fail") ||
-              process.cwd().includes("-interrupt")
-            ? "interrupt"
-            : process.cwd().includes("-edit")
-              ? "edit"
-              : "success");
+    : executableName.includes("stale-effort")
+      ? "stale-effort"
+      : executableName.includes("settings-mismatch")
+        ? "settings-mismatch"
+        : executableName.includes("model-rejected")
+          ? "model-rejected"
+          : executableName.includes("rerouted-hang")
+            ? "rerouted-hang"
+            : executableName.includes("no-activation")
+              ? "no-activation"
+              : process.cwd().includes("-fail") ||
+                  process.cwd().includes("-interrupt")
+                ? "interrupt"
+                : process.cwd().includes("-edit")
+                  ? "edit"
+                  : "success");
 const reader = createInterface({ input: process.stdin });
 let interruptCount = 0;
 const validateScenarioPolicy = process.cwd().includes("probe-campaign-");
@@ -142,8 +146,7 @@ for await (const line of reader) {
     }
   } else if (message.method === "thread/start") {
     if (
-      (validateScenarioPolicy &&
-        message.params?.approvalPolicy !== "on-request") ||
+      (validateScenarioPolicy && message.params?.approvalPolicy !== "never") ||
       (validateScenarioPolicy &&
         !["read-only", "workspace-write"].includes(message.params?.sandbox))
     ) {
@@ -155,7 +158,13 @@ for await (const line of reader) {
     }
     send({
       id: message.id,
-      result: { thread: { id: "thread-fake", model: "gpt-5.6-luna" } },
+      result: {
+        thread: { id: "thread-fake" },
+        model: "gpt-5.6-luna",
+        modelProvider: "openai",
+        reasoningEffort: mode === "stale-effort" ? "high" : "low",
+        cwd: process.cwd(),
+      },
     });
   } else if (message.method === "turn/start") {
     const sandboxPolicy = message.params?.sandboxPolicy;
@@ -165,13 +174,13 @@ for await (const line of reader) {
           sandboxPolicy?.writableRoots === undefined
         : sandboxPolicy?.type === "workspaceWrite" &&
           JSON.stringify(sandboxPolicy?.writableRoots) ===
-            JSON.stringify([process.cwd()]) &&
+            JSON.stringify([process.cwd(), join(process.cwd(), ".git")]) &&
           sandboxPolicy?.networkAccess === false &&
           sandboxPolicy?.excludeSlashTmp === true &&
           sandboxPolicy?.excludeTmpdirEnvVar === true;
     if (
       validateScenarioPolicy &&
-      (message.params?.approvalPolicy !== "on-request" || !validSandbox)
+      (message.params?.approvalPolicy !== "never" || !validSandbox)
     ) {
       send({
         id: message.id,
@@ -185,6 +194,18 @@ for await (const line of reader) {
     send({
       id: message.id,
       result: { turn: { id: "turn-fake", status: "inProgress" } },
+    });
+    send({
+      method: "thread/settings/updated",
+      params: {
+        threadId: "thread-fake",
+        threadSettings: {
+          model: mode === "settings-mismatch" ? "gpt-5.6-sol" : "gpt-5.6-luna",
+          modelProvider: "openai",
+          effort: mode === "stale-effort" ? "high" : "low",
+          cwd: process.cwd(),
+        },
+      },
     });
     if (mode === "rerouted" || mode === "rerouted-hang") {
       send({

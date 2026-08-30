@@ -14,6 +14,8 @@ import {
   TARGET_REMOTE,
   type CliOptions,
   initializeCampaign,
+  operatorCodexHome,
+  operatorHome,
   providerAuthReady,
 } from "./config.ts";
 import { buildChildEnvironment, leakedKeys } from "./environment.ts";
@@ -84,48 +86,13 @@ async function executableAvailable(
   return false;
 }
 
-async function keychainToken(
-  service: string,
-  account: string,
-  env: Record<string, string>,
-  timeoutMs: number,
-): Promise<string> {
-  if (process.platform !== "darwin") {
-    throw new ProbeError(
-      "rejected",
-      "keychain_unavailable",
-      "doctor pr requires macOS /usr/bin/security",
-    );
-  }
-  const result = await execute(
-    [
-      "/usr/bin/security",
-      "find-generic-password",
-      "-w",
-      "-s",
-      service,
-      "-a",
-      account,
-    ],
-    "/tmp",
-    env,
-    timeoutMs,
-  );
-  const value = result.stdout.trim();
-  if (result.code !== 0 || !value) {
-    throw new ProbeError(
-      "rejected",
-      "keychain_entry_missing",
-      `Keychain entry ${service}/${account} is missing or empty`,
-    );
-  }
-  return value;
-}
-
 export async function runDoctor(
   options: CliOptions,
 ): Promise<{ result: ResultName; runRoot: string }> {
-  const campaign = await initializeCampaign(options.campaignRoot);
+  const campaign = await initializeCampaign(
+    options.campaignRoot,
+    operatorCodexHome(),
+  );
   const runId = `${new Date().toISOString().replaceAll(/[:.]/g, "-")}-doctor`;
   const runRoot = plannedWithin(
     campaign.runsRoot,
@@ -146,7 +113,6 @@ export async function runDoctor(
     mkdir(agentHome, { recursive: true }),
     mkdir(schemaRoot, { recursive: true }),
   ]);
-  let token: string | undefined;
   let redactor = new Redactor([]);
   const artifacts = new RunArtifacts(runRoot, redactor);
   await artifacts.initialize();
@@ -182,15 +148,16 @@ export async function runDoctor(
         name: "provider_auth_ready",
         passed: authReady,
         detail: authReady
-          ? "isolated authentication data present"
-          : "isolated authentication data missing or invalid, run the documented isolated login",
+          ? "campaign reuses the operator Codex credentials"
+          : "no usable operator credentials were found, run `codex login` normally and retry",
       },
       {
         name: "active_integrations",
         passed:
           configText.includes("[mcp_servers]") &&
           !/\[mcp_servers\.[^\]]+\]/.test(configText),
-        detail: "none",
+        detail:
+          "none declared in the isolated configuration; scenarios record any built-in server the CLI starts anyway",
       },
       {
         name: "child_environment_allowlist",
@@ -283,21 +250,11 @@ export async function runDoctor(
           `Expected ${TARGET_REMOTE}, got ${sourceRemote}`,
         );
       }
-      token = await keychainToken(
-        options.keychainService,
-        options.keychainAccount,
-        baseEnvironment,
-        options.timeouts.initializationMs,
-      );
-      redactor.add(token);
-      const gitGlobalConfig = join(agentHome, "empty-git-config");
-      await writeFile(gitGlobalConfig, "", { mode: 0o600 });
       const prEnvironment = buildChildEnvironment({
         codexHome: campaign.codexHome,
         agentHome,
         scenario: "pr",
-        githubToken: token,
-        gitGlobalConfig,
+        operatorHome: operatorHome(),
       });
       const tools = await Promise.all([
         execute(
@@ -354,11 +311,25 @@ export async function runDoctor(
             ? access.stdout.trim()
             : redactor.text(access.stderr),
       });
+      const auth = await execute(
+        ["gh", "auth", "status", "--active"],
+        runRoot,
+        prEnvironment,
+        options.timeouts.modelSchemaMs,
+      );
+      assertions.push({
+        name: "ambient_github_login",
+        passed: auth.code === 0,
+        detail:
+          auth.code === 0
+            ? "the child environment reaches the operator gh login"
+            : redactor.text(auth.stderr),
+      });
       assertions.push({
         name: "github_permission_human_check",
         passed: true,
         detail:
-          "Human must verify repository selection and contents permissions in GitHub settings; the API check cannot prove safe write scope",
+          "The pr scenario acts with the full operator GitHub identity; the accepted limitation is recorded in SECURITY-LIMITATIONS.md",
       });
     }
     const failed = assertions.find((assertion) => !assertion.passed);
@@ -412,6 +383,8 @@ export async function runDoctor(
       requestedModel: EXPECTED_MODEL,
       requestedEffort: EXPECTED_EFFORT,
       observedModel: null,
+      observedEffort: null,
+      threadSettings: null,
       reroutes: [],
       codexVersion,
       schemaDigest,
@@ -431,7 +404,6 @@ export async function runDoctor(
       timeouts: options.timeouts,
     };
     await artifacts.finish(redactor.value(manifest));
-    token = undefined;
   }
   return { result, runRoot };
 }

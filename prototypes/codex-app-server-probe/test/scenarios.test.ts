@@ -89,14 +89,16 @@ describe("scenario policies and assertions", () => {
     const root = await workspace();
     const read = scenarioInternals.sandboxFor("read", root) as any;
     const edit = scenarioInternals.sandboxFor("edit", root) as any;
+    const pr = scenarioInternals.sandboxFor("pr", root) as any;
     expect(read).toEqual({ type: "readOnly", networkAccess: false });
     expect(edit).toEqual({
       type: "workspaceWrite",
-      writableRoots: [root],
+      writableRoots: [root, join(root, ".git")],
       networkAccess: false,
       excludeSlashTmp: true,
       excludeTmpdirEnvVar: true,
     });
+    expect(pr.networkAccess).toBe(true);
   });
 
   test("read requires an exact heading and a clean workspace", async () => {
@@ -311,6 +313,103 @@ describe("scenario policies and assertions", () => {
     expect(manifest.requestedModel).toBe("gpt-5.6-luna");
     expect(
       manifest.assertions.every((record: { passed: boolean }) => record.passed),
+    ).toBe(true);
+  });
+
+  test("records the model and effort reported by Codex CLI 0.151.0", async () => {
+    const outcome = await runFakeScenario("read");
+    const manifest = await Bun.file(
+      join(outcome.runRoot, "manifest.json"),
+    ).json();
+    expect(manifest.observedModel).toBe("gpt-5.6-luna");
+    expect(manifest.observedEffort).toBe("low");
+    expect(manifest.threadSettings.model).toBe("gpt-5.6-luna");
+    expect(manifest.threadSettings.effort).toBe("low");
+  });
+
+  test("fails when the observed effort is not the requested effort", async () => {
+    const outcome = await runFakeScenario("read", "codex-stale-effort");
+    expect(outcome.result).toBe("assertion_failed");
+    const manifest = await Bun.file(
+      join(outcome.runRoot, "manifest.json"),
+    ).json();
+    expect(manifest.observedEffort).toBe("high");
+    expect(manifest.assertions).toContainEqual(
+      expect.objectContaining({ name: "observed_effort_mismatch" }),
+    );
+  });
+
+  test("fails when thread settings report another model", async () => {
+    const outcome = await runFakeScenario("read", "codex-settings-mismatch");
+    expect(outcome.result).toBe("assertion_failed");
+    expect(
+      (await Bun.file(join(outcome.runRoot, "manifest.json")).json())
+        .assertions,
+    ).toContainEqual(
+      expect.objectContaining({ name: "thread_settings_model_mismatch" }),
+    );
+  });
+
+  test("accepts the built-in integration and rejects any other", () => {
+    const builtIn = scenarioInternals.providerContractAssertions(
+      "read",
+      null,
+      new Map([["codex_apps", "ready"]]),
+    );
+    expect(
+      builtIn.find((record) => record.name === "runtime_integrations")?.passed,
+    ).toBe(true);
+    const inherited = scenarioInternals.providerContractAssertions(
+      "read",
+      null,
+      new Map([["node_repl", "ready"]]),
+    );
+    expect(
+      inherited.find((record) => record.name === "runtime_integrations")
+        ?.passed,
+    ).toBe(false);
+  });
+
+  test("requires a settings event for write turns but not for read turns", () => {
+    const read = scenarioInternals.providerContractAssertions(
+      "read",
+      null,
+      new Map(),
+    );
+    expect(
+      read.find((record) => record.name === "thread_settings_confirmation")
+        ?.passed,
+    ).toBe(true);
+    const edit = scenarioInternals.providerContractAssertions(
+      "edit",
+      null,
+      new Map(),
+    );
+    expect(
+      edit.find((record) => record.name === "thread_settings_confirmation")
+        ?.passed,
+    ).toBe(false);
+  });
+
+  test("accepts a workspace-write turn whose echoed writable roots are empty", () => {
+    const records = scenarioInternals.providerContractAssertions(
+      "edit",
+      {
+        model: "gpt-5.6-luna",
+        effort: "low",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          networkAccess: false,
+          excludeSlashTmp: true,
+          excludeTmpdirEnvVar: true,
+        },
+      },
+      new Map(),
+    );
+    expect(
+      records.find((record) => record.name === "effective_turn_sandbox")
+        ?.passed,
     ).toBe(true);
   });
 

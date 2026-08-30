@@ -75,6 +75,7 @@ export class RunArtifacts {
       `- Scenario: ${safeManifest.scenario}`,
       `- Result: ${safeManifest.result}`,
       `- Model: requested ${safeManifest.requestedModel}, observed ${safeManifest.observedModel ?? "none"}`,
+      `- Effort: requested ${safeManifest.requestedEffort}, observed ${safeManifest.observedEffort ?? "none"}`,
       `- Effort: ${safeManifest.requestedEffort}`,
       `- Duration: ${safeManifest.durationMs} ms`,
       `- Schema digest: ${safeManifest.schemaDigest}`,

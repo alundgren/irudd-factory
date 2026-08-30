@@ -71,6 +71,8 @@ export interface RunManifest {
   requestedModel: "gpt-5.6-luna";
   requestedEffort: "low";
   observedModel: string | null;
+  observedEffort: string | null;
+  threadSettings: unknown;
   reroutes: unknown[];
   codexVersion: string;
   schemaDigest: string;

@@ -23,14 +23,9 @@ CAMPAIGN=/absolute/path/to/codex-probe-campaign
 bun run probe doctor --campaign "$CAMPAIGN"
 ```
 
-The first `doctor` call creates the isolated configuration and reports missing authentication. It also checks whether the installed App Server schema can express the policies used by the scenarios: read-only turns, workspace-write turns with named writable roots, disabled network access, and temporary-directory write exclusions. Authenticate interactively without copying general Codex configuration:
+The first `doctor` call creates the isolated configuration and checks whether the installed App Server schema can express the policies used by the scenarios: read-only turns, workspace-write turns with named writable roots, disabled network access, and temporary-directory write exclusions.
 
-```sh
-bun run login --campaign "$CAMPAIGN"
-bun run probe doctor --campaign "$CAMPAIGN"
-```
-
-The login process receives an explicit environment and uses only `<campaign>/codex-home`. The generated configuration selects `cli_auth_credentials_store = "file"`. Provider credentials live only in that isolated home and are shared by runs in this campaign. The probe rejects `auto` and `keyring` by writing and checking file mode. Delete the campaign directory after the campaign to remove its local state and credentials.
+The probe assumes the operator is already logged in to the normal Codex CLI. There is no separate probe login. Campaign setup copies `auth.json` from `$CODEX_HOME`, or `~/.codex` when that variable is unset, into `<campaign>/codex-home` when the campaign has no usable credential yet. Everything else in the campaign home stays isolated: the generated `config.toml` selects `cli_auth_credentials_store = "file"`, pins `gpt-5.6-luna` with `low` reasoning effort, and inherits none of the operator's MCP servers, hooks, plugins, or `AGENTS.md`. If no usable credential exists, `doctor` fails and asks for a normal `codex login`. Delete the campaign directory after the campaign to remove its local state and the copied credential.
 
 ## Commands
 
@@ -64,8 +59,7 @@ The campaign contains:
 
 ```text
 <campaign>/
-  codex-home/           isolated provider authentication and App Server state
-  login-home/           empty HOME used only by interactive login
+  codex-home/           isolated App Server state and the copied operator credential
   runs/<run-id>/
     agent-home/         empty HOME passed to the App Server child
     workspace/          fresh scenario repository
@@ -77,37 +71,19 @@ The campaign contains:
 
 The parent probe writes only inside the campaign and OS-created temporary locations used by its processes. `read` runs with a read-only policy. `edit`, `pr`, `fail`, and `interrupt` get write access to their workspace, with `/tmp` and the inherited temporary directory excluded. The released App Server runtime does not restrict reads to the scenario workspace. Agent commands may read `codex-home`, artifacts, sibling runs, and other files available to the current operating-system user. Run the probe only in the documented single-user development environment and keep unrelated data off that host.
 
-The App Server child receives only `PATH`, locale and terminal basics, a run-local `HOME`, the isolated `CODEX_HOME`, and fixed noninteractive flags. The probe removes operator GitHub variables, cloud credentials, `SSH_AUTH_SOCK`, OpenAI variables, Claude variables, and unrelated Codex variables. Only `pr` gets the dedicated `GH_TOKEN`, `GIT_ASKPASS`, and prompt-disabling variables described below.
+The App Server child receives only `PATH`, locale and terminal basics, a `HOME`, the isolated `CODEX_HOME`, and fixed noninteractive flags. The probe removes operator GitHub variables, cloud credentials, `SSH_AUTH_SOCK`, OpenAI variables, Claude variables, and unrelated Codex variables. `read`, `edit`, `fail`, and `interrupt` get an empty run-local `HOME`. `pr` gets the operator `HOME` for the reason described below.
 
-Network access inside agent commands starts disabled. Only `pr` may ask for a destination. The terminal displays the host, protocol, port, command or file action, working directory, and available decisions. The operator must type an available decision. EOF, Ctrl-C, invalid input, an unavailable decision, or timeout cancels the request and returns nonzero. The capture records the request and decision after redaction.
+Every scenario runs unattended, because the dispatcher this probe informs will have nobody at the terminal. Turns use `approvalPolicy: "never"`, and every run asserts that nothing asked for an approval. Workspace write refuses Git metadata writes unless the directory is named, so write scenarios list both the workspace and its `.git` directory as writable roots. Agent command networking stays disabled everywhere except `pr`, which needs it to push and open the pull request without an approval nobody is there to give. The approval handling code remains, covered by the automated tests, for the day a policy needs it back.
 
 The App Server's provider connection is outside the agent command sandbox. This is why Codex can reach its model while agent command networking remains disabled.
 
-## PR credential and target preparation
+## PR credentials and target preparation
 
-Use a dedicated fine-grained personal access token restricted to `alundgren/irudd-factory-agent-testing`. In GitHub settings, verify the selected repository and contents and pull-request permissions yourself. The API cannot prove that the token has no unwanted access.
+`pr` uses the ambient GitHub credentials of the operator rather than a dedicated token. macOS keeps the `gh` login in the keyring and Git uses the `osxkeychain` helper, and both are reached through the operator `HOME`, so the `pr` child receives it. No token is read, injected, or held in memory by the probe.
 
-On macOS, create the Keychain item interactively. The final `-w` asks for the value, so the secret does not enter shell history:
+This is a deliberate trade recorded in `SECURITY-LIMITATIONS.md`. The `pr` agent acts with the operator's full GitHub identity, not a repository-scoped token, so a prompt that escapes its instructions could reach any repository the operator can write. It is accepted because this installation serves one developer on a dedicated development machine, and because the alternative leaked: Codex CLI 0.151.0 writes a shell snapshot of the child environment to `$CODEX_HOME/shell_snapshots/<id>.sh` at mode `0644`, so an injected `GH_TOKEN` lands on disk in plaintext.
 
-```zsh
-read -r -s "CODEX_PROBE_TOKEN?Dedicated token: "
-printf "\n"
-/usr/bin/security add-generic-password -U \
-  -s irudd-factory-agent-testing \
-  -a codex-probe \
-  -w "$CODEX_PROBE_TOKEN"
-unset CODEX_PROBE_TOKEN
-```
-
-Remove it after validation:
-
-```sh
-/usr/bin/security delete-generic-password \
-  -s irudd-factory-agent-testing \
-  -a codex-probe
-```
-
-`doctor pr` invokes `/usr/bin/security` directly and checks for a nonempty item, Git, `gh`, the exact HTTPS target, and non-mutating repository access. It never prints the token. The `pr` command reads the item into memory, passes it as `GH_TOKEN` only to the App Server child, and clears the reference after child shutdown. A static askpass program under the run workspace's `.git` directory lets HTTPS Git read that environment variable. The token is absent from argv, remotes, Git configuration, captures, manifests, and reports.
+`doctor pr` checks Git, `gh`, an active `gh` login reachable from the child environment, the exact HTTPS target, and non-mutating repository access.
 
 To seed or reset the private disposable repository later, a human can run the following from this prototype directory. Do not run it against a repository that contains useful data.
 
@@ -128,7 +104,7 @@ Before launching App Server, each real run records `codex --version`, generates 
 
 The probe stores a manifest, redacted JSONL protocol capture, and Markdown report. It records requested and observed model, effort, reroutes, CLI version, schema digest, repository and starting commit, thread and turn IDs, item lifecycles, token updates, UTC timestamps, durations, serialized UTF-8 byte counts, approvals, process exit, result, Git and PR effects, writable roots, remote identity, timeouts, and assertions.
 
-Raw bytes exist in memory only until exact-value redaction. Environment values, Keychain locations, authenticated URLs, and credentials are not written. A completed turn still returns nonzero if an external scenario assertion fails.
+Raw bytes exist in memory only until exact-value redaction. Environment values, authenticated URLs, and credentials are not written. A completed turn still returns nonzero if an external scenario assertion fails.
 
 The fixed terminal result names are:
 

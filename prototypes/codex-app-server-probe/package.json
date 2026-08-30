@@ -6,7 +6,6 @@
   "packageManager": "bun@1.3.14",
   "scripts": {
     "probe": "bun run src/cli.ts",
-    "login": "bun run src/login.ts",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "typecheck": "tsc --noEmit",
