@@ -9,5 +9,6 @@ Work in progress. Nothing here is released.
 
 - [Product intent](docs/product-intent.md) — what it does and the rules it works under.
 - [Architecture](docs/architecture/c4.md) — the high-level components.
+- [Stack and conventions](docs/stack.md) — decisions already made.
 - [Prototypes](docs/prototypes/README.md) — what each prototype proves.
 - [Accepted security limitations](SECURITY-LIMITATIONS.md) — the trades and why.
