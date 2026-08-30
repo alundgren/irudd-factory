@@ -1,19 +1,13 @@
-# Symphony-inspired software factory
+# Irudd Factory
 
 An issue-driven software factory for one developer working on repositories they
-own. It is heavily inspired by
+own. It watches GitHub repositories, picks issues that are ready for an agent,
+and runs a coding agent against each one in an isolated workspace. Inspired by
 [Symphony](https://github.com/openai/symphony/blob/main/SPEC.md).
 
-The initial product supports Claude Code and Codex, with GitHub issues as its
-only work source.
+Work in progress. Nothing here is released.
 
-Notable deviations from Symphony:
-
-- GitHub issues only. Other trackers may be added later.
-- One operator and one trust domain per installation. Repository contents and
-  issue authors are trusted.
-- Agent processes may read other files on the dedicated development VM. Do not
-  install this on a general-purpose host or connect repositories where
-  untrusted people can submit issues.
-
-Very much a work in progress.
+- [Product intent](docs/product-intent.md) — what it does and the rules it works under.
+- [Architecture](docs/architecture/c4.md) — the high-level components.
+- [Prototypes](docs/prototypes/README.md) — what each prototype proves.
+- [Accepted security limitations](SECURITY-LIMITATIONS.md) — the trades and why.
