@@ -1,0 +1,16 @@
+{
+  "name": "@irudd-factory/workspaces",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "bun ../../scripts/test-suite.ts packages/workspaces"
+  },
+  "dependencies": {
+    "@irudd-factory/application": "workspace:*",
+    "effect": "3.22.1"
+  }
+}
