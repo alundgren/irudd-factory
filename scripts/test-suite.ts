@@ -24,6 +24,25 @@ const roots =
     : [target];
 
 const tests = roots.map((root) => resolve(root, "test"));
+if (target === "all" || target === "apps/service") {
+  const build = Bun.spawn(["bun", "run", "build:console"], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, FORCE_COLOR: "0" },
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(build.stdout).text(),
+    new Response(build.stderr).text(),
+    build.exited,
+  ]);
+  if (exitCode !== 0) {
+    process.stdout.write(stdout);
+    process.stderr.write(stderr);
+    console.error("FAIL console build");
+    process.exit(exitCode);
+  }
+}
+
 const command = ["bun", "test", ...tests];
 if (filter) command.push("--test-name-pattern", filter);
 

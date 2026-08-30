@@ -8,19 +8,13 @@ import {
   FactoryError,
   GitHub,
   parseWorkflow,
+  REQUIRED_ISSUE_LABELS,
 } from "@irudd-factory/application";
 import type { PullRequest } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { bunCommandRunner, type CommandRunner } from "./runner.ts";
 
 const RepositoryName = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const ForbiddenLabels = new Set([
-  "claimed",
-  "ready-for-human",
-  "epic",
-  "needs-refinement",
-]);
-
 const DiscoveryResponse = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
@@ -84,7 +78,7 @@ const PullRequestsResponse = Schema.Struct({
 const DISCOVERY_QUERY = `query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     defaultBranchRef { name target { oid } }
-    issues(first: 100, states: OPEN, labels: ["ready-for-agent"]) {
+    issues(first: 100, states: OPEN, labels: ${JSON.stringify(REQUIRED_ISSUE_LABELS)}) {
       nodes {
         id number url title author { login }
         labels(first: 100) { nodes { name } }
@@ -185,12 +179,16 @@ function makeService(runner: CommandRunner): GitHubService {
             "base64",
           ).toString("utf8");
           const workflow = parseWorkflow(source);
+          const requiredLabels = new Set(workflow.policy.requiredLabels);
+          const forbiddenLabels = new Set(workflow.policy.forbiddenLabels);
 
           const candidates: Candidate[] = [];
           for (const issue of discovery.data.repository.issues.nodes) {
             const labels = new Set(issue.labels.nodes.map(({ name }) => name));
-            if (!labels.has("ready-for-agent")) continue;
-            if ([...ForbiddenLabels].some((label) => labels.has(label)))
+            if ([...requiredLabels].some((label) => !labels.has(label))) {
+              continue;
+            }
+            if ([...forbiddenLabels].some((label) => labels.has(label)))
               continue;
             if (issue.blockedBy.nodes.some(({ state }) => state !== "CLOSED")) {
               continue;

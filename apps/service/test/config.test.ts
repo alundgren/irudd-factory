@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { validateConfig } from "../src/index.ts";
+import { configPathFromArgs, validateConfig } from "../src/index.ts";
 
 const valid = {
   repository: "owner/repository",
@@ -18,6 +18,17 @@ const valid = {
 };
 
 describe("factory configuration", () => {
+  test("accepts the documented config argument", () => {
+    expect(configPathFromArgs(["--config", "factory.local.json"], "/srv")).toBe(
+      "/srv/factory.local.json",
+    );
+    expect(configPathFromArgs(["factory.local.json"], "/srv")).toBe(
+      "/srv/factory.local.json",
+    );
+    expect(configPathFromArgs([], "/srv")).toBe("/srv/factory.json");
+    expect(() => configPathFromArgs(["--config"], "/srv")).toThrow("usage:");
+  });
+
   test("resolves paths and accepts loopback addresses", () => {
     const config = validateConfig(valid, "/opt/factory");
     expect(config.databasePath).toBe("/opt/factory/.factory/factory.db");

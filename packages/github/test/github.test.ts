@@ -7,9 +7,8 @@ import {
 } from "../src/index.ts";
 
 const workflow = `---
-poll_interval: 5m
 required_labels: [ready-for-agent]
-concurrency: 1
+forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
 runtime: bun
 test: bun test
 ---

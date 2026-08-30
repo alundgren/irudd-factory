@@ -108,3 +108,20 @@ export async function loadConfig(path = resolve("factory.json")) {
   }
   return validateConfig(source, dirname(path));
 }
+
+export function configPathFromArgs(
+  args: ReadonlyArray<string>,
+  workingDirectory = process.cwd(),
+): string {
+  if (args.length === 0) return resolve(workingDirectory, "factory.json");
+  if (args.length === 1 && args[0] && args[0] !== "--config") {
+    return resolve(workingDirectory, args[0]);
+  }
+  if (args.length === 2 && args[0] === "--config" && args[1]) {
+    return resolve(workingDirectory, args[1]);
+  }
+  throw new FactoryError({
+    code: "config_arguments_invalid",
+    message: "usage: factory-service [--config path|path]",
+  });
+}
