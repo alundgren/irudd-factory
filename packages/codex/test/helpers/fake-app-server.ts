@@ -63,6 +63,10 @@ async function handle(line: string): Promise<void> {
   }
   if (message.method === "model/list" && message.id !== undefined) {
     if (mode === "model-timeout") return;
+    if (mode === "early-error") {
+      send({ method: "error", params: { message: "early provider failure" } });
+      return;
+    }
     respond(message.id, {
       data: [
         {
@@ -164,7 +168,7 @@ async function handle(line: string): Promise<void> {
     return;
   }
   if (message.method === "turn/interrupt" && message.id !== undefined) {
-    respond(message.id, {});
+    if (mode !== "interrupt-timeout") respond(message.id, {});
   }
 }
 

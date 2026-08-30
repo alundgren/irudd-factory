@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import type { Assignment, WorkspacePaths } from "@irudd-factory/contracts";
 import type { AssignmentPatch } from "@irudd-factory/application";
 import { Effect, Either } from "effect";
-import { makeCodexProvider } from "../src/index.ts";
+import {
+  makeCodexProvider,
+  terminateOwnedGroup,
+  type ManagedProcess,
+} from "../src/index.ts";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -140,6 +144,7 @@ describe("Codex provider", () => {
     ["effort-missing", "observed_effort_missing"],
     ["malformed", "provider_protocol_error"],
     ["provider-error", "provider_error_notification"],
+    ["early-error", "provider_error_notification"],
     ["provider-exit", "provider_exited"],
     ["initialization-timeout", "child_startup_timeout"],
     ["thread-timeout", "initialization_timeout"],
@@ -185,6 +190,26 @@ describe("Codex provider", () => {
     }
   });
 
+  test("retains the final response on a late validation failure", async () => {
+    const { provider, assignment, workspace } = await fixture("effort-missing");
+    const failures: Array<Readonly<Record<string, unknown>>> = [];
+    await Effect.runPromise(
+      Effect.either(
+        provider.run(
+          { assignment, workspace, prompt: "Implement it." },
+          (event) =>
+            Effect.sync(() => {
+              if (event.type === "provider.failed") {
+                failures.push(event.detail);
+              }
+            }),
+        ),
+      ),
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.finalResponse).toBe("Pull request opened.");
+  });
+
   test("does not retain command stderr in normalized failures", async () => {
     for (const mode of ["version-failure", "schema-failure"]) {
       const { provider, assignment, workspace } = await fixture(mode);
@@ -202,5 +227,47 @@ describe("Codex provider", () => {
         expect(outcome.left.message).not.toContain("stderr");
       }
     }
+  });
+
+  test("does not start a second wait after full-budget cleanup", async () => {
+    const { assignment, workspace } = await fixture("interrupt-timeout");
+    let captured: ManagedProcess | undefined;
+    let terminationReturnedAt = 0;
+    const provider = makeCodexProvider({
+      commandPrefix: [process.execPath, fakeServer, "interrupt-timeout"],
+      runtimeRoot: join(dirname(workspace.worktreePath), "deadline-runtime"),
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      timeouts: {
+        childStartupMs: 500,
+        initializationMs: 500,
+        modelSchemaMs: 500,
+        turnMs: 500,
+        shutdownMs: 200,
+      },
+      terminateProcessGroup: async (child, shutdownMs) => {
+        captured = child;
+        await Bun.sleep(shutdownMs);
+        terminationReturnedAt = performance.now();
+        return {
+          code: null,
+          signal: "SIGKILL",
+          cleanupTimedOut: true,
+        };
+      },
+    });
+    const outcome = await Effect.runPromise(
+      Effect.either(
+        provider.run(
+          { assignment, workspace, prompt: "Implement it." },
+          () => Effect.void,
+        ),
+      ),
+    );
+    const afterFailureMs = performance.now() - terminationReturnedAt;
+    if (captured) await terminateOwnedGroup(captured, 500);
+    expect(Either.isLeft(outcome)).toBe(true);
+    expect(afterFailureMs).toBeLessThan(75);
+    expect(captured).toBeDefined();
   });
 });

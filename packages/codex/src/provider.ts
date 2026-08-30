@@ -13,6 +13,7 @@ import {
   runManagedCommand,
   spawnManaged,
   terminateOwnedGroup,
+  type ManagedProcess,
   type ProcessExit,
 } from "./process.ts";
 import { AppServerRpc, type RpcMessage } from "./rpc.ts";
@@ -31,6 +32,10 @@ export interface CodexProviderOptions {
   readonly model: string;
   readonly reasoningEffort: string;
   readonly timeouts: ProviderTimeouts;
+  readonly terminateProcessGroup?: (
+    child: ManagedProcess,
+    shutdownMs: number,
+  ) => Promise<ProcessExit>;
 }
 
 const RequiredSchemaMarkers = [
@@ -212,6 +217,8 @@ export function makeCodexProvider(
 ): ProviderService {
   validateTimeouts(options.timeouts);
   const prefix = options.commandPrefix ?? ["codex"];
+  const terminateProcessGroup =
+    options.terminateProcessGroup ?? terminateOwnedGroup;
   if (prefix.length === 0) {
     throw new FactoryError({
       code: "provider_command_invalid",
@@ -272,6 +279,20 @@ export function makeCodexProvider(
           let tokenUsage: ProviderTokenUsage | null = null;
           const itemSummaries: Array<Readonly<Record<string, unknown>>> = [];
           let terminalFailure: FactoryError | null = null;
+          let resolveTerminal!: (error: FactoryError) => void;
+          const terminalSignal = new Promise<FactoryError>((resolve) => {
+            resolveTerminal = resolve;
+          });
+          const recordTerminal = (error: FactoryError): void => {
+            if (terminalFailure) return;
+            terminalFailure = error;
+            resolveTerminal(error);
+          };
+          const raceTerminal = <A>(operation: Promise<A>): Promise<A> =>
+            Promise.race([
+              operation,
+              terminalSignal.then((error) => Promise.reject(error)),
+            ]);
           const rpc = new AppServerRpc(child, (message) => {
             approvalCount += 1;
             if (message.id !== undefined) {
@@ -282,10 +303,12 @@ export function makeCodexProvider(
                   : { decision: "cancel" },
               );
             }
-            terminalFailure = new FactoryError({
-              code: "approval_requested",
-              message: `Codex requested approval through ${message.method ?? "unknown"}`,
-            });
+            recordTerminal(
+              new FactoryError({
+                code: "approval_requested",
+                message: `Codex requested approval through ${message.method ?? "unknown"}`,
+              }),
+            );
           });
           const unsubscribe = rpc.onMessage((message) => {
             if (message.method === "model/rerouted") {
@@ -300,16 +323,20 @@ export function makeCodexProvider(
                   ? { reason: stringAt(message.params, "reason") }
                   : {}),
               });
-              terminalFailure = new FactoryError({
-                code: "model_rerouted",
-                message: "Codex rerouted the requested model",
-              });
+              recordTerminal(
+                new FactoryError({
+                  code: "model_rerouted",
+                  message: "Codex rerouted the requested model",
+                }),
+              );
             }
             if (message.method === "error") {
-              terminalFailure = new FactoryError({
-                code: "provider_error_notification",
-                message: "Codex emitted an error notification",
-              });
+              recordTerminal(
+                new FactoryError({
+                  code: "provider_error_notification",
+                  message: "Codex emitted an error notification",
+                }),
+              );
             }
             if (message.method === "thread/settings/updated") {
               observedModel =
@@ -351,27 +378,31 @@ export function makeCodexProvider(
                 patch: { codexVersion },
               }),
             );
-            await rpc.request(
-              "initialize",
-              {
-                clientInfo: {
-                  name: "irudd_factory",
-                  title: "Irudd Factory",
-                  version: "0.1.0",
+            await raceTerminal(
+              rpc.request(
+                "initialize",
+                {
+                  clientInfo: {
+                    name: "irudd_factory",
+                    title: "Irudd Factory",
+                    version: "0.1.0",
+                  },
+                  capabilities: { experimentalApi: true },
                 },
-                capabilities: { experimentalApi: true },
-              },
-              options.timeouts.childStartupMs,
-              "child_startup_timeout",
+                options.timeouts.childStartupMs,
+                "child_startup_timeout",
+              ),
             );
             rpc.notify("initialized", {});
             let models: unknown;
             try {
-              models = await rpc.request(
-                "model/list",
-                { limit: 100, includeHidden: true },
-                options.timeouts.modelSchemaMs,
-                "model_schema_timeout",
+              models = await raceTerminal(
+                rpc.request(
+                  "model/list",
+                  { limit: 100, includeHidden: true },
+                  options.timeouts.modelSchemaMs,
+                  "model_schema_timeout",
+                ),
               );
             } catch (error) {
               if (
@@ -393,17 +424,19 @@ export function makeCodexProvider(
                 message: `${options.model} with ${options.reasoningEffort} effort is unavailable`,
               });
             }
-            const thread = await rpc.request(
-              "thread/start",
-              {
-                model: options.model,
-                cwd: input.workspace.worktreePath,
-                approvalPolicy: "never",
-                sandbox: "workspace-write",
-                serviceName: "irudd_factory",
-              },
-              options.timeouts.initializationMs,
-              "initialization_timeout",
+            const thread = await raceTerminal(
+              rpc.request(
+                "thread/start",
+                {
+                  model: options.model,
+                  cwd: input.workspace.worktreePath,
+                  approvalPolicy: "never",
+                  sandbox: "workspace-write",
+                  serviceName: "irudd_factory",
+                },
+                options.timeouts.initializationMs,
+                "initialization_timeout",
+              ),
             );
             threadId = stringAt(thread, "thread", "id");
             observedModel =
@@ -461,41 +494,38 @@ export function makeCodexProvider(
                 },
               }),
             );
-            const completion = rpc.waitFor(
-              (message) =>
-                message.method === "turn/completed" ||
-                message.method === "model/rerouted" ||
-                message.method === "error" ||
-                (message.id !== undefined &&
-                  Boolean(
-                    message.method?.toLowerCase().includes("requestapproval"),
-                  )),
-              options.timeouts.turnMs,
-              "turn_completion_timeout",
+            const completion = raceTerminal(
+              rpc.waitFor(
+                (message) => message.method === "turn/completed",
+                options.timeouts.turnMs,
+                "turn_completion_timeout",
+              ),
             );
-            const turn = await rpc.request(
-              "turn/start",
-              {
-                threadId,
-                input: [{ type: "text", text: input.prompt }],
-                cwd: input.workspace.worktreePath,
-                approvalPolicy: "never",
-                sandboxPolicy: {
-                  type: "workspaceWrite",
-                  writableRoots: [
-                    input.workspace.worktreePath,
-                    input.workspace.worktreeGitDir,
-                    input.workspace.commonGitDir,
-                  ],
-                  networkAccess: true,
-                  excludeSlashTmp: true,
-                  excludeTmpdirEnvVar: true,
+            const turn = await raceTerminal(
+              rpc.request(
+                "turn/start",
+                {
+                  threadId,
+                  input: [{ type: "text", text: input.prompt }],
+                  cwd: input.workspace.worktreePath,
+                  approvalPolicy: "never",
+                  sandboxPolicy: {
+                    type: "workspaceWrite",
+                    writableRoots: [
+                      input.workspace.worktreePath,
+                      input.workspace.worktreeGitDir,
+                      input.workspace.commonGitDir,
+                    ],
+                    networkAccess: true,
+                    excludeSlashTmp: true,
+                    excludeTmpdirEnvVar: true,
+                  },
+                  model: options.model,
+                  effort: options.reasoningEffort,
                 },
-                model: options.model,
-                effort: options.reasoningEffort,
-              },
-              options.timeouts.initializationMs,
-              "initialization_timeout",
+                options.timeouts.initializationMs,
+                "initialization_timeout",
+              ),
             );
             turnId = stringAt(turn, "turn", "id");
             if (!turnId) {
@@ -566,7 +596,7 @@ export function makeCodexProvider(
                 message: "Codex completed without token usage",
               });
             }
-            processExit = await terminateOwnedGroup(
+            processExit = await terminateProcessGroup(
               child,
               options.timeouts.shutdownMs,
             );
@@ -594,7 +624,7 @@ export function makeCodexProvider(
             };
           } catch (primary) {
             const cleanupDeadline = Date.now() + options.timeouts.shutdownMs;
-            if (threadId && turnId && !child.hasExited) {
+            if (!processExit && threadId && turnId && !child.hasExited) {
               try {
                 await rpc.request(
                   "turn/interrupt",
@@ -609,7 +639,7 @@ export function makeCodexProvider(
                 // The primary failure remains authoritative.
               }
             }
-            processExit ??= await terminateOwnedGroup(
+            processExit ??= await terminateProcessGroup(
               child,
               Math.max(1, cleanupDeadline - Date.now()),
             );
@@ -627,6 +657,7 @@ export function makeCodexProvider(
                     reroutes,
                     itemSummaries,
                     tokenUsage,
+                    finalResponse,
                     processExit,
                   },
                 }),

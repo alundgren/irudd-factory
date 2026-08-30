@@ -32,16 +32,6 @@ const ok = (value: unknown): CommandResult => ({
   exitCode: 0,
 });
 
-const included = (
-  status: number,
-  value: unknown,
-  exitCode = status >= 400 ? 1 : 0,
-): CommandResult => ({
-  stdout: `HTTP/2.0 ${status} Test\nContent-Type: application/json\n\n${JSON.stringify(value)}`,
-  stderr: exitCode === 0 ? "" : `HTTP ${status}`,
-  exitCode,
-});
-
 const lastPage = { hasNextPage: false, endCursor: null };
 
 function discovery(
@@ -199,7 +189,14 @@ describe("GitHub adapter", () => {
   test("reconciles a failed claim with exactly one read", async () => {
     const runner = new FakeRunner([
       { stdout: "", stderr: "timeout", exitCode: 1 },
-      included(200, { name: "claimed" }),
+      ok({
+        labels: [
+          ...Array.from({ length: 35 }, (_, index) => ({
+            name: `label-${index}`,
+          })),
+          { name: "claimed" },
+        ],
+      }),
     ]);
     const outcome = await Effect.runPromise(
       makeGitHubService(runner).claimIssue({
@@ -213,16 +210,13 @@ describe("GitHub adapter", () => {
     expect(outcome).toBe("confirmed");
     expect(runner.calls).toHaveLength(2);
     expect(runner.calls[0]?.input).toBe('{"labels":["claimed"]}');
-    expect(runner.calls[1]?.args).toContain(
-      "repos/owner/repository/issues/1/labels/claimed",
-    );
-    expect(runner.calls[1]?.args).toContain("--include");
+    expect(runner.calls[1]?.args).toContain("repos/owner/repository/issues/1");
   });
 
   test("distinguishes unclaimed and unknown reconciliation", async () => {
     const unclaimed = new FakeRunner([
       { stdout: "", stderr: "failed", exitCode: 1 },
-      included(404, { message: "Not Found", status: "404" }),
+      ok({ labels: [{ name: "ready-for-agent" }] }),
     ]);
     const unknown = new FakeRunner([
       { stdout: "", stderr: "failed", exitCode: 1 },

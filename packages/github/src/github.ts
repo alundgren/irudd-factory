@@ -84,10 +84,8 @@ const WorkflowResponse = Schema.Struct({
   content: Schema.String,
 });
 const LabelsResponse = Schema.Array(Schema.Struct({ name: Schema.String }));
-const LabelResponse = Schema.Struct({ name: Schema.String });
-const NotFoundResponse = Schema.Struct({
-  message: Schema.String,
-  status: Schema.Union(Schema.String, Schema.Number),
+const IssueLabelsResponse = Schema.Struct({
+  labels: Schema.Array(Schema.Struct({ name: Schema.String })),
 });
 const ClosingIssueNode = Schema.Struct({
   number: Schema.Number,
@@ -218,23 +216,6 @@ function decodeJson<A, I>(schema: Schema.Schema<A, I>, source: string): A {
       detail: String(error),
     });
   }
-}
-
-function decodeIncludedJson<A, I>(
-  schema: Schema.Schema<A, I>,
-  source: string,
-  expectedStatus: number,
-): A {
-  const normalized = source.replaceAll("\r\n", "\n");
-  const status = Number(normalized.match(/^HTTP\/\S+\s+(\d{3})/)?.[1]);
-  const separator = normalized.indexOf("\n\n");
-  if (status !== expectedStatus || separator < 0) {
-    throw new FactoryError({
-      code: "github_response_invalid",
-      message: "GitHub returned an invalid included response",
-    });
-  }
-  return decodeJson(schema, normalized.slice(separator + 2));
 }
 
 async function checked(
@@ -514,19 +495,15 @@ function makeService(runner: CommandRunner): GitHubService {
           const read = await runner.run([
             "gh",
             "api",
-            "--include",
-            `repos/${issue.repository}/issues/${issue.number}/labels/claimed`,
+            `repos/${issue.repository}/issues/${issue.number}`,
           ]);
           if (read.exitCode === 0) {
-            const label = decodeIncludedJson(LabelResponse, read.stdout, 200);
-            return label.name === "claimed" ? "confirmed" : "unknown";
+            const current = decodeJson(IssueLabelsResponse, read.stdout);
+            return current.labels.some(({ name }) => name === "claimed")
+              ? "confirmed"
+              : "unclaimed";
           }
-          try {
-            decodeIncludedJson(NotFoundResponse, read.stdout, 404);
-            return "unclaimed";
-          } catch {
-            return "unknown";
-          }
+          return "unknown";
         } catch {
           return "unknown";
         }
