@@ -7,7 +7,11 @@ import {
   parseArgs,
   providerAuthReady,
 } from "../src/config.ts";
-import { buildChildEnvironment, leakedKeys } from "../src/environment.ts";
+import {
+  buildChildEnvironment,
+  buildKeychainEnvironment,
+  leakedKeys,
+} from "../src/environment.ts";
 import {
   readLocalOrigin,
   sanitizeCopiedGitDirectory,
@@ -108,6 +112,24 @@ describe("configuration and containment", () => {
       ).rejects.toMatchObject({ code: "git_metadata_link_rejected" });
     });
   }
+
+  test("reads the Keychain with the operator home and never leaks it to the child", () => {
+    const source = {
+      PATH: "/usr/bin",
+      HOME: "/Users/operator",
+      TMPDIR: "/tmp",
+    };
+    expect(buildKeychainEnvironment(source).HOME).toBe("/Users/operator");
+    expect(
+      buildChildEnvironment({
+        source,
+        codexHome: "/campaign/codex-home",
+        agentHome: "/campaign/runs/run/agent-home",
+        scenario: "pr",
+      }).HOME,
+    ).toBe("/campaign/runs/run/agent-home");
+    expect(() => buildKeychainEnvironment({ PATH: "/usr/bin" })).toThrow();
+  });
 
   test("requires usable data in the isolated file credential store", async () => {
     const root = await mkdtemp(join(tmpdir(), "probe-auth-"));

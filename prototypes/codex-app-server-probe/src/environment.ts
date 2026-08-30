@@ -59,6 +59,25 @@ export function buildChildEnvironment(options: {
   return environment;
 }
 
+export function buildKeychainEnvironment(
+  source: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const key of SAFE_INHERITED_KEYS) {
+    const value = source[key];
+    if (value) environment[key] = value;
+  }
+  // macOS resolves the keychain search list from the operator HOME, so this
+  // parent-side lookup keeps it. The child environment never receives it.
+  const home = source.HOME;
+  if (!home) {
+    throw new Error("Reading the Keychain requires the operator HOME");
+  }
+  environment.HOME = home;
+  environment.NO_COLOR = "1";
+  return environment;
+}
+
 export function leakedKeys(environment: Record<string, string>): string[] {
   const namedExceptions = new Set([
     "GH_TOKEN",

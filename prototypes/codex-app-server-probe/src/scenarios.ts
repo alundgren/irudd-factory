@@ -11,7 +11,11 @@ import {
   operatorCodexHome,
   providerAuthReady,
 } from "./config.ts";
-import { buildChildEnvironment, leakedKeys } from "./environment.ts";
+import {
+  buildChildEnvironment,
+  buildKeychainEnvironment,
+  leakedKeys,
+} from "./environment.ts";
 import {
   gitGlobalConfigPath,
   sanitizeCopiedGitDirectory,
@@ -104,7 +108,7 @@ async function readKeychainToken(
       "-a",
       account,
     ],
-    { cwd: "/tmp" },
+    { cwd: "/tmp", env: buildKeychainEnvironment() },
   );
   const token = result.stdout.trim();
   if (result.code !== 0 || !token) {

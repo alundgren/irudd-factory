@@ -17,7 +17,11 @@ import {
   operatorCodexHome,
   providerAuthReady,
 } from "./config.ts";
-import { buildChildEnvironment, leakedKeys } from "./environment.ts";
+import {
+  buildChildEnvironment,
+  buildKeychainEnvironment,
+  leakedKeys,
+} from "./environment.ts";
 import { readLocalOrigin } from "./git-policy.ts";
 import { canonicalExisting, plannedWithin } from "./paths.ts";
 import { Redactor } from "./redaction.ts";
@@ -112,6 +116,7 @@ async function keychainToken(
     env,
     timeoutMs,
   );
+
   const value = result.stdout.trim();
   if (result.code !== 0 || !value) {
     throw new ProbeError(
@@ -291,7 +296,7 @@ export async function runDoctor(
       token = await keychainToken(
         options.keychainService,
         options.keychainAccount,
-        baseEnvironment,
+        buildKeychainEnvironment(),
         options.timeouts.initializationMs,
       );
       redactor.add(token);
