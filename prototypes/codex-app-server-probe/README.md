@@ -2,7 +2,7 @@
 
 This directory contains an isolated Bun prototype for later, human-run Codex App Server experiments. It launches `codex app-server` over JSON-RPC stdio with an argument array. It does not use a shell to construct the provider command.
 
-The automated checks use a fake executable and synthetic schemas. They do not run a Codex turn, contact GitHub, or read the private testing repository. Passing them proves the probe code, not the live provider contract or the macOS sandbox.
+The automated checks use a fake executable and synthetic schemas. They do not run a Codex turn, contact GitHub, or read the private testing repository. Passing them proves the probe code, not the live provider contract or the operating-system sandbox.
 
 ## Setup
 
@@ -23,7 +23,7 @@ CAMPAIGN=/absolute/path/to/codex-probe-campaign
 bun run probe doctor --campaign "$CAMPAIGN"
 ```
 
-The first `doctor` call creates the isolated configuration and reports missing authentication. It also checks whether the installed App Server schema can express restricted readable roots. Older CLIs, including 0.147.0, report `doctor_restricted_read_schema` after login. Do not run a scenario until a newer installed schema passes that check. Authenticate interactively without copying general Codex configuration:
+The first `doctor` call creates the isolated configuration and reports missing authentication. It also checks whether the installed App Server schema can express the policies used by the scenarios: read-only turns, workspace-write turns with named writable roots, disabled network access, and temporary-directory write exclusions. Authenticate interactively without copying general Codex configuration:
 
 ```sh
 bun run login --campaign "$CAMPAIGN"
@@ -75,7 +75,7 @@ The campaign contains:
     report.md
 ```
 
-The parent probe writes only inside the campaign and OS-created temporary locations used by its processes. Agent commands get restricted read access to their own workspace, `fixture/`, `prompts/`, and curated macOS defaults. `edit`, `pr`, `fail`, and `interrupt` get write access only to their workspace. Agent commands cannot read `codex-home`, artifacts, or sibling runs.
+The parent probe writes only inside the campaign and OS-created temporary locations used by its processes. `read` runs with a read-only policy. `edit`, `pr`, `fail`, and `interrupt` get write access to their workspace, with `/tmp` and the inherited temporary directory excluded. The released App Server runtime does not restrict reads to the scenario workspace. Agent commands may read `codex-home`, artifacts, sibling runs, and other files available to the current operating-system user. Run the probe only in the documented single-user development environment and keep unrelated data off that host.
 
 The App Server child receives only `PATH`, locale and terminal basics, a run-local `HOME`, the isolated `CODEX_HOME`, and fixed noninteractive flags. The probe removes operator GitHub variables, cloud credentials, `SSH_AUTH_SOCK`, OpenAI variables, Claude variables, and unrelated Codex variables. Only `pr` gets the dedicated `GH_TOKEN`, `GIT_ASKPASS`, and prompt-disabling variables described below.
 
@@ -126,7 +126,7 @@ Pass that checkout to `pr` with `--source`. The implementation work for this iss
 
 Before launching App Server, each real run records `codex --version`, generates the installed JSON Schema files, checks required protocol coverage, and calculates one SHA-256 digest over sorted relative paths, a zero byte separator, and file bytes.
 
-The probe stores a manifest, redacted JSONL protocol capture, and Markdown report. It records requested and observed model, effort, reroutes, CLI version, schema digest, repository and starting commit, thread and turn IDs, item lifecycles, token updates, UTC timestamps, durations, serialized UTF-8 byte counts, approvals, process exit, result, Git and PR effects, allowed paths, sandbox roots, remote identity, timeouts, and assertions.
+The probe stores a manifest, redacted JSONL protocol capture, and Markdown report. It records requested and observed model, effort, reroutes, CLI version, schema digest, repository and starting commit, thread and turn IDs, item lifecycles, token updates, UTC timestamps, durations, serialized UTF-8 byte counts, approvals, process exit, result, Git and PR effects, writable roots, remote identity, timeouts, and assertions.
 
 Raw bytes exist in memory only until exact-value redaction. Environment values, Keychain locations, authenticated URLs, and credentials are not written. A completed turn still returns nonzero if an external scenario assertion fails.
 
@@ -159,4 +159,4 @@ The configurable fields are `childStartupMs`, `initializationMs`, `modelSchemaMs
 
 ## Limits
 
-No automated check here establishes the real model catalog, provider authentication flow, macOS restricted-read policy, approval request details, network enforcement, interruption timing, push, or pull-request behavior. Those checks belong to the later human validation issue. This prototype intentionally has no Effect, SQLite, React, WebSockets, scheduler, Claude integration, service installation, or VM-specific path.
+No automated check here establishes the real model catalog, provider authentication flow, operating-system write policy, approval request details, network enforcement, interruption timing, push, or pull-request behavior. Those checks belong to the human-run scenarios. The prototype does not claim filesystem read isolation. It intentionally has no Effect, SQLite, React, WebSockets, scheduler, Claude integration, service installation, or VM-specific path.

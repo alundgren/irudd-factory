@@ -20,7 +20,7 @@ import { buildChildEnvironment, leakedKeys } from "./environment.ts";
 import { readLocalOrigin } from "./git-policy.ts";
 import { canonicalExisting, plannedWithin } from "./paths.ts";
 import { Redactor } from "./redaction.ts";
-import { inspectSchemas, requireRestrictedReadSchema } from "./schema.ts";
+import { inspectSchemas, requireScenarioSandboxSchema } from "./schema.ts";
 import {
   ProbeError,
   type AssertionRecord,
@@ -238,15 +238,16 @@ export async function runDoctor(
       detail: schemaDigest,
     });
     try {
-      await requireRestrictedReadSchema(schemaRoot);
+      await requireScenarioSandboxSchema(schemaRoot);
       assertions.push({
-        name: "restricted_read_schema",
+        name: "scenario_sandbox_schema",
         passed: true,
-        detail: "readableRoots and macOS platform defaults supported",
+        detail:
+          "readOnly and workspaceWrite with writable roots, disabled network, and temporary-directory exclusions supported",
       });
     } catch (error) {
       assertions.push({
-        name: "restricted_read_schema",
+        name: "scenario_sandbox_schema",
         passed: false,
         detail: error instanceof Error ? error.message : String(error),
       });
@@ -398,10 +399,11 @@ export async function runDoctor(
       campaignRoot: campaign.campaignRoot,
       runRoot,
       workspace: null,
-      allowedParentPaths: [campaign.campaignRoot, "/tmp"],
+      probeManagedPaths: [campaign.campaignRoot, "/tmp"],
       sandboxPolicy: {
         read: "readOnly",
-        write: "workspaceWrite",
+        write: "workspaceWrite without temporary-directory writes",
+        reads: "not restricted by the released App Server runtime",
         network: "pr approvals only",
       },
       remote: options.doctorPr ? TARGET_REMOTE : null,

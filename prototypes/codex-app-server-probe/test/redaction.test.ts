@@ -40,7 +40,7 @@ describe("Redactor", () => {
       campaignRoot: root,
       runRoot: root,
       workspace: root,
-      allowedParentPaths: [root],
+      probeManagedPaths: [root],
       sandboxPolicy: { type: "readOnly" },
       remote: null,
       repository: null,

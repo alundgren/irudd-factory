@@ -23,7 +23,7 @@ import {
 } from "./process.ts";
 import { Redactor } from "./redaction.ts";
 import { RpcClient } from "./rpc.ts";
-import { inspectSchemas, requireRestrictedReadSchema } from "./schema.ts";
+import { inspectSchemas, requireScenarioSandboxSchema } from "./schema.ts";
 import {
   ProbeError,
   type AssertionRecord,
@@ -216,18 +216,14 @@ function sandboxFor(
   scenario: ScenarioName,
   workspace: string,
 ): Record<string, unknown> {
-  const readAccess = {
-    type: "restricted",
-    includePlatformDefaults: process.platform === "darwin",
-    readableRoots: [workspace, FIXTURE_ROOT, PROMPTS_ROOT],
-  };
   return scenario === "read"
-    ? { type: "readOnly", access: readAccess }
+    ? { type: "readOnly", networkAccess: false }
     : {
         type: "workspaceWrite",
         writableRoots: [workspace],
-        readOnlyAccess: readAccess,
         networkAccess: false,
+        excludeSlashTmp: true,
+        excludeTmpdirEnvVar: true,
       };
 }
 
@@ -746,7 +742,7 @@ export async function runScenario(
     );
     codexVersion = inspected.version;
     schemaDigest = inspected.digest;
-    await requireRestrictedReadSchema(schemas);
+    await requireScenarioSandboxSchema(schemas);
     startingCommit = await gitValue(workspace, ["rev-parse", "HEAD"], env);
     const remoteResult = await command(["git", "remote", "get-url", "origin"], {
       cwd: workspace,
@@ -803,7 +799,7 @@ export async function runScenario(
       process.stderr,
       {
         workspace,
-        readableRoots: [workspace, FIXTURE_ROOT, PROMPTS_ROOT],
+        readableRoots: [workspace],
         writableRoots: scenario === "read" ? [] : [workspace],
       },
     );
@@ -1079,7 +1075,7 @@ export async function runScenario(
       campaignRoot: campaign.campaignRoot,
       runRoot,
       workspace,
-      allowedParentPaths: [campaign.campaignRoot, "/tmp"],
+      probeManagedPaths: [campaign.campaignRoot, "/tmp"],
       sandboxPolicy,
       remote,
       repository: remote === TARGET_REMOTE ? TARGET_REPOSITORY : null,
