@@ -1,38 +1,38 @@
 # Accepted security limitations
 
-This installation permanently serves one developer working on trusted
-repositories on a dedicated development machine. The limitations below are
-accepted deliberately. Each must be revisited before any multi-user,
-shared-host, or untrusted-repository use, and before the first real release.
+One installation serves one developer, on one dedicated VM, on repositories
+that developer owns. Every trade below is accepted on that basis and must be
+revisited before any multi-user, shared-host, or untrusted-repository use.
 
-## Agent reads are not restricted to the workspace
+## Reads are not restricted
 
-The released Codex App Server runtime does not restrict readable roots. Agent
-commands can read the campaign Codex home, sibling run directories, and any
-other file available to the operating-system user. Writes remain restricted to
-the scenario workspace and its `.git` directory.
+The released Codex App Server cannot restrict readable roots, so an agent can
+read anything the VM user can: other workspaces, the Codex home, run artifacts.
 
-## The pr path acts with the operator's full GitHub identity
+Mitigation: writes are restricted instead. An agent writes only to its own
+workspace and that workspace's `.git` directory. Do not put unrelated data on
+this VM.
 
-The `pr` scenario uses the ambient `gh` login and Git credential helper of the
-operator instead of a repository-scoped token. macOS keeps both in the login
-keychain, reached through the operator `HOME`, so the `pr` child receives that
-home. An agent that escaped its instructions could therefore reach any
-repository the operator can write, not only the disposable testing repository.
+## Agents act with the operator's GitHub identity
 
-The alternative was measured and rejected. Codex CLI 0.151.0 writes a shell
-snapshot of the child environment to `$CODEX_HOME/shell_snapshots/<id>.sh` at
-mode `0644`, so an injected `GH_TOKEN` is written to disk in plaintext. A
-dedicated fine-grained token bought a smaller blast radius at the cost of a
-credential on disk that survives the run.
+`gh` and Codex run with the operator's ambient credentials rather than a
+repository-scoped token, so an agent that escaped its instructions could reach
+any repository the operator can write.
 
-A future dispatcher that runs untrusted or third-party issues needs a
-short-lived token minted per run, or a credential helper the agent never sees
-as an environment variable, whichever the provider supports by then.
+The alternative was measured and rejected: Codex CLI 0.151.0 writes the child
+environment to `$CODEX_HOME/shell_snapshots/<id>.sh` at mode `0644`, so an
+injected `GH_TOKEN` is written to disk in plaintext. A scoped token bought a
+smaller blast radius at the cost of a credential on disk that outlives the run.
 
-## Turns run unattended
+Mitigation: only issues whose author has write permission are eligible, so the
+prompt reaching an agent already comes from someone who could write to that
+repository directly.
 
-Turns use `approvalPolicy: "never"`, so nothing pauses for a human decision.
-Containment rests entirely on the sandbox policy and the allowed roots, not on
-an operator reading a prompt. Every run asserts that no approval was requested,
-which turns a surprise prompt into a failed run rather than a hang.
+## Runs are unattended
+
+Turns use `approvalPolicy: "never"`. Nothing pauses for a human, so containment
+rests on the sandbox, the writable roots, and the eligibility rule, not on an
+operator reading a prompt.
+
+Mitigation: every run asserts that no approval was requested, which turns an
+unexpected prompt into a failed run rather than a silent hang.
