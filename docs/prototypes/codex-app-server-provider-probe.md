@@ -36,3 +36,31 @@ scenarios may proceed. Before the first real release, the repository must add a
 Restricted reads would still improve the product, but they are no longer a
 release dependency. Related upstream tracking:
 [openai/codex#40116](https://github.com/openai/codex/issues/40116).
+
+## Resumed live validation
+
+Validation resumed from Factory commit
+`9b719cfdee5d1271835577b16083cd352556d250`. The authenticated `doctor` run
+passed every assertion. The first `read` run then completed the requested turn
+with the expected behavior:
+
+- `model/list` advertised `gpt-5.6-luna` with low effort.
+- `turn/start` requested Luna with low effort.
+- `thread/settings/updated` confirmed Luna, low effort, and the read-only
+  sandbox with network disabled.
+- The command read the fixture README and returned the exact expected heading.
+- The turn completed, emitted token-usage updates, requested no approval, made
+  no Git change, and emitted no reroute.
+
+The probe still returned `assertion_failed`. Codex CLI 0.151.0 puts the
+selected model at `thread/start.result.model`, while the probe reads only
+`thread/start.result.thread.model`. The real thread object has no nested model,
+so the manifest records the observed model as absent. The fake App Server uses
+the nested field and did not expose this mismatch in automated tests.
+
+Required refinement: read the model from `thread/start.result.model`, confirm
+it from `thread/settings/updated.params.threadSettings.model`, and record and
+verify the observed effort from the same settings event. Update the fake App
+Server and tests to match Codex CLI 0.151.0. Keep reroute detection unchanged.
+Then start a new campaign and repeat the ordered live scenarios from the first
+read run.
