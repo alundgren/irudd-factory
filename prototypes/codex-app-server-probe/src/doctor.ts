@@ -14,6 +14,7 @@ import {
   TARGET_REMOTE,
   type CliOptions,
   initializeCampaign,
+  operatorCodexHome,
   providerAuthReady,
 } from "./config.ts";
 import { buildChildEnvironment, leakedKeys } from "./environment.ts";
@@ -125,7 +126,10 @@ async function keychainToken(
 export async function runDoctor(
   options: CliOptions,
 ): Promise<{ result: ResultName; runRoot: string }> {
-  const campaign = await initializeCampaign(options.campaignRoot);
+  const campaign = await initializeCampaign(
+    options.campaignRoot,
+    operatorCodexHome(),
+  );
   const runId = `${new Date().toISOString().replaceAll(/[:.]/g, "-")}-doctor`;
   const runRoot = plannedWithin(
     campaign.runsRoot,
@@ -182,15 +186,16 @@ export async function runDoctor(
         name: "provider_auth_ready",
         passed: authReady,
         detail: authReady
-          ? "isolated authentication data present"
-          : "isolated authentication data missing or invalid, run the documented isolated login",
+          ? "campaign reuses the operator Codex credentials"
+          : "no usable operator credentials were found, run `codex login` normally and retry",
       },
       {
         name: "active_integrations",
         passed:
           configText.includes("[mcp_servers]") &&
           !/\[mcp_servers\.[^\]]+\]/.test(configText),
-        detail: "none",
+        detail:
+          "none declared in the isolated configuration; scenarios record any built-in server the CLI starts anyway",
       },
       {
         name: "child_environment_allowlist",
@@ -412,6 +417,8 @@ export async function runDoctor(
       requestedModel: EXPECTED_MODEL,
       requestedEffort: EXPECTED_EFFORT,
       observedModel: null,
+      observedEffort: null,
+      threadSettings: null,
       reroutes: [],
       codexVersion,
       schemaDigest,

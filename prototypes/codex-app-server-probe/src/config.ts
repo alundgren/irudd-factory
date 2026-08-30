@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { plannedWithin } from "./paths.ts";
 import {
@@ -120,7 +120,19 @@ export function parseArgs(argv: string[], cwd: string): CliOptions {
   };
 }
 
-export async function initializeCampaign(campaignRoot: string): Promise<{
+export function operatorCodexHome(
+  environment: Record<string, string | undefined> = process.env,
+): string | null {
+  const explicit = environment.CODEX_HOME;
+  if (explicit && explicit.startsWith("/")) return resolve(explicit);
+  const home = environment.HOME;
+  return home && home.startsWith("/") ? join(resolve(home), ".codex") : null;
+}
+
+export async function initializeCampaign(
+  campaignRoot: string,
+  seedAuthFrom: string | null = null,
+): Promise<{
   campaignRoot: string;
   codexHome: string;
   runsRoot: string;
@@ -133,6 +145,8 @@ export async function initializeCampaign(campaignRoot: string): Promise<{
     mkdir(runsRoot, { recursive: true }),
   ]);
   const config = [
+    'model = "gpt-5.6-luna"',
+    'model_reasoning_effort = "low"',
     'cli_auth_credentials_store = "file"',
     'approval_policy = "on-request"',
     'sandbox_mode = "read-only"',
@@ -143,6 +157,9 @@ export async function initializeCampaign(campaignRoot: string): Promise<{
     "",
   ].join("\n");
   await writeFile(join(codexHome, "config.toml"), config, { mode: 0o600 });
+  if (seedAuthFrom) {
+    await seedOperatorCredentials(seedAuthFrom, codexHome);
+  }
   if (basename(codexHome) !== "codex-home") {
     throw new ProbeError(
       "assertion_failed",
@@ -151,6 +168,21 @@ export async function initializeCampaign(campaignRoot: string): Promise<{
     );
   }
   return { campaignRoot: root, codexHome, runsRoot };
+}
+
+export async function seedOperatorCredentials(
+  operatorHome: string,
+  codexHome: string,
+): Promise<"reused" | "copied" | "operator_credentials_missing"> {
+  if (await providerAuthReady(codexHome)) return "reused";
+  const source = join(operatorHome, "auth.json");
+  if (!(await Bun.file(source).exists())) return "operator_credentials_missing";
+  const destination = join(codexHome, "auth.json");
+  await copyFile(source, destination);
+  await chmod(destination, 0o600);
+  return (await providerAuthReady(codexHome))
+    ? "copied"
+    : "operator_credentials_missing";
 }
 
 export async function providerAuthReady(codexHome: string): Promise<boolean> {

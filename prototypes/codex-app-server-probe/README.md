@@ -23,14 +23,9 @@ CAMPAIGN=/absolute/path/to/codex-probe-campaign
 bun run probe doctor --campaign "$CAMPAIGN"
 ```
 
-The first `doctor` call creates the isolated configuration and reports missing authentication. It also checks whether the installed App Server schema can express the policies used by the scenarios: read-only turns, workspace-write turns with named writable roots, disabled network access, and temporary-directory write exclusions. Authenticate interactively without copying general Codex configuration:
+The first `doctor` call creates the isolated configuration and checks whether the installed App Server schema can express the policies used by the scenarios: read-only turns, workspace-write turns with named writable roots, disabled network access, and temporary-directory write exclusions.
 
-```sh
-bun run login --campaign "$CAMPAIGN"
-bun run probe doctor --campaign "$CAMPAIGN"
-```
-
-The login process receives an explicit environment and uses only `<campaign>/codex-home`. The generated configuration selects `cli_auth_credentials_store = "file"`. Provider credentials live only in that isolated home and are shared by runs in this campaign. The probe rejects `auto` and `keyring` by writing and checking file mode. Delete the campaign directory after the campaign to remove its local state and credentials.
+The probe assumes the operator is already logged in to the normal Codex CLI. There is no separate probe login. Campaign setup copies `auth.json` from `$CODEX_HOME`, or `~/.codex` when that variable is unset, into `<campaign>/codex-home` when the campaign has no usable credential yet. Everything else in the campaign home stays isolated: the generated `config.toml` selects `cli_auth_credentials_store = "file"`, pins `gpt-5.6-luna` with `low` reasoning effort, and inherits none of the operator's MCP servers, hooks, plugins, or `AGENTS.md`. If no usable credential exists, `doctor` fails and asks for a normal `codex login`. Delete the campaign directory after the campaign to remove its local state and the copied credential.
 
 ## Commands
 
@@ -64,8 +59,7 @@ The campaign contains:
 
 ```text
 <campaign>/
-  codex-home/           isolated provider authentication and App Server state
-  login-home/           empty HOME used only by interactive login
+  codex-home/           isolated App Server state and the copied operator credential
   runs/<run-id>/
     agent-home/         empty HOME passed to the App Server child
     workspace/          fresh scenario repository

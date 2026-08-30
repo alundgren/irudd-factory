@@ -8,6 +8,7 @@ import {
   TARGET_REPOSITORY,
   type CliOptions,
   initializeCampaign,
+  operatorCodexHome,
   providerAuthReady,
 } from "./config.ts";
 import { buildChildEnvironment, leakedKeys } from "./environment.ts";
@@ -248,13 +249,81 @@ function observedModel(message: RpcMessage): string | null {
   const params = message.params as any;
   for (const value of [
     params?.model,
+    params?.threadSettings?.model,
     params?.turn?.model,
     params?.response?.model,
     params?.item?.model,
+    params?.thread?.model,
   ]) {
     if (typeof value === "string") return value;
   }
   return null;
+}
+
+function observedEffort(message: RpcMessage): string | null {
+  const params = message.params as any;
+  for (const value of [
+    params?.threadSettings?.effort,
+    params?.turn?.effort,
+    params?.effort,
+    params?.reasoningEffort,
+  ]) {
+    if (typeof value === "string") return value;
+  }
+  return null;
+}
+
+function observedIntegrations(
+  runtimeIntegrations: Map<string, string>,
+): Record<string, string> {
+  return Object.fromEntries([...runtimeIntegrations.entries()].sort());
+}
+
+export const ALLOWED_RUNTIME_INTEGRATIONS = ["codex_apps"] as const;
+
+export function providerContractAssertions(
+  scenario: ScenarioName,
+  threadSettings: unknown,
+  runtimeIntegrations: Map<string, string>,
+): AssertionRecord[] {
+  const observed = [...runtimeIntegrations.entries()]
+    .map(([name, status]) => `${name}=${status}`)
+    .sort();
+  const unexpected = [...runtimeIntegrations.keys()].filter(
+    (name) => !ALLOWED_RUNTIME_INTEGRATIONS.includes(name as never),
+  );
+  const settings = threadSettings as any;
+  const policy = settings?.sandboxPolicy;
+  const records: AssertionRecord[] = [
+    {
+      name: "runtime_integrations",
+      passed: unexpected.length === 0,
+      detail: observed.length
+        ? `built-in only: ${observed.join(", ")}`
+        : "none started",
+    },
+    {
+      name: "thread_settings_confirmation",
+      passed: scenario === "read" ? true : Boolean(settings),
+      detail: settings
+        ? `model ${settings.model}, effort ${settings.effort}`
+        : "no thread/settings/updated event; read-only turns do not emit one",
+    },
+  ];
+  if (policy) {
+    records.push({
+      name: "effective_turn_sandbox",
+      passed:
+        scenario === "read"
+          ? policy.type === "readOnly"
+          : policy.type === "workspaceWrite" &&
+            policy.networkAccess === false &&
+            policy.excludeSlashTmp === true &&
+            policy.excludeTmpdirEnvVar === true,
+      detail: `${policy.type}, network ${policy.networkAccess}, echoed writableRoots ${JSON.stringify(policy.writableRoots ?? null)}; the working directory is writable without being echoed`,
+    });
+  }
+  return records;
 }
 
 function longCommandActive(message: RpcMessage): boolean {
@@ -630,7 +699,10 @@ export async function runScenario(
   if (options.command === "doctor")
     throw new Error("runScenario called for doctor");
   const scenario = options.command;
-  const campaign = await initializeCampaign(options.campaignRoot);
+  const campaign = await initializeCampaign(
+    options.campaignRoot,
+    operatorCodexHome(),
+  );
   const runId = `${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${scenario}`;
   const runRoot = plannedWithin(
     campaign.runsRoot,
@@ -655,6 +727,9 @@ export async function runScenario(
   let threadId: string | null = null;
   let turnId: string | null = null;
   let finalObservedModel: string | null = null;
+  let finalObservedEffort: string | null = null;
+  let threadSettings: unknown = null;
+  const runtimeIntegrations = new Map<string, string>();
   const reroutes: unknown[] = [];
   const itemLifecycles: unknown[] = [];
   const tokenUsageUpdates: unknown[] = [];
@@ -670,7 +745,7 @@ export async function runScenario(
       throw new ProbeError(
         "rejected",
         "provider_auth_not_ready",
-        "The isolated campaign has no valid provider authentication; run the documented login and doctor commands",
+        "No usable Codex credentials were found; run `codex login` normally, then rerun doctor",
       );
     }
     if (scenario === "pr") {
@@ -817,6 +892,15 @@ export async function runScenario(
     const unsubscribe = client.onMessage((message) => {
       const observed = observedModel(message);
       if (observed) finalObservedModel = observed;
+      const effort = observedEffort(message);
+      if (effort) finalObservedEffort = effort;
+      if (message.method === "thread/settings/updated")
+        threadSettings = (message.params as any)?.threadSettings ?? null;
+      if (message.method === "mcpServer/startupStatus/updated") {
+        const params = message.params as any;
+        if (typeof params?.name === "string")
+          runtimeIntegrations.set(params.name, String(params.status ?? ""));
+      }
       if (message.method === "model/rerouted") {
         reroutes.push(message.params ?? {});
         rejectReroute?.(
@@ -898,7 +982,9 @@ export async function runScenario(
         "thread_id_missing",
         "thread/start returned no thread id",
       );
-    finalObservedModel = thread?.thread?.model ?? finalObservedModel;
+    finalObservedModel =
+      thread?.model ?? thread?.thread?.model ?? finalObservedModel;
+    finalObservedEffort = thread?.reasoningEffort ?? finalObservedEffort;
     const prompt = await readFile(join(PROMPTS_ROOT, `${scenario}.md`), "utf8");
     const rerouteFailure = new Promise<RpcMessage>((_, reject) => {
       rejectReroute = reject;
@@ -950,8 +1036,18 @@ export async function runScenario(
         agentMessages,
         startingCommit,
       );
-      assertions = checked.assertions;
-      effects = checked.effects;
+      assertions = [
+        ...checked.assertions,
+        ...providerContractAssertions(
+          scenario,
+          threadSettings,
+          runtimeIntegrations,
+        ),
+      ];
+      effects = {
+        ...checked.effects,
+        runtimeIntegrations: observedIntegrations(runtimeIntegrations),
+      };
       result = assertions.some((assertion) => !assertion.passed)
         ? "assertion_failed"
         : "provider_exited";
@@ -969,6 +1065,7 @@ export async function runScenario(
     rejectReroute = null;
     const status = String((completed.params?.turn as any)?.status ?? "unknown");
     finalObservedModel = observedModel(completed) ?? finalObservedModel;
+    finalObservedEffort = observedEffort(completed) ?? finalObservedEffort;
     if (reroutes.length > 0)
       throw new ProbeError(
         "model_rerouted",
@@ -980,6 +1077,28 @@ export async function runScenario(
         "assertion_failed",
         "observed_model_mismatch",
         `Expected observed model ${EXPECTED_MODEL}, got ${finalObservedModel ?? "none"}`,
+      );
+    }
+    if (finalObservedEffort !== EXPECTED_EFFORT) {
+      throw new ProbeError(
+        "assertion_failed",
+        "observed_effort_mismatch",
+        `Expected observed effort ${EXPECTED_EFFORT}, got ${finalObservedEffort ?? "none"}`,
+      );
+    }
+    const settings = threadSettings as any;
+    if (settings && settings.model !== EXPECTED_MODEL) {
+      throw new ProbeError(
+        "assertion_failed",
+        "thread_settings_model_mismatch",
+        `thread/settings/updated reported model ${settings.model ?? "none"}`,
+      );
+    }
+    if (settings && settings.effort && settings.effort !== EXPECTED_EFFORT) {
+      throw new ProbeError(
+        "assertion_failed",
+        "thread_settings_effort_mismatch",
+        `thread/settings/updated reported effort ${settings.effort}`,
       );
     }
     if (scenario === "interrupt") {
@@ -1009,8 +1128,18 @@ export async function runScenario(
       env,
       prBaseline,
     );
-    assertions = checked.assertions;
-    effects = checked.effects;
+    assertions = [
+      ...checked.assertions,
+      ...providerContractAssertions(
+        scenario,
+        threadSettings,
+        runtimeIntegrations,
+      ),
+    ];
+    effects = {
+      ...checked.effects,
+      runtimeIntegrations: observedIntegrations(runtimeIntegrations),
+    };
     if (assertions.some((assertion) => !assertion.passed))
       result = "assertion_failed";
     unsubscribe();
@@ -1083,6 +1212,8 @@ export async function runScenario(
       requestedModel: EXPECTED_MODEL,
       requestedEffort: EXPECTED_EFFORT,
       observedModel: finalObservedModel,
+      observedEffort: finalObservedEffort,
+      threadSettings,
       reroutes,
       codexVersion,
       schemaDigest,
@@ -1111,6 +1242,7 @@ export const scenarioInternals = {
   modelSupportsLow,
   sandboxFor,
   longCommandActive,
+  providerContractAssertions,
   assertionsFor,
   codexVersionAndSchemas,
   evaluatePrEvidence,
