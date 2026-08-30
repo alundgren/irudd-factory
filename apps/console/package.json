@@ -1,0 +1,29 @@
+{
+  "name": "@irudd-factory/console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "test": "bun ../../scripts/test-suite.ts apps/console"
+  },
+  "dependencies": {
+    "@effect/platform": "0.97.1",
+    "@effect/rpc": "0.76.2",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@irudd-factory/contracts": "workspace:*",
+    "effect": "3.22.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.1",
+    "tailwindcss": "4.3.3",
+    "vite": "8.2.2"
+  }
+}

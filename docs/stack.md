@@ -1,109 +1,103 @@
 # Stack and conventions
 
-Decisions already made, so a design session starts from them rather than
-re-deriving them. Short by intent; the reasoning lives in the notes behind each
-choice, not here.
+These are the implemented decisions for the manual single-repository milestone.
 
 ## Runtime
 
-Bun, pinned to a tested release in the VM image and in CI, so a runtime upgrade
-cannot silently change how provider processes behave. TypeScript in strict
-mode with `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+Bun 1.3.14 and TypeScript 5.9.2 are pinned. TypeScript runs in strict mode with
+`noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. Effect and the
+Effect platform and RPC packages are pinned to tested releases.
 
 ## State
 
-SQLite through Bun's SQLite support, with WAL, foreign keys, a five-second busy
-timeout, and hand-written migrations.
+SQLite uses Bun's SQLite support with WAL, foreign keys, a five-second busy
+timeout, and hand-written forward migrations.
 
-**Everything durable goes in the database.** Assignments, provider state,
-session identifiers, workspace paths, events, command receipts, and run
-diagnostics. No JSONL side-channel: one store makes size control and cleanup a
-single problem instead of two.
+Everything durable goes in the database: assignments, provider state, thread
+and turn identifiers, workspace paths, events, command receipts, diagnostics,
+and pull request evidence. There is no JSONL side channel.
 
-A small event-sourced assignment engine sits on top. A command validates
-current state, appends events, and updates a projection. One transaction
-appends the events, applies the projection, and writes an idempotency receipt;
-subscribers are notified only after it commits. A retry with the same command
-ID returns the original result instead of starting a second session.
+The application validates a command, appends events, and updates an assignment
+projection. The command receipt, assignment projection, and reservation event
+commit in one `BEGIN IMMEDIATE` transaction. A partial unique index permits
+only one Codex assignment in `reserved`, `starting`, or `running`.
 
-Three tables to start:
+The first three tables are:
 
-- `assignment_events` — ordered event ID, assignment ID, type, timestamp, JSON payload.
-- `assignments` — the projection the console reads: issue identity, workspace path, session ID, state, last event sequence.
-- `command_receipts` — client command ID to accepted sequence or named rejection.
+- `assignment_events`: ordered sequence, assignment ID, type, timestamp, and JSON payload
+- `assignments`: issue, provider, policy, workspace, diagnostics, and pull request projection
+- `command_receipts`: client command ID mapped to the original accepted or rejected result
 
-First event types: `assignment.reserved`, `workspace.created`,
-`provider.start.requested`, `provider.session.started`, `provider.paused`,
-`assignment.cancelled`, `provider.turn.finished`, `pull-request.attributed`.
-
-The failure case that matters is the gap between intent and side effect. Commit
-`provider.start.requested` before spawning Codex, and `provider.session.started`
-only once the adapter has a session ID. After a crash the reconciler resolves
-requested starts that never produced one. Never record `running` before the
-provider is actually running.
+Receipt replay happens before GitHub discovery, so restarting the service does
+not change the result returned for an existing command ID. Factory records
+`provider.start.requested` before spawning Codex and records the thread ID
+before marking an assignment `running`. Automatic recovery of nonterminal
+assignments is not part of this milestone.
 
 ## Provider
 
-One `ProviderAdapter` interface with `start`, `events`, `stop`, `healthCheck`,
-and `dispose`. Codex is the only implementation; the interface is the seam that
-leaves room for another harness without letting its stream format reach
-scheduling code. Normalize every harness into one event record: session ID,
-turn state, liveness timestamp, model, CLI version, error category, PR result.
+The application depends on a `Provider` port. Codex is the only adapter. The
+adapter normalizes the App Server thread ID, turn ID, item summaries, token
+usage, final message, model, reasoning effort, CLI version, approvals, reroutes,
+errors, and process exit.
 
-The Codex launch contract is proven. Use the settings in
-[prototypes](prototypes/README.md) rather than rediscovering them.
+Codex runs as `codex app-server --strict-config` with the operator's ordinary
+`~/.codex`. Any approval request fails the assignment immediately. Shutdown
+first attempts `turn/interrupt`, then stops the owned process group within one
+total deadline.
 
 ## Console
 
-React with Vite+ and Tailwind. Effect RPC over an authenticated WebSocket, with
-commands and server streams in one shared contract. Subscriptions are targeted:
-a run page receives that run's events, not every event from every provider. It
-is an operator dashboard, not an IDE.
+React, Vite, and Tailwind provide one operator page. The console and CLI use the
+same Effect RPC group. The console submits `RunNextEligibleIssue`, polls
+`GetFactorySnapshot`, and shows the durable receipt, current assignment,
+retained paths, pull request, errors, and event history.
 
-## Effect, used deliberately
+The current transport is unauthenticated HTTP bound only to an IP loopback
+address. Authentication, server streams, and remote console access are deferred.
+
+## Effect
 
 Effect wraps I/O, resources, transactions, concurrency, schemas, and RPC.
-`Layer` supplies the SQLite, GitHub, workspace, and provider services. `Scope`
-owns the child process and its readers, so cancellation closes them even when
-the scheduler is interrupted. `Schema` validates GitHub responses, stored
-payloads, and protocol messages.
+`Layer` supplies SQLite, GitHub, workspace, and provider services. `Schema`
+validates GitHub responses, stored payloads, configuration, and protocol
+messages.
 
-Selection rules, state-transition deciders, and projection functions stay
-ordinary pure TypeScript. Pin one tested Effect release and treat its compiler
-support as part of the stack.
+Selection rules, transitions, prompt building, and scenario descriptions stay
+ordinary TypeScript where an Effect service is unnecessary.
 
 ## Operations
 
-systemd on a dedicated VM, listening only on the tailnet.
+The service is currently started manually and binds to loopback. systemd,
+Tailscale exposure, authentication, polling, queues, cancellation, stall
+detection, and workspace cleanup remain deferred.
 
 ## Eligibility labels
 
 An issue is eligible when it is open, labelled `ready-for-agent`, not labelled
-`claimed`, not labelled `ready-for-human`, `epic`, or `needs-refinement`, every
-native blocking dependency is closed, and its author has write permission to
-that repository. The dispatcher adds `claimed` before any work starts and never
+`claimed`, `ready-for-human`, `epic`, or `needs-refinement`, every native
+blocking dependency is closed, and its author has write permission to that
+repository. The dispatcher adds `claimed` before any work starts and never
 removes or overrides an existing one.
 
 ## WORKFLOW.md
 
-Each target repository owns a `WORKFLOW.md`: YAML front matter for policy, the
-prompt template as the body. Policy is versioned with the code it acts on.
-Validate the front matter at load time and treat a repository without the file
-as ineligible rather than defaulting.
+Each target repository owns a `WORKFLOW.md`: YAML front matter for policy and
+the prompt template as the body. Factory resolves the default branch commit,
+loads the file at that exact commit, validates it, and persists the commit, blob
+ID, and SHA-256 digest. A missing or invalid file rejects the command.
 
-Front matter keys to start with:
+The current front matter is:
 
 ```yaml
-poll_interval: 5m        # how often this repository is checked
 required_labels: [ready-for-agent]
-concurrency: 1           # active sessions allowed in this repository
-runtime: bun             # what the agent should use to verify its work
+forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
+runtime: bun
 test: bun test
 ```
 
 ## Prior art
 
 [T3 Code](https://github.com/pingdotgg/t3code) informed the process ownership,
-provider isolation, typed protocol, event sourcing, and test discipline above.
-We are open about the influence; it is prior art, not a template transplanted
-wholesale.
+typed protocol, event recording, and test discipline above. It is prior art,
+not a source copied wholesale.

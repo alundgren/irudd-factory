@@ -78,6 +78,11 @@ describe("Factory RPC service", () => {
     stops.push(service.stop);
     const rpcUrl = `${service.url}/rpc`;
     await waitForRpc(rpcUrl);
+    const consoleResponse = await fetch(service.url);
+    expect(consoleResponse.status).toBe(200);
+    expect(await consoleResponse.text()).toContain(
+      "<title>Irudd Factory</title>",
+    );
 
     const receipt = await runNextEligibleIssue(rpcUrl, "command-1");
     expect(receipt.result._tag).toBe("started");

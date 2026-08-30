@@ -1,0 +1,434 @@
+@import "tailwindcss";
+
+:root {
+  color: #604939;
+  background: #f2eade;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: #f2eade;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: #3d5d71;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+button {
+  min-height: 46px;
+  border: 0;
+  border-radius: 0.7rem;
+  padding: 0.7rem 1.15rem;
+  color: #f9f6f0;
+  background: #784f26;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #604939;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #3d5d71;
+  outline-offset: 3px;
+}
+
+button:disabled {
+  color: #66574d;
+  background: #c1af9a;
+  cursor: not-allowed;
+}
+
+code,
+pre {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+main {
+  width: min(100% - 2rem, 70rem);
+  margin: 0 auto;
+  padding: clamp(2rem, 5vw, 4.5rem) 0 5rem;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  max-width: 16ch;
+  margin-bottom: 0.75rem;
+  font-size: clamp(2rem, 5vw, 2.65rem);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.08;
+}
+
+h2 {
+  margin-bottom: 0.65rem;
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+h3 {
+  margin-bottom: 1rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.eyebrow {
+  margin-bottom: 0.45rem;
+  color: #66574d;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.measure,
+.lede,
+.empty-state > p,
+.load-failed > pre {
+  max-width: 68ch;
+}
+
+.lede {
+  margin-bottom: 0;
+  color: #66574d;
+  font-size: 1.06rem;
+  line-height: 1.6;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: 2.5rem;
+}
+
+.connection {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.4rem;
+  color: #3d6034;
+  font-size: 0.85rem;
+}
+
+.connection > span,
+.state-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.connection-lost {
+  color: #8f3a2d;
+}
+
+.run-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 2.5rem;
+  border-radius: 1rem;
+  padding: 1.25rem 1.4rem;
+  background: #eadfcd;
+}
+
+.run-control code,
+.command-reference code {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.outcome,
+.assignment,
+.empty-state,
+.loading-state,
+.load-failed {
+  border-top: 1px solid #c1af9a;
+  padding: 2.2rem 0;
+}
+
+.outcome {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.7fr);
+  gap: 1rem 2.5rem;
+}
+
+.outcome > :not(:first-child):not(.command-reference) {
+  grid-column: 1 / -1;
+}
+
+.command-reference {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  color: #66574d;
+  font-size: 0.84rem;
+}
+
+.issue-links {
+  margin: 1rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.issue-links li + li {
+  margin-top: 0.55rem;
+}
+
+.issue-links a {
+  overflow-wrap: anywhere;
+}
+
+.assignment-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.assignment-heading h2 {
+  margin-bottom: 0.3rem;
+}
+
+.issue-identity {
+  margin: 0;
+  color: #66574d;
+  font-variant-numeric: tabular-nums;
+}
+
+.state-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.state-reserved,
+.state-starting {
+  color: #7e5220;
+}
+
+.state-running {
+  color: #3d5d71;
+}
+
+.state-completed {
+  color: #3d6034;
+}
+
+.state-failed {
+  color: #8f3a2d;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.35rem 3rem;
+  margin: 0;
+}
+
+.facts div,
+.paths dl div {
+  min-width: 0;
+}
+
+dt {
+  margin-bottom: 0.3rem;
+  color: #66574d;
+  font-size: 0.84rem;
+}
+
+dd {
+  margin: 0;
+}
+
+dd code {
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+}
+
+.paths,
+.history,
+.pull-request {
+  margin-top: 2.5rem;
+}
+
+.paths dl {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+}
+
+.paths dl div {
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid #c1af9a;
+}
+
+.pull-request {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 0.8rem;
+  padding: 1rem 1.2rem;
+  background: #eadfcd;
+}
+
+.pull-request p {
+  margin-bottom: 0.2rem;
+}
+
+.pull-request > span {
+  color: #3d6034;
+  font-weight: 600;
+}
+
+.history ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history li {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.7fr) minmax(0, 1fr);
+  gap: 1rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid #c1af9a;
+}
+
+.history li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.history strong {
+  font-weight: 500;
+}
+
+.history time {
+  color: #66574d;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.history code {
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+
+.error-detail,
+.request-error,
+.stale-note {
+  border-left: 4px solid #8f3a2d;
+  padding: 1rem 1.2rem;
+  background: #eadfcd;
+}
+
+.error-detail {
+  margin-bottom: 2rem;
+}
+
+.error-detail pre,
+.request-error pre,
+.load-failed pre {
+  margin: 0;
+  overflow: visible;
+  color: #604939;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.request-error {
+  margin: -1rem 0 2rem;
+}
+
+.request-error p {
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.stale-note {
+  border-color: #7e5220;
+}
+
+.load-failed button {
+  margin-top: 1rem;
+}
+
+@media (max-width: 700px) {
+  main {
+    width: min(100% - 1.25rem, 70rem);
+    padding-top: 1.5rem;
+  }
+
+  .page-header,
+  .run-control,
+  .assignment-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .connection {
+    padding-top: 0;
+  }
+
+  .run-control button {
+    width: 100%;
+  }
+
+  .outcome,
+  .facts,
+  .history li {
+    grid-template-columns: 1fr;
+  }
+
+  .outcome {
+    gap: 0.75rem;
+  }
+
+  .command-reference {
+    margin-bottom: 0.5rem;
+  }
+}

@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { HttpRouter } from "@effect/platform";
+import { dirname, join, resolve } from "node:path";
+import { HttpRouter, HttpServerResponse } from "@effect/platform";
 import { BunHttpServer } from "@effect/platform-bun";
 import { RpcSerialization, RpcServer } from "@effect/rpc";
 import {
@@ -77,6 +78,7 @@ function handlerLayer(
 export async function startFactoryService(
   config: FactoryConfig,
   dependencies: FactoryDependencies = productionDependencies(config),
+  consoleDistPath = resolve("apps/console/dist"),
 ) {
   await Promise.all([
     mkdir(dirname(config.databasePath), { recursive: true }),
@@ -88,9 +90,37 @@ export async function startFactoryService(
   const ProtocolLive = RpcServer.layerProtocolHttp({ path: "/rpc" }).pipe(
     Layer.provide(RpcSerialization.layerJson),
   );
+  const StaticLive = existsSync(join(consoleDistPath, "index.html"))
+    ? HttpRouter.Default.use((router) =>
+        Effect.all([
+          router.get(
+            "/",
+            HttpServerResponse.file(join(consoleDistPath, "index.html")),
+          ),
+          router.get(
+            "/assets/:file",
+            Effect.gen(function* () {
+              const params = yield* HttpRouter.params;
+              const file = params.file;
+              if (!file || !/^[A-Za-z0-9._-]+$/.test(file)) {
+                return HttpServerResponse.empty({ status: 404 });
+              }
+              return yield* HttpServerResponse.file(
+                join(consoleDistPath, "assets", file),
+              ).pipe(
+                Effect.catchAll(() =>
+                  Effect.succeed(HttpServerResponse.empty({ status: 404 })),
+                ),
+              );
+            }),
+          ),
+        ]).pipe(Effect.asVoid),
+      )
+    : Layer.empty;
   const Main = HttpRouter.Default.serve().pipe(
     Layer.provide(RpcLive),
     Layer.provide(ProtocolLive),
+    Layer.provide(StaticLive),
     Layer.provide(
       BunHttpServer.layer({
         hostname: config.bindHost,

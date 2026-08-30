@@ -9,8 +9,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter '*' build",
-    "fixture": "bun run apps/service/src/fixture-main.ts",
+    "build": "bun run typecheck && bun run build:console",
+    "build:console": "bun run --filter @irudd-factory/console build",
+    "fixture": "bun run build:console && bun run apps/service/src/fixture-main.ts",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "test": "bun scripts/test-suite.ts all",

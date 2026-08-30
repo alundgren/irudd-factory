@@ -1,10 +1,12 @@
 # Prototypes
 
-Two prototypes, in order. The first is finished. The second has not started.
+Two prototypes were completed in order. The retained production packages now
+implement the second one.
 
 Both work under the same three rules as the product: only issues whose author
 has write permission are eligible, `gh` and Codex run with the operator's
-ambient credentials, and writable roots are the containment. The trades are in
+ambient credentials, and Codex writes only to the retained worktree and its
+required Git directories. The trades are in
 [SECURITY-LIMITATIONS.md](../../SECURITY-LIMITATIONS.md).
 
 ## 1. Codex App Server provider probe (done)
@@ -46,21 +48,22 @@ product uses ambient credentials instead of a minted token.
 readable roots, so an agent can read anything the VM user can. Writes are the
 only containment available.
 
-**The runtime is not empty.** Codex starts a built-in `codex_apps` MCP server
-even with no servers configured, and an isolated `CODEX_HOME` is required or
-the operator's own MCP servers, hooks, and `AGENTS.md` are inherited.
+**The ordinary runtime inherits configuration.** The probe used an isolated
+`CODEX_HOME` to measure the protocol. Factory deliberately uses the operator's
+ordinary `~/.codex`, so configured MCP servers, hooks, plugins, skills, and
+instructions may be active. Factory does not inspect or copy credentials.
 
-## 2. Dispatcher slice (not started)
+## 2. Dispatcher slice (done)
 
 Intent: prove the loop end to end on one repository, with real processes and
-one real issue. Poll, check eligibility, reserve an issue exactly once, create
+one real issue. Check eligibility, reserve an issue exactly once, create
 the workspace, run one Codex session under the settings prototype 1 proved, and
 record the result durably enough to explain a failure hours later.
 
-It uses the proven launch contract rather than rediscovering it, and the
-decisions in [stack.md](../stack.md) rather than choosing again.
+The production packages use the proven launch contract with stricter approval,
+diagnostic retention, and shutdown behavior.
 
-The path it proves:
+The implemented path is:
 
 ```text
 one configured GitHub issue
@@ -69,31 +72,30 @@ one configured GitHub issue
   -> app-owned clone and worktree created, writable roots named
   -> provider.start.requested committed
   -> codex app-server runs one unattended turn in that worktree
-  -> provider.session.started and provider.turn.finished committed
+  -> provider thread and turn evidence committed
+  -> pull request repository, branch, and closing issue verified
   -> the console shows each state change and survives a reload
 ```
 
-Run it on the Mac first. The same Bun, `gh`, and Codex credentials as the
-future Linux service, without adding network, filesystem-sharing, and
-credential-forwarding problems before the flow itself works. Repeat on Linux
-before choosing the deployment image.
+Deterministic fixtures exercise the path without live GitHub or Codex. The
+provider probe remains the live evidence for App Server behavior.
 
-| In scope | Out of scope |
-| --- | --- |
-| One repository, one label, one selected issue | Repository pool ordering, dependency checks, poll scheduling |
-| Reservation, workspace, one Codex session, projection, console | Retained workspaces, cleanup policy, attribution comments |
-| Event log, assignment projection, command receipt | Replay tooling, archival, log browsing |
-| One console page with assignment state and the run result | Controls beyond starting a run and reconnecting |
-| Bun, SQLite, Effect, Effect RPC, React | systemd, Tailscale, console authentication, deployment |
+| In scope                                                  | Out of scope                                         |
+| --------------------------------------------------------- | ---------------------------------------------------- |
+| One repository, one selected issue, native blocker check  | Repository pools, polling, queues                    |
+| Reservation, retained workspace, one Codex turn, console  | Cleanup, attribution comments, cancellation          |
+| Event log, assignment projection, durable command receipt | Nonterminal restart recovery, archival, log browsing |
+| One console page with assignment state and the run result | Controls beyond starting a run and reconnecting      |
+| Bun, SQLite, Effect, Effect RPC, React                    | systemd, remote access, authentication, deployment   |
 
 Use a disposable repository and an issue you created yourself, so the write
 permission check passes for the reason it is meant to.
 
-Done when one command starts the service and console, the browser shows
+Done means one command starts the service and console, the browser shows
 `reserved`, `starting`, `running`, then `completed`, and reloading it reads the
 same state back from SQLite. The stored record must identify the issue, the
 assignment, the Codex CLI version, the provider session, and the terminal
 outcome.
 
-It does not prove restart recovery, cancellation, provider pauses, or
-deployment. Those come after.
+It does not recover nonterminal work after a process restart. Cancellation,
+provider pauses, remote access, and deployment also remain deferred.

@@ -9,9 +9,9 @@ revisited before any multi-user, shared-host, or untrusted-repository use.
 The released Codex App Server cannot restrict readable roots, so an agent can
 read anything the VM user can: other workspaces, the Codex home, run artifacts.
 
-Mitigation: writes are restricted instead. An agent writes only to its own
-workspace and that workspace's `.git` directory. Do not put unrelated data on
-this VM.
+Mitigation: writes are restricted instead. An agent writes only to its retained
+worktree, its linked-worktree Git directory, and the shared Git directory needed
+to commit and push. Do not put unrelated data on this machine.
 
 ## Agents act with the operator's GitHub identity
 
@@ -21,8 +21,9 @@ any repository the operator can write.
 
 The alternative was measured and rejected: Codex CLI 0.151.0 writes the child
 environment to `$CODEX_HOME/shell_snapshots/<id>.sh` at mode `0644`, so an
-injected `GH_TOKEN` is written to disk in plaintext. A scoped token bought a
-smaller blast radius at the cost of a credential on disk that outlives the run.
+injected `GH_TOKEN` is written to disk in plaintext. A scoped token would limit
+which repositories are reachable but would leave a credential on disk after the
+run.
 
 Mitigation: only issues whose author has write permission are eligible, so the
 prompt reaching an agent already comes from someone who could write to that
@@ -36,3 +37,22 @@ operator reading a prompt.
 
 Mitigation: every run asserts that no approval was requested, which turns an
 unexpected prompt into a failed run rather than a silent hang.
+
+## Factory inherits ordinary Codex configuration
+
+Factory launches Codex with the operator's ordinary `~/.codex`. Configured MCP
+servers, apps, hooks, plugins, skills, and instruction files can affect a run.
+Factory records observed provider events but does not inspect credentials or
+copy authentication files into an isolated home.
+
+Mitigation: operate Factory as the same trusted user who owns that configuration
+and review integrations before enabling unattended work.
+
+## The current console has no authentication
+
+The service accepts commands without authentication. It rejects non-loopback
+bind addresses, so this milestone is available only to local processes and the
+local browser.
+
+Mitigation: do not add a reverse proxy or remote port forwarding until an
+authenticated transport is implemented.
