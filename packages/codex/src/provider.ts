@@ -4,6 +4,8 @@ import { join, relative, resolve } from "node:path";
 import type {
   ProviderRunResult,
   ProviderService,
+  ProviderTokenUsage,
+  TokenUsageBreakdown,
 } from "@irudd-factory/application";
 import { FactoryError, Provider } from "@irudd-factory/application";
 import { Effect, Layer } from "effect";
@@ -128,13 +130,81 @@ function normalizedItem(
   };
 }
 
-function numericRecord(value: unknown): Readonly<Record<string, number>> {
-  if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, number] => typeof entry[1] === "number",
-    ),
-  );
+function numericField(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): number {
+  const field = value[key];
+  if (!Number.isSafeInteger(field) || (field as number) < 0) {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: `Codex token usage has an invalid ${key}`,
+    });
+  }
+  return field as number;
+}
+
+function tokenBreakdown(value: unknown): TokenUsageBreakdown {
+  if (!value || typeof value !== "object") {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: "Codex token usage breakdown is missing",
+    });
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  return {
+    inputTokens: numericField(record, "inputTokens"),
+    cachedInputTokens: numericField(record, "cachedInputTokens"),
+    outputTokens: numericField(record, "outputTokens"),
+    reasoningOutputTokens: numericField(record, "reasoningOutputTokens"),
+    totalTokens: numericField(record, "totalTokens"),
+    ...(record.cacheWriteInputTokens === undefined
+      ? {}
+      : {
+          cacheWriteInputTokens: numericField(record, "cacheWriteInputTokens"),
+        }),
+  };
+}
+
+function normalizeTokenUsage(value: unknown): ProviderTokenUsage {
+  if (!value || typeof value !== "object") {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: "Codex token usage is missing",
+    });
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const contextWindow = record.modelContextWindow;
+  if (
+    contextWindow !== null &&
+    contextWindow !== undefined &&
+    (!Number.isSafeInteger(contextWindow) || (contextWindow as number) <= 0)
+  ) {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: "Codex token usage has an invalid modelContextWindow",
+    });
+  }
+  return {
+    total: tokenBreakdown(record.total),
+    last: tokenBreakdown(record.last),
+    modelContextWindow:
+      contextWindow === undefined ? null : (contextWindow as number | null),
+  };
+}
+
+function normalizeVersion(stdout: string): string {
+  const version = stdout
+    .split(/\r?\n/)
+    .find((line) => line.trim())
+    ?.trim();
+  if (!version) {
+    throw new FactoryError({
+      code: "codex_version_failed",
+      message: "codex --version returned no version",
+    });
+  }
+  return version.slice(0, 200);
 }
 
 export function makeCodexProvider(
@@ -165,9 +235,10 @@ export function makeCodexProvider(
           if (version.code !== 0) {
             throw new FactoryError({
               code: "codex_version_failed",
-              message: version.stderr.trim() || "codex --version failed",
+              message: `codex --version exited with code ${version.code}`,
             });
           }
+          const codexVersion = normalizeVersion(version.stdout);
           const schema = await runManagedCommand({
             command: [
               ...prefix,
@@ -183,7 +254,7 @@ export function makeCodexProvider(
           if (schema.code !== 0) {
             throw new FactoryError({
               code: "schema_generation_failed",
-              message: schema.stderr.trim() || "Schema generation failed",
+              message: `App Server schema generation exited with code ${schema.code}`,
             });
           }
           const schemaDigest = await inspectSchemas(schemaRoot);
@@ -198,7 +269,7 @@ export function makeCodexProvider(
           let observedModel: string | null = null;
           let observedEffort: string | null = null;
           let finalResponse = "";
-          let tokenUsage: Readonly<Record<string, number>> = {};
+          let tokenUsage: ProviderTokenUsage | null = null;
           const itemSummaries: Array<Readonly<Record<string, unknown>>> = [];
           let terminalFailure: FactoryError | null = null;
           const rpc = new AppServerRpc(child, (message) => {
@@ -219,7 +290,15 @@ export function makeCodexProvider(
           const unsubscribe = rpc.onMessage((message) => {
             if (message.method === "model/rerouted") {
               reroutes.push({
-                ...(message.params ?? {}),
+                ...(stringAt(message.params, "fromModel")
+                  ? { fromModel: stringAt(message.params, "fromModel") }
+                  : {}),
+                ...(stringAt(message.params, "toModel")
+                  ? { toModel: stringAt(message.params, "toModel") }
+                  : {}),
+                ...(stringAt(message.params, "reason")
+                  ? { reason: stringAt(message.params, "reason") }
+                  : {}),
               });
               terminalFailure = new FactoryError({
                 code: "model_rerouted",
@@ -229,9 +308,7 @@ export function makeCodexProvider(
             if (message.method === "error") {
               terminalFailure = new FactoryError({
                 code: "provider_error_notification",
-                message:
-                  stringAt(message.params, "message") ??
-                  "Codex emitted an error notification",
+                message: "Codex emitted an error notification",
               });
             }
             if (message.method === "thread/settings/updated") {
@@ -260,9 +337,7 @@ export function makeCodexProvider(
               }
             }
             if (message.method === "thread/tokenUsage/updated") {
-              tokenUsage = numericRecord(
-                message.params?.tokenUsage ?? message.params?.usage,
-              );
+              tokenUsage = normalizeTokenUsage(message.params?.tokenUsage);
             }
           });
           rpc.start();
@@ -273,7 +348,7 @@ export function makeCodexProvider(
                 type: "provider.process.started",
                 timestamp: new Date().toISOString(),
                 detail: { pid: child.pid, schemaDigest },
-                patch: { codexVersion: version.stdout.trim() },
+                patch: { codexVersion },
               }),
             );
             await rpc.request(
@@ -363,7 +438,7 @@ export function makeCodexProvider(
                 patch: {
                   state: "running",
                   threadId,
-                  codexVersion: version.stdout.trim(),
+                  codexVersion,
                   ...(observedModel ? { observedModel } : {}),
                   ...(observedEffort ? { observedEffort } : {}),
                 },
@@ -449,6 +524,12 @@ export function makeCodexProvider(
                 message: `Requested ${options.reasoningEffort}, observed ${observedEffort}`,
               });
             }
+            if (!tokenUsage) {
+              throw new FactoryError({
+                code: "token_usage_missing",
+                message: "Codex completed without token usage",
+              });
+            }
             processExit = await terminateOwnedGroup(
               child,
               options.timeouts.shutdownMs,
@@ -460,7 +541,7 @@ export function makeCodexProvider(
               });
             }
             return {
-              codexVersion: version.stdout.trim(),
+              codexVersion,
               threadId,
               turnId,
               observedModel,
@@ -541,7 +622,7 @@ export function makeCodexProvider(
             ? error
             : new FactoryError({
                 code: "provider_failed",
-                message: String(error),
+                message: "Codex provider failed unexpectedly",
               }),
       }),
   };

@@ -107,7 +107,23 @@ describe("Codex provider", () => {
       observedEffort: "low",
       finalResponse: "Pull request opened.",
       approvalCount: 0,
-      tokenUsage: { inputTokens: 12, outputTokens: 7 },
+      tokenUsage: {
+        total: {
+          inputTokens: 12,
+          cachedInputTokens: 2,
+          outputTokens: 7,
+          reasoningOutputTokens: 3,
+          totalTokens: 19,
+        },
+        last: {
+          inputTokens: 4,
+          cachedInputTokens: 1,
+          outputTokens: 2,
+          reasoningOutputTokens: 1,
+          totalTokens: 6,
+        },
+        modelContextWindow: 114000,
+      },
     });
     expect(result.itemSummaries).toHaveLength(2);
     expect(result.processExit).toMatchObject({ signal: "SIGTERM" });
@@ -125,6 +141,8 @@ describe("Codex provider", () => {
     ["thread-timeout", "initialization_timeout"],
     ["model-timeout", "model_schema_timeout"],
     ["turn-timeout", "turn_completion_timeout"],
+    ["version-failure", "codex_version_failed"],
+    ["schema-failure", "schema_generation_failed"],
   ] as const) {
     test(`normalizes ${mode}`, async () => {
       const { provider, assignment, workspace } = await fixture(mode);
@@ -140,4 +158,23 @@ describe("Codex provider", () => {
       if (Either.isLeft(outcome)) expect(outcome.left.code).toBe(code);
     });
   }
+
+  test("does not retain command stderr in normalized failures", async () => {
+    for (const mode of ["version-failure", "schema-failure"]) {
+      const { provider, assignment, workspace } = await fixture(mode);
+      const outcome = await Effect.runPromise(
+        Effect.either(
+          provider.run(
+            { assignment, workspace, prompt: "Implement it." },
+            () => Effect.void,
+          ),
+        ),
+      );
+      expect(Either.isLeft(outcome)).toBe(true);
+      if (Either.isLeft(outcome)) {
+        expect(outcome.left.message).not.toContain("sensitive");
+        expect(outcome.left.message).not.toContain("stderr");
+      }
+    }
+  });
 });

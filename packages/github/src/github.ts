@@ -15,6 +15,29 @@ import { Effect, Layer, Schema } from "effect";
 import { bunCommandRunner, type CommandRunner } from "./runner.ts";
 
 const RepositoryName = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const PageInfo = Schema.Struct({
+  hasNextPage: Schema.Boolean,
+  endCursor: Schema.NullOr(Schema.String),
+});
+const LabelNode = Schema.Struct({ name: Schema.String });
+const BlockerNode = Schema.Struct({ state: Schema.String });
+const IssueNode = Schema.Struct({
+  id: Schema.String,
+  number: Schema.Number,
+  url: Schema.String,
+  title: Schema.String,
+  author: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  labels: Schema.Struct({
+    nodes: Schema.Array(LabelNode),
+    pageInfo: PageInfo,
+  }),
+  blockedBy: Schema.Struct({
+    nodes: Schema.Array(BlockerNode),
+    pageInfo: PageInfo,
+  }),
+});
+type DiscoveredIssue = typeof IssueNode.Type;
+
 const DiscoveryResponse = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
@@ -23,23 +46,34 @@ const DiscoveryResponse = Schema.Struct({
         target: Schema.Struct({ oid: Schema.String }),
       }),
       issues: Schema.Struct({
-        nodes: Schema.Array(
-          Schema.Struct({
-            id: Schema.String,
-            number: Schema.Number,
-            url: Schema.String,
-            title: Schema.String,
-            author: Schema.NullOr(Schema.Struct({ login: Schema.String })),
-            labels: Schema.Struct({
-              nodes: Schema.Array(Schema.Struct({ name: Schema.String })),
-            }),
-            blockedBy: Schema.Struct({
-              nodes: Schema.Array(Schema.Struct({ state: Schema.String })),
-            }),
-          }),
-        ),
+        nodes: Schema.Array(IssueNode),
+        pageInfo: PageInfo,
       }),
     }),
+  }),
+});
+const LabelsPageResponse = Schema.Struct({
+  data: Schema.Struct({
+    node: Schema.NullOr(
+      Schema.Struct({
+        labels: Schema.Struct({
+          nodes: Schema.Array(LabelNode),
+          pageInfo: PageInfo,
+        }),
+      }),
+    ),
+  }),
+});
+const BlockersPageResponse = Schema.Struct({
+  data: Schema.Struct({
+    node: Schema.NullOr(
+      Schema.Struct({
+        blockedBy: Schema.Struct({
+          nodes: Schema.Array(BlockerNode),
+          pageInfo: PageInfo,
+        }),
+      }),
+    ),
   }),
 });
 
@@ -75,14 +109,43 @@ const PullRequestsResponse = Schema.Struct({
   }),
 });
 
-const DISCOVERY_QUERY = `query($owner: String!, $name: String!) {
+const DISCOVERY_QUERY = `query($owner: String!, $name: String!, $issueCursor: String) {
   repository(owner: $owner, name: $name) {
     defaultBranchRef { name target { oid } }
-    issues(first: 100, states: OPEN, labels: ${JSON.stringify(REQUIRED_ISSUE_LABELS)}) {
+    issues(first: 100, after: $issueCursor, states: OPEN, labels: ${JSON.stringify(REQUIRED_ISSUE_LABELS)}) {
       nodes {
         id number url title author { login }
-        labels(first: 100) { nodes { name } }
-        blockedBy(first: 100) { nodes { state } }
+        labels(first: 100) {
+          nodes { name }
+          pageInfo { hasNextPage endCursor }
+        }
+        blockedBy(first: 100) {
+          nodes { state }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+const LABELS_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on Issue {
+      labels(first: 100, after: $cursor) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
+const BLOCKERS_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on Issue {
+      blockedBy(first: 100, after: $cursor) {
+        nodes { state }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -141,27 +204,111 @@ async function checked(
   return result.stdout;
 }
 
+async function graphql(
+  runner: CommandRunner,
+  query: string,
+  variables: Readonly<Record<string, string>>,
+): Promise<string> {
+  const args = ["gh", "api", "graphql", "-f", `query=${query}`];
+  for (const [name, value] of Object.entries(variables)) {
+    args.push("-F", `${name}=${value}`);
+  }
+  return checked(runner, args);
+}
+
+function nextCursor(
+  pageInfo: typeof PageInfo.Type,
+  connection: string,
+): string | null {
+  if (!pageInfo.hasNextPage) return null;
+  if (!pageInfo.endCursor) {
+    throw new FactoryError({
+      code: "github_response_invalid",
+      message: `GitHub returned no cursor for paginated ${connection}`,
+    });
+  }
+  return pageInfo.endCursor;
+}
+
+async function allLabels(
+  runner: CommandRunner,
+  issue: DiscoveredIssue,
+): Promise<ReadonlyArray<string>> {
+  const labels = issue.labels.nodes.map(({ name }) => name);
+  let cursor = nextCursor(issue.labels.pageInfo, "labels");
+  while (cursor) {
+    const response = decodeJson(
+      LabelsPageResponse,
+      await graphql(runner, LABELS_PAGE_QUERY, { id: issue.id, cursor }),
+    );
+    if (!response.data.node) {
+      throw new FactoryError({
+        code: "github_response_invalid",
+        message: `GitHub issue node ${issue.id} disappeared during label pagination`,
+      });
+    }
+    labels.push(...response.data.node.labels.nodes.map(({ name }) => name));
+    cursor = nextCursor(response.data.node.labels.pageInfo, "labels");
+  }
+  return labels;
+}
+
+async function allBlockerStates(
+  runner: CommandRunner,
+  issue: DiscoveredIssue,
+): Promise<ReadonlyArray<string>> {
+  const states = issue.blockedBy.nodes.map(({ state }) => state);
+  let cursor = nextCursor(issue.blockedBy.pageInfo, "blockers");
+  while (cursor) {
+    const response = decodeJson(
+      BlockersPageResponse,
+      await graphql(runner, BLOCKERS_PAGE_QUERY, { id: issue.id, cursor }),
+    );
+    if (!response.data.node) {
+      throw new FactoryError({
+        code: "github_response_invalid",
+        message: `GitHub issue node ${issue.id} disappeared during blocker pagination`,
+      });
+    }
+    states.push(
+      ...response.data.node.blockedBy.nodes.map(({ state }) => state),
+    );
+    cursor = nextCursor(response.data.node.blockedBy.pageInfo, "blockers");
+  }
+  return states;
+}
+
 function makeService(runner: CommandRunner): GitHubService {
   return {
     discoverCandidates: (repository) =>
       Effect.tryPromise({
         try: async () => {
           const [owner, name] = splitRepository(repository);
-          const discovery = decodeJson(
-            DiscoveryResponse,
-            await checked(runner, [
-              "gh",
-              "api",
-              "graphql",
-              "-f",
-              `query=${DISCOVERY_QUERY}`,
-              "-F",
-              `owner=${owner}`,
-              "-F",
-              `name=${name}`,
-            ]),
-          );
-          const commit = discovery.data.repository.defaultBranchRef.target.oid;
+          const issues: DiscoveredIssue[] = [];
+          let issueCursor: string | null = null;
+          let commit: string | null = null;
+          do {
+            const discovery = decodeJson(
+              DiscoveryResponse,
+              await graphql(runner, DISCOVERY_QUERY, {
+                owner,
+                name,
+                ...(issueCursor ? { issueCursor } : {}),
+              }),
+            );
+            commit ??= discovery.data.repository.defaultBranchRef.target.oid;
+            issues.push(...discovery.data.repository.issues.nodes);
+            issueCursor = nextCursor(
+              discovery.data.repository.issues.pageInfo,
+              "issues",
+            );
+          } while (issueCursor);
+          if (!commit) {
+            throw new FactoryError({
+              code: "github_response_invalid",
+              message: "GitHub returned no default branch commit",
+            });
+          }
           const workflowPayload = decodeJson(
             WorkflowResponse,
             await checked(runner, [
@@ -183,14 +330,15 @@ function makeService(runner: CommandRunner): GitHubService {
           const forbiddenLabels = new Set(workflow.policy.forbiddenLabels);
 
           const candidates: Candidate[] = [];
-          for (const issue of discovery.data.repository.issues.nodes) {
-            const labels = new Set(issue.labels.nodes.map(({ name }) => name));
+          for (const issue of issues) {
+            const labels = new Set(await allLabels(runner, issue));
             if ([...requiredLabels].some((label) => !labels.has(label))) {
               continue;
             }
             if ([...forbiddenLabels].some((label) => labels.has(label)))
               continue;
-            if (issue.blockedBy.nodes.some(({ state }) => state !== "CLOSED")) {
+            const blockerStates = await allBlockerStates(runner, issue);
+            if (blockerStates.some((state) => state !== "CLOSED")) {
               continue;
             }
             if (!issue.author) continue;

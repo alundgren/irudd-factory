@@ -32,7 +32,12 @@ const ok = (value: unknown): CommandResult => ({
   exitCode: 0,
 });
 
-function discovery(issues: ReadonlyArray<Record<string, unknown>>) {
+const lastPage = { hasNextPage: false, endCursor: null };
+
+function discovery(
+  issues: ReadonlyArray<Record<string, unknown>>,
+  pageInfo: Record<string, unknown> = lastPage,
+) {
   return ok({
     data: {
       repository: {
@@ -40,7 +45,7 @@ function discovery(issues: ReadonlyArray<Record<string, unknown>>) {
           name: "main",
           target: { oid: "a".repeat(40) },
         },
-        issues: { nodes: issues },
+        issues: { nodes: issues, pageInfo },
       },
     },
   });
@@ -53,8 +58,8 @@ function issue(overrides: Record<string, unknown> = {}) {
     url: "https://github.com/owner/repository/issues/1",
     title: "Issue one",
     author: { login: "owner" },
-    labels: { nodes: [{ name: "ready-for-agent" }] },
-    blockedBy: { nodes: [] },
+    labels: { nodes: [{ name: "ready-for-agent" }], pageInfo: lastPage },
+    blockedBy: { nodes: [], pageInfo: lastPage },
     ...overrides,
   };
 }
@@ -89,11 +94,12 @@ describe("GitHub adapter", () => {
           id: "I_claimed",
           labels: {
             nodes: [{ name: "ready-for-agent" }, { name: "claimed" }],
+            pageInfo: lastPage,
           },
         }),
         issue({
           id: "I_blocked",
-          blockedBy: { nodes: [{ state: "OPEN" }] },
+          blockedBy: { nodes: [{ state: "OPEN" }], pageInfo: lastPage },
         }),
         issue({ id: "I_reader", number: 3 }),
       ]),
@@ -105,6 +111,79 @@ describe("GitHub adapter", () => {
     );
     expect(candidates).toEqual([]);
     expect(runner.calls).toHaveLength(3);
+  });
+
+  test("paginates the complete issue candidate set", async () => {
+    const runner = new FakeRunner([
+      discovery([issue()], {
+        hasNextPage: true,
+        endCursor: "issue-page-2",
+      }),
+      discovery([
+        issue({
+          id: "I_2",
+          number: 2,
+          url: "https://github.com/owner/repository/issues/2",
+        }),
+      ]),
+      workflowResponse,
+      ok({ permission: "write" }),
+      ok({ permission: "write" }),
+    ]);
+    const candidates = await Effect.runPromise(
+      makeGitHubService(runner).discoverCandidates("owner/repository"),
+    );
+    expect(candidates).toHaveLength(2);
+    expect(runner.calls[1]?.args).toContain("issueCursor=issue-page-2");
+  });
+
+  test("paginates labels and blockers before eligibility", async () => {
+    const runner = new FakeRunner([
+      discovery([
+        issue({
+          id: "I_late_label",
+          labels: {
+            nodes: [{ name: "ready-for-agent" }],
+            pageInfo: { hasNextPage: true, endCursor: "label-page-2" },
+          },
+        }),
+        issue({
+          id: "I_late_blocker",
+          number: 2,
+          blockedBy: {
+            nodes: [],
+            pageInfo: { hasNextPage: true, endCursor: "blocker-page-2" },
+          },
+        }),
+      ]),
+      workflowResponse,
+      ok({
+        data: {
+          node: {
+            labels: {
+              nodes: [{ name: "claimed" }],
+              pageInfo: lastPage,
+            },
+          },
+        },
+      }),
+      ok({
+        data: {
+          node: {
+            blockedBy: {
+              nodes: [{ state: "OPEN" }],
+              pageInfo: lastPage,
+            },
+          },
+        },
+      }),
+    ]);
+    const candidates = await Effect.runPromise(
+      makeGitHubService(runner).discoverCandidates("owner/repository"),
+    );
+    expect(candidates).toEqual([]);
+    expect(runner.calls[2]?.args).toContain("cursor=label-page-2");
+    expect(runner.calls[3]?.args).toContain("cursor=blocker-page-2");
   });
 
   test("reconciles a failed claim with exactly one read", async () => {

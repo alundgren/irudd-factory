@@ -5,11 +5,19 @@ const mode = process.argv[2] ?? "success";
 const args = process.argv.slice(3);
 
 if (args.includes("--version")) {
+  if (mode === "version-failure") {
+    console.error("sensitive stderr must not be stored");
+    process.exit(9);
+  }
   console.log("codex-cli fake-1.0.0");
   process.exit(0);
 }
 
 if (args.includes("generate-json-schema")) {
+  if (mode === "schema-failure") {
+    console.error("sensitive schema stderr must not be stored");
+    process.exit(8);
+  }
   const outIndex = args.indexOf("--out");
   const root = args[outIndex + 1];
   if (!root) process.exit(2);
@@ -120,7 +128,27 @@ async function handle(line: string): Promise<void> {
     });
     send({
       method: "thread/tokenUsage/updated",
-      params: { tokenUsage: { inputTokens: 12, outputTokens: 7 } },
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 12,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+            reasoningOutputTokens: 3,
+            totalTokens: 19,
+          },
+          last: {
+            inputTokens: 4,
+            cachedInputTokens: 1,
+            outputTokens: 2,
+            reasoningOutputTokens: 1,
+            totalTokens: 6,
+          },
+          modelContextWindow: 114000,
+        },
+      },
     });
     send({
       method: "turn/completed",

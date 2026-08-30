@@ -27,6 +27,11 @@ export interface AdmissionInput {
   readonly timestamp: string;
 }
 
+export interface AdmissionResult {
+  readonly receipt: CommandReceipt;
+  readonly created: boolean;
+}
+
 export interface AssignmentPatch {
   readonly state?: Assignment["state"];
   readonly workspace?: WorkspacePaths;
@@ -45,7 +50,7 @@ export interface StateStoreService {
   ) => Effect.Effect<CommandReceipt | null, FactoryError>;
   readonly admit: (
     input: AdmissionInput,
-  ) => Effect.Effect<CommandReceipt, FactoryError>;
+  ) => Effect.Effect<AdmissionResult, FactoryError>;
   readonly appendEvent: (
     assignmentId: string,
     event: Omit<AssignmentEvent, "sequence" | "assignmentId">,
@@ -106,6 +111,21 @@ export interface ProviderEvent {
   readonly patch?: AssignmentPatch;
 }
 
+export interface TokenUsageBreakdown {
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningOutputTokens: number;
+  readonly totalTokens: number;
+  readonly cacheWriteInputTokens?: number;
+}
+
+export interface ProviderTokenUsage {
+  readonly total: TokenUsageBreakdown;
+  readonly last: TokenUsageBreakdown;
+  readonly modelContextWindow: number | null;
+}
+
 export interface ProviderRunResult {
   readonly codexVersion: string;
   readonly threadId: string;
@@ -114,7 +134,7 @@ export interface ProviderRunResult {
   readonly observedEffort: string;
   readonly finalResponse: string;
   readonly itemSummaries: ReadonlyArray<Readonly<Record<string, unknown>>>;
-  readonly tokenUsage: Readonly<Record<string, number>>;
+  readonly tokenUsage: ProviderTokenUsage;
   readonly approvalCount: number;
   readonly processExit: Readonly<Record<string, unknown>>;
 }

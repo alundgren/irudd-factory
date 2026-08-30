@@ -150,7 +150,7 @@ export class AppServerRpc {
           ? error
           : new FactoryError({
               code: "provider_protocol_error",
-              message: String(error),
+              message: "Codex App Server protocol processing failed",
             }),
       );
     }
@@ -178,7 +178,7 @@ export class AppServerRpc {
         pending.reject(
           new FactoryError({
             code: "provider_rpc_error",
-            message: message.error.message ?? "Codex RPC failed",
+            message: "Codex App Server rejected the request",
           }),
         );
       } else {

@@ -55,8 +55,8 @@ function CommandOutcome({ receipt }: { receipt: CommandReceipt }) {
       </p>
       {result._tag === "no_candidate" ? (
         <p className="measure">
-          The configured repository has no eligible issue that Factory has not
-          handled before.
+          When this command ran, the configured repository had no eligible issue
+          that Factory had not handled before.
         </p>
       ) : null}
       {result._tag === "selection_ambiguous" ? (
@@ -90,8 +90,9 @@ function CommandOutcome({ receipt }: { receipt: CommandReceipt }) {
             {result.assignment.issue.repository}#
             {result.assignment.issue.number}
           </a>{" "}
-          is {stateLabel(result.assignment.state).toLowerCase()}. The rejection
-          receipt is durable and no new assignment was created.
+          was {stateLabel(result.assignment.state).toLowerCase()} when this
+          command ran. The rejection receipt is durable and no new assignment
+          was created.
         </p>
       ) : null}
     </section>

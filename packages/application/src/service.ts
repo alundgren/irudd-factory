@@ -188,7 +188,7 @@ export function makeApplication(options: ApplicationOptions) {
       const clock = yield* Clock;
       const ids = yield* IdGenerator;
       const candidates = yield* github.discoverCandidates(options.repository);
-      const receipt = yield* state.admit({
+      const admission = yield* state.admit({
         commandId,
         provider: options.provider,
         candidates,
@@ -197,7 +197,8 @@ export function makeApplication(options: ApplicationOptions) {
         requestedEffort: options.reasoningEffort,
         timestamp: clock.now(),
       });
-      if (receipt.result._tag === "started") {
+      const receipt = admission.receipt;
+      if (admission.created && receipt.result._tag === "started") {
         yield* processAssignment(receipt.result.assignment).pipe(
           Effect.forkDaemon,
         );
