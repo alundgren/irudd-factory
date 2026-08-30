@@ -63,7 +63,7 @@ export interface RunManifest {
   campaignRoot: string;
   runRoot: string;
   workspace: string | null;
-  allowedParentPaths: string[];
+  probeManagedPaths: string[];
   sandboxPolicy: unknown;
   remote: string | null;
   repository: string | null;

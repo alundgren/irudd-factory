@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -13,7 +13,7 @@ import {
   sanitizeCopiedGitDirectory,
 } from "../src/git-policy.ts";
 import { isWithin, plannedWithin, requireWithin } from "../src/paths.ts";
-import { inspectSchemas, requireRestrictedReadSchema } from "../src/schema.ts";
+import { inspectSchemas, requireScenarioSandboxSchema } from "../src/schema.ts";
 import { ProbeError } from "../src/types.ts";
 
 describe("configuration and containment", () => {
@@ -176,7 +176,9 @@ describe("configuration and containment", () => {
     const child = join(root, "child");
     await mkdir(child);
     expect(isWithin(root, child)).toBe(true);
-    expect(await requireWithin(root, child, "child")).toBe(child);
+    expect(await requireWithin(root, child, "child")).toBe(
+      await realpath(child),
+    );
   });
 
   test("computes a stable schema digest and rejects missing coverage", async () => {
@@ -207,57 +209,50 @@ describe("configuration and containment", () => {
       await writeFile(
         path,
         name === "TurnStartParams"
-          ? JSON.stringify(restrictedTurnSchema())
+          ? JSON.stringify(supportedTurnSchema())
           : `{ "title": "${name}" }`,
       );
     }
     const first = await inspectSchemas(root);
     const second = await inspectSchemas(root);
     expect(first.digest).toBe(second.digest);
-    await expect(requireRestrictedReadSchema(root)).resolves.toBeUndefined();
+    await expect(requireScenarioSandboxSchema(root)).resolves.toBeUndefined();
     const incomplete = await mkdtemp(join(tmpdir(), "probe-schema-missing-"));
     await writeFile(join(incomplete, "InitializeParams.json"), "{}");
     await expect(inspectSchemas(incomplete)).rejects.toBeInstanceOf(ProbeError);
   });
 
-  test("rejects an installed schema that cannot restrict readable roots", async () => {
+  test("rejects an installed schema without the scenario sandbox policies", async () => {
     const root = await mkdtemp(join(tmpdir(), "probe-schema-policy-"));
     await mkdir(join(root, "v2"));
     await writeFile(
       join(root, "v2", "TurnStartParams.json"),
       '{"type":"object"}',
     );
-    await expect(requireRestrictedReadSchema(root)).rejects.toMatchObject({
-      code: "restricted_read_schema_unsupported",
+    await expect(requireScenarioSandboxSchema(root)).rejects.toMatchObject({
+      code: "scenario_sandbox_schema_unsupported",
     });
   });
 
-  test("rejects policy field names outside the sandbox definitions", async () => {
+  test("rejects scenario fields declared outside the sandbox definitions", async () => {
     const root = await mkdtemp(join(tmpdir(), "probe-schema-decoy-"));
     await mkdir(join(root, "v2"));
     await writeFile(
       join(root, "v2", "TurnStartParams.json"),
       JSON.stringify({
-        description: "readOnlyAccess readableRoots includePlatformDefaults",
+        description:
+          "workspaceWrite writableRoots networkAccess excludeSlashTmp excludeTmpdirEnvVar",
         type: "object",
         properties: { sandboxPolicy: { type: "string" } },
       }),
     );
-    await expect(requireRestrictedReadSchema(root)).rejects.toMatchObject({
-      code: "restricted_read_schema_unsupported",
+    await expect(requireScenarioSandboxSchema(root)).rejects.toMatchObject({
+      code: "scenario_sandbox_schema_unsupported",
     });
   });
 });
 
-function restrictedTurnSchema(): Record<string, unknown> {
-  const restricted = {
-    type: "object",
-    properties: {
-      type: { enum: ["restricted"] },
-      readableRoots: { type: "array" },
-      includePlatformDefaults: { type: "boolean" },
-    },
-  };
+function supportedTurnSchema(): Record<string, unknown> {
   return {
     type: "object",
     properties: {
@@ -271,18 +266,20 @@ function restrictedTurnSchema(): Record<string, unknown> {
           {
             properties: {
               type: { enum: ["readOnly"] },
-              access: { $ref: "#/definitions/ReadAccess" },
+              networkAccess: { type: "boolean" },
             },
           },
           {
             properties: {
               type: { enum: ["workspaceWrite"] },
-              readOnlyAccess: { $ref: "#/definitions/ReadAccess" },
+              writableRoots: { type: "array" },
+              networkAccess: { type: "boolean" },
+              excludeSlashTmp: { type: "boolean" },
+              excludeTmpdirEnvVar: { type: "boolean" },
             },
           },
         ],
       },
-      ReadAccess: { oneOf: [restricted] },
     },
   };
 }

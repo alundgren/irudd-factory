@@ -55,7 +55,7 @@ if (args[0] === "app-server" && args[1] === "generate-json-schema") {
                       type: "object",
                       properties: {
                         type: { enum: ["readOnly"] },
-                        access: { $ref: "#/definitions/ReadAccess" },
+                        networkAccess: { type: "boolean" },
                       },
                     },
                     {
@@ -63,26 +63,9 @@ if (args[0] === "app-server" && args[1] === "generate-json-schema") {
                       properties: {
                         type: { enum: ["workspaceWrite"] },
                         writableRoots: { type: "array" },
-                        readOnlyAccess: {
-                          $ref: "#/definitions/ReadAccess",
-                        },
                         networkAccess: { type: "boolean" },
-                      },
-                    },
-                  ],
-                },
-                ReadAccess: {
-                  oneOf: [
-                    {
-                      type: "object",
-                      properties: { type: { enum: ["fullAccess"] } },
-                    },
-                    {
-                      type: "object",
-                      properties: {
-                        type: { enum: ["restricted"] },
-                        readableRoots: { type: "array" },
-                        includePlatformDefaults: { type: "boolean" },
+                        excludeSlashTmp: { type: "boolean" },
+                        excludeTmpdirEnvVar: { type: "boolean" },
                       },
                     },
                   ],
@@ -176,26 +159,16 @@ for await (const line of reader) {
     });
   } else if (message.method === "turn/start") {
     const sandboxPolicy = message.params?.sandboxPolicy;
-    const readAccess =
-      sandboxPolicy?.type === "readOnly"
-        ? sandboxPolicy?.access
-        : sandboxPolicy?.readOnlyAccess;
-    const readableRoots = readAccess?.readableRoots;
     const validSandbox =
-      readAccess?.type === "restricted" &&
-      typeof readAccess?.includePlatformDefaults === "boolean" &&
-      Array.isArray(readableRoots) &&
-      readableRoots.length === 3 &&
-      readableRoots[0] === process.cwd() &&
-      String(readableRoots[1]).endsWith("/fixture") &&
-      String(readableRoots[2]).endsWith("/prompts") &&
-      (sandboxPolicy?.type === "readOnly"
-        ? sandboxPolicy?.writableRoots === undefined &&
-          sandboxPolicy?.networkAccess === undefined
+      sandboxPolicy?.type === "readOnly"
+        ? sandboxPolicy?.networkAccess === false &&
+          sandboxPolicy?.writableRoots === undefined
         : sandboxPolicy?.type === "workspaceWrite" &&
           JSON.stringify(sandboxPolicy?.writableRoots) ===
             JSON.stringify([process.cwd()]) &&
-          sandboxPolicy?.networkAccess === false);
+          sandboxPolicy?.networkAccess === false &&
+          sandboxPolicy?.excludeSlashTmp === true &&
+          sandboxPolicy?.excludeTmpdirEnvVar === true;
     if (
       validateScenarioPolicy &&
       (message.params?.approvalPolicy !== "on-request" || !validSandbox)

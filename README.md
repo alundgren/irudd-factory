@@ -1,10 +1,19 @@
-# Symphony inspired software factory
-Solo dev focused software factorty heavily inspired by [Symphony](https://github.com/openai/symphony/blob/main/SPEC.md).
+# Symphony-inspired software factory
 
-Support claude and codex and issues only through github.
+An issue-driven software factory for one developer working on repositories they
+own. It is heavily inspired by
+[Symphony](https://github.com/openai/symphony/blob/main/SPEC.md).
 
-Notable deviations from symphony:
-- Gihub issues only (to make implementation simpler and allow using all features. might add more trackers eventually)
-- Considers issues trusted input. Do NOT point this at a repo which allows non trusted parties to submit issues.
+The initial product supports Claude Code and Codex, with GitHub issues as its
+only work source.
 
-VERY work in progress.
+Notable deviations from Symphony:
+
+- GitHub issues only. Other trackers may be added later.
+- One operator and one trust domain per installation. Repository contents and
+  issue authors are trusted.
+- Agent processes may read other files on the dedicated development VM. Do not
+  install this on a general-purpose host or connect repositories where
+  untrusted people can submit issues.
+
+Very much a work in progress.

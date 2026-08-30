@@ -72,7 +72,7 @@ export async function inspectSchemas(schemaRoot: string): Promise<{
   return { digest: hasher.digest("hex"), files: names, coverage };
 }
 
-export async function requireRestrictedReadSchema(
+export async function requireScenarioSandboxSchema(
   schemaRoot: string,
 ): Promise<void> {
   let root: JsonSchema;
@@ -81,24 +81,24 @@ export async function requireRestrictedReadSchema(
       join(schemaRoot, "v2", "TurnStartParams.json"),
     ).json()) as JsonSchema;
   } catch {
-    throw unsupportedRestrictedRead("TurnStartParams.json is not valid JSON");
+    throw unsupportedSandbox("TurnStartParams.json is not valid JSON");
   }
   const policy = resolveNode(root, property(root, "sandboxPolicy"));
   const readOnly = variantForType(root, policy, "readOnly");
   const workspaceWrite = variantForType(root, policy, "workspaceWrite");
-  const readAccess = resolveNode(root, property(readOnly, "access"));
-  const workspaceAccess = resolveNode(
-    root,
-    property(workspaceWrite, "readOnlyAccess"),
-  );
   if (
-    !supportsRestrictedAccess(root, readAccess) ||
-    !supportsRestrictedAccess(root, workspaceAccess)
+    !readOnly ||
+    !workspaceWrite ||
+    !hasDeclaredType(property(readOnly, "networkAccess"), "boolean") ||
+    !hasDeclaredType(property(workspaceWrite, "writableRoots"), "array") ||
+    !hasDeclaredType(property(workspaceWrite, "networkAccess"), "boolean") ||
+    !hasDeclaredType(property(workspaceWrite, "excludeSlashTmp"), "boolean") ||
+    !hasDeclaredType(property(workspaceWrite, "excludeTmpdirEnvVar"), "boolean")
   ) {
     throw new ProbeError(
       "protocol_error",
-      "restricted_read_schema_unsupported",
-      "Installed App Server schema cannot express restricted readable roots for both readOnly.access and workspaceWrite.readOnlyAccess",
+      "scenario_sandbox_schema_unsupported",
+      "Installed App Server schema cannot express the read-only and workspace-write policies required by the probe",
     );
   }
 }
@@ -177,23 +177,10 @@ function hasDeclaredType(schema: JsonSchema | null, expected: string): boolean {
   );
 }
 
-function supportsRestrictedAccess(
-  root: JsonSchema,
-  schema: JsonSchema | null,
-): boolean {
-  return alternatives(root, schema).some((entry) => {
-    if (!acceptsType(entry, "restricted")) return false;
-    return (
-      hasDeclaredType(property(entry, "readableRoots"), "array") &&
-      hasDeclaredType(property(entry, "includePlatformDefaults"), "boolean")
-    );
-  });
-}
-
-function unsupportedRestrictedRead(detail: string): ProbeError {
+function unsupportedSandbox(detail: string): ProbeError {
   return new ProbeError(
     "protocol_error",
-    "restricted_read_schema_unsupported",
-    `Installed App Server schema cannot express restricted readable roots: ${detail}`,
+    "scenario_sandbox_schema_unsupported",
+    `Installed App Server schema cannot express the probe sandbox policy: ${detail}`,
   );
 }
