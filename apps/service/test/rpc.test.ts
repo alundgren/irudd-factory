@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -27,6 +27,19 @@ afterEach(async () => {
     roots.splice(0).map((root) => rm(root, { recursive: true })),
   );
 });
+
+async function makeConsoleDist(root: string): Promise<string> {
+  const dist = join(root, "console-dist");
+  await mkdir(join(dist, "assets"), { recursive: true });
+  await Promise.all([
+    writeFile(
+      join(dist, "index.html"),
+      "<!doctype html><title>Irudd Factory</title>",
+    ),
+    writeFile(join(dist, "assets", "index.js"), "export {};\n"),
+  ]);
+  return dist;
+}
 
 async function availablePort(): Promise<number> {
   const server = createServer();
@@ -101,6 +114,7 @@ describe("Factory RPC service", () => {
         beforeRunning: enterRunning.wait,
         beforeCompletion: finish.wait,
       }),
+      await makeConsoleDist(root),
     );
     stops.push(service.stop);
     const rpcUrl = `${service.url}/rpc`;

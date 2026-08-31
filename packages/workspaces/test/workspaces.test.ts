@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Effect } from "effect";
@@ -27,7 +27,9 @@ describe("workspace adapter", () => {
   });
 
   test("creates a retained linked worktree at the stored commit", async () => {
-    const root = await mkdtemp(join(tmpdir(), "factory-workspace-test-"));
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), "factory-workspace-test-")),
+    );
     roots.push(root);
     const assignmentId = "assignment-1";
     const clone = join(root, "clones", "owner--repository");
@@ -72,7 +74,9 @@ describe("workspace adapter", () => {
   });
 
   test("refuses to reuse a clone with another remote", async () => {
-    const root = await mkdtemp(join(tmpdir(), "factory-workspace-test-"));
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), "factory-workspace-test-")),
+    );
     roots.push(root);
     await mkdir(join(root, "clones", "owner--repository"), {
       recursive: true,
