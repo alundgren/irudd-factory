@@ -1,0 +1,16 @@
+{
+  "name": "@irudd-factory/contracts",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "bun ../../scripts/test-suite.ts packages/contracts"
+  },
+  "dependencies": {
+    "@effect/rpc": "0.76.2",
+    "effect": "3.22.1"
+  }
+}
