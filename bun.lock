@@ -30,11 +30,26 @@
         "effect": "3.22.1",
       },
     },
+    "packages/github": {
+      "name": "@irudd-factory/github",
+      "dependencies": {
+        "@irudd-factory/application": "workspace:*",
+        "@irudd-factory/contracts": "workspace:*",
+        "effect": "3.22.1",
+      },
+    },
     "packages/state-sqlite": {
       "name": "@irudd-factory/state-sqlite",
       "dependencies": {
         "@irudd-factory/application": "workspace:*",
         "@irudd-factory/contracts": "workspace:*",
+        "effect": "3.22.1",
+      },
+    },
+    "packages/workspaces": {
+      "name": "@irudd-factory/workspaces",
+      "dependencies": {
+        "@irudd-factory/application": "workspace:*",
         "effect": "3.22.1",
       },
     },
@@ -60,7 +75,11 @@
 
     "@irudd-factory/contracts": ["@irudd-factory/contracts@workspace:packages/contracts"],
 
+    "@irudd-factory/github": ["@irudd-factory/github@workspace:packages/github"],
+
     "@irudd-factory/state-sqlite": ["@irudd-factory/state-sqlite@workspace:packages/state-sqlite"],
+
+    "@irudd-factory/workspaces": ["@irudd-factory/workspaces@workspace:packages/workspaces"],
 
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ=="],
 
