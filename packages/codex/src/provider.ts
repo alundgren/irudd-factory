@@ -8,6 +8,7 @@ import type {
   TokenUsageBreakdown,
 } from "@irudd-factory/application";
 import { FactoryError, Provider } from "@irudd-factory/application";
+import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
 import {
   runManagedCommand,
@@ -395,7 +396,7 @@ export function makeCodexProvider(
             await guardTerminal(() =>
               Effect.runPromise(
                 emit({
-                  type: "provider.process.started",
+                  type: ASSIGNMENT_EVENTS.providerProcessStarted,
                   timestamp: new Date().toISOString(),
                   detail: { pid: child.pid, schemaDigest },
                   patch: { codexVersion },
@@ -476,7 +477,7 @@ export function makeCodexProvider(
             await guardTerminal(() =>
               Effect.runPromise(
                 emit({
-                  type: "provider.settings.observed",
+                  type: ASSIGNMENT_EVENTS.providerSettingsObserved,
                   timestamp: new Date().toISOString(),
                   detail: {
                     threadId: activeThreadId,
@@ -510,7 +511,7 @@ export function makeCodexProvider(
             await guardTerminal(() =>
               Effect.runPromise(
                 emit({
-                  type: "provider.thread.started",
+                  type: ASSIGNMENT_EVENTS.providerThreadStarted,
                   timestamp: new Date().toISOString(),
                   detail: { threadId: activeThreadId, schemaDigest },
                   patch: {
@@ -568,7 +569,7 @@ export function makeCodexProvider(
             await guardTerminal(() =>
               Effect.runPromise(
                 emit({
-                  type: "provider.turn.started",
+                  type: ASSIGNMENT_EVENTS.providerTurnStarted,
                   timestamp: new Date().toISOString(),
                   detail: { turnId: activeTurnId },
                   patch: { turnId: activeTurnId },
@@ -594,7 +595,7 @@ export function makeCodexProvider(
             await guardTerminal(() =>
               Effect.runPromise(
                 emit({
-                  type: "provider.settings.observed",
+                  type: ASSIGNMENT_EVENTS.providerSettingsObserved,
                   timestamp: new Date().toISOString(),
                   detail: {
                     ...(observedModel ? { observedModel } : {}),
@@ -696,7 +697,7 @@ export function makeCodexProvider(
             try {
               await Effect.runPromise(
                 emit({
-                  type: "provider.failed",
+                  type: ASSIGNMENT_EVENTS.providerFailed,
                   timestamp: new Date().toISOString(),
                   detail: {
                     code:

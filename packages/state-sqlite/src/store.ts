@@ -11,6 +11,7 @@ import {
   AssignmentState,
   type AssignmentEvent,
   AssignmentEventDetail,
+  ASSIGNMENT_EVENTS,
   type CommandReceipt,
   CommandResult,
   NormalizedError,
@@ -352,7 +353,7 @@ export function openStateStore(path: string): OpenStateStore {
         insertAssignment(value);
         const sequence = insertEvent(
           value.id,
-          "assignment.reserved",
+          ASSIGNMENT_EVENTS.reserved,
           input.timestamp,
           {},
         );
