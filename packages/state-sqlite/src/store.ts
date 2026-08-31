@@ -7,10 +7,15 @@ import type {
 } from "@irudd-factory/application";
 import { FactoryError, StateStore } from "@irudd-factory/application";
 import {
-  Assignment,
-  AssignmentEvent,
-  CommandReceipt,
-  type CommandResult,
+  type Assignment,
+  AssignmentState,
+  type AssignmentEvent,
+  AssignmentEventDetail,
+  type CommandReceipt,
+  CommandResult,
+  NormalizedError,
+  PullRequest,
+  WorkspacePaths,
 } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { migrate } from "./migrations.ts";
@@ -66,12 +71,24 @@ function storageError(error: unknown): FactoryError {
       });
 }
 
-function parseJson(value: string): unknown {
-  return JSON.parse(value) as unknown;
+/**
+ * Only the JSON columns and the `state` enum carry values SQLite cannot
+ * constrain to the domain type. Everything else is already the right shape in
+ * the row, so it is assigned rather than revalidated on every read.
+ */
+function decodeJson<A, I>(schema: Schema.Schema<A, I>, source: string): A {
+  return Schema.decodeUnknownSync(schema)(JSON.parse(source) as unknown);
+}
+
+function decodeJsonOrNull<A, I>(
+  schema: Schema.Schema<A, I>,
+  source: string | null,
+): A | null {
+  return source === null ? null : decodeJson(schema, source);
 }
 
 function decodeAssignment(row: AssignmentRow): Assignment {
-  return Schema.decodeUnknownSync(Assignment)({
+  return {
     id: row.id,
     provider: row.provider,
     issue: {
@@ -81,14 +98,14 @@ function decodeAssignment(row: AssignmentRow): Assignment {
       url: row.issue_url,
       title: row.issue_title,
     },
-    state: row.state,
+    state: Schema.decodeUnknownSync(AssignmentState)(row.state),
     workflow: {
       startingCommit: row.starting_commit,
       blobId: row.workflow_blob_id,
       digest: row.workflow_digest,
       body: row.workflow_body,
     },
-    workspace: row.workspace_json ? parseJson(row.workspace_json) : null,
+    workspace: decodeJsonOrNull(WorkspacePaths, row.workspace_json),
     requestedModel: row.requested_model,
     requestedEffort: row.requested_effort,
     observedModel: row.observed_model,
@@ -96,32 +113,30 @@ function decodeAssignment(row: AssignmentRow): Assignment {
     codexVersion: row.codex_version,
     threadId: row.thread_id,
     turnId: row.turn_id,
-    pullRequest: row.pull_request_json
-      ? parseJson(row.pull_request_json)
-      : null,
-    error: row.error_json ? parseJson(row.error_json) : null,
+    pullRequest: decodeJsonOrNull(PullRequest, row.pull_request_json),
+    error: decodeJsonOrNull(NormalizedError, row.error_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastEventSequence: row.last_event_sequence,
-  });
+  };
 }
 
 function decodeEvent(row: EventRow): AssignmentEvent {
-  return Schema.decodeUnknownSync(AssignmentEvent)({
+  return {
     sequence: row.sequence,
     assignmentId: row.assignment_id,
     type: row.type,
     timestamp: row.timestamp,
-    detail: parseJson(row.detail_json),
-  });
+    detail: decodeJson(AssignmentEventDetail, row.detail_json),
+  };
 }
 
 function decodeReceipt(row: ReceiptRow): CommandReceipt {
-  return Schema.decodeUnknownSync(CommandReceipt)({
+  return {
     commandId: row.command_id,
-    result: parseJson(row.result_json),
+    result: decodeJson(CommandResult, row.result_json),
     createdAt: row.created_at,
-  });
+  };
 }
 
 export interface OpenStateStore {
@@ -164,11 +179,7 @@ export function openStateStore(path: string): OpenStateStore {
         resultJson: JSON.stringify(result),
         createdAt: timestamp,
       });
-    return Schema.decodeUnknownSync(CommandReceipt)({
-      commandId,
-      result,
-      createdAt: timestamp,
-    });
+    return { commandId, result, createdAt: timestamp };
   }
 
   function insertAssignment(value: Assignment): void {
@@ -318,7 +329,7 @@ export function openStateStore(path: string): OpenStateStore {
             message: "Admission selected no candidate",
           });
         }
-        const value = Schema.decodeUnknownSync(Assignment)({
+        const value: Assignment = {
           id: input.assignmentId,
           provider: input.provider,
           issue: candidate.issue,
@@ -337,7 +348,7 @@ export function openStateStore(path: string): OpenStateStore {
           createdAt: input.timestamp,
           updatedAt: input.timestamp,
           lastEventSequence: 0,
-        });
+        };
         insertAssignment(value);
         const sequence = insertEvent(
           value.id,
@@ -374,11 +385,11 @@ export function openStateStore(path: string): OpenStateStore {
           });
         }
         const current = decodeAssignment(currentRow);
-        const next = Schema.decodeUnknownSync(Assignment)({
+        const next: Assignment = {
           ...current,
           ...patch,
           updatedAt: event.timestamp,
-        });
+        };
         const sequence = insertEvent(
           assignmentId,
           event.type,
