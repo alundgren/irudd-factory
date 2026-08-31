@@ -2,12 +2,19 @@ import { createHash } from "node:crypto";
 import { FactoryError } from "./errors.ts";
 
 export interface WorkflowPolicy {
-  readonly pollInterval: string;
   readonly requiredLabels: ReadonlyArray<string>;
-  readonly concurrency: number;
+  readonly forbiddenLabels: ReadonlyArray<string>;
   readonly runtime: string;
   readonly test: string;
 }
+
+export const REQUIRED_ISSUE_LABELS = ["ready-for-agent"] as const;
+export const FORBIDDEN_ISSUE_LABELS = [
+  "claimed",
+  "ready-for-human",
+  "epic",
+  "needs-refinement",
+] as const;
 
 export interface ParsedWorkflow {
   readonly policy: WorkflowPolicy;
@@ -27,6 +34,42 @@ function requiredValue(
     });
   }
   return value;
+}
+
+function labelList(
+  entries: ReadonlyMap<string, string>,
+  key: string,
+): ReadonlyArray<string> {
+  const source = requiredValue(entries, key);
+  const match = source.match(/^\[(.*)]$/);
+  const labels = match?.[1]
+    ?.split(",")
+    .map((label) => label.trim())
+    .filter(Boolean);
+  if (!labels || labels.length === 0) {
+    throw new FactoryError({
+      code: "workflow_invalid",
+      message: `WORKFLOW.md ${key} must contain at least one label`,
+    });
+  }
+  return labels;
+}
+
+function requireExactLabels(
+  actual: ReadonlyArray<string>,
+  expected: ReadonlyArray<string>,
+  key: string,
+): void {
+  const actualSet = new Set(actual);
+  if (
+    actualSet.size !== expected.length ||
+    expected.some((label) => !actualSet.has(label))
+  ) {
+    throw new FactoryError({
+      code: "workflow_invalid",
+      message: `WORKFLOW.md ${key} must be [${expected.join(", ")}]`,
+    });
+  }
 }
 
 export function parseWorkflow(source: string): ParsedWorkflow {
@@ -53,31 +96,33 @@ export function parseWorkflow(source: string): ParsedWorkflow {
     entries.set(line.slice(0, separator).trim(), line.slice(separator + 1));
   }
 
-  const concurrency = Number(requiredValue(entries, "concurrency"));
-  if (!Number.isSafeInteger(concurrency) || concurrency <= 0) {
+  const allowedKeys = new Set([
+    "required_labels",
+    "forbidden_labels",
+    "runtime",
+    "test",
+  ]);
+  const unknownKey = [...entries.keys()].find((key) => !allowedKeys.has(key));
+  if (unknownKey) {
     throw new FactoryError({
       code: "workflow_invalid",
-      message: "WORKFLOW.md concurrency must be a positive integer",
-    });
-  }
-  const labelsSource = requiredValue(entries, "required_labels");
-  const labelsMatch = labelsSource.match(/^\[(.*)]$/);
-  const requiredLabels = labelsMatch?.[1]
-    ?.split(",")
-    .map((label) => label.trim())
-    .filter(Boolean);
-  if (!requiredLabels || requiredLabels.length === 0) {
-    throw new FactoryError({
-      code: "workflow_invalid",
-      message: "WORKFLOW.md required_labels must contain at least one label",
+      message: `WORKFLOW.md contains unsupported policy key ${unknownKey}`,
     });
   }
 
+  const requiredLabels = labelList(entries, "required_labels");
+  const forbiddenLabels = labelList(entries, "forbidden_labels");
+  requireExactLabels(requiredLabels, REQUIRED_ISSUE_LABELS, "required_labels");
+  requireExactLabels(
+    forbiddenLabels,
+    FORBIDDEN_ISSUE_LABELS,
+    "forbidden_labels",
+  );
+
   return {
     policy: {
-      pollInterval: requiredValue(entries, "poll_interval"),
       requiredLabels,
-      concurrency,
+      forbiddenLabels,
       runtime: requiredValue(entries, "runtime"),
       test: requiredValue(entries, "test"),
     },

@@ -5,11 +5,19 @@ const mode = process.argv[2] ?? "success";
 const args = process.argv.slice(3);
 
 if (args.includes("--version")) {
+  if (mode === "version-failure") {
+    console.error("sensitive stderr must not be stored");
+    process.exit(9);
+  }
   console.log("codex-cli fake-1.0.0");
   process.exit(0);
 }
 
 if (args.includes("generate-json-schema")) {
+  if (mode === "schema-failure") {
+    console.error("sensitive schema stderr must not be stored");
+    process.exit(8);
+  }
   const outIndex = args.indexOf("--out");
   const root = args[outIndex + 1];
   if (!root) process.exit(2);
@@ -55,6 +63,10 @@ async function handle(line: string): Promise<void> {
   }
   if (message.method === "model/list" && message.id !== undefined) {
     if (mode === "model-timeout") return;
+    if (mode === "early-error") {
+      send({ method: "error", params: { message: "early provider failure" } });
+      return;
+    }
     respond(message.id, {
       data: [
         {
@@ -70,8 +82,15 @@ async function handle(line: string): Promise<void> {
     respond(message.id, {
       thread: { id: "thread-1" },
       model: mode === "model-mismatch" ? "another-model" : "gpt-5.6-luna",
-      reasoningEffort: mode === "effort-mismatch" ? "high" : "low",
+      ...(mode === "effort-missing"
+        ? {}
+        : {
+            reasoningEffort: mode === "effort-mismatch" ? "high" : "low",
+          }),
     });
+    if (mode === "response-then-error") {
+      send({ method: "error", params: { message: "thread failed" } });
+    }
     return;
   }
   if (message.method === "turn/start" && message.id !== undefined) {
@@ -79,7 +98,10 @@ async function handle(line: string): Promise<void> {
     send({
       method: "thread/settings/updated",
       params: {
-        threadSettings: { model: "gpt-5.6-luna", effort: "low" },
+        threadSettings: {
+          model: "gpt-5.6-luna",
+          ...(mode === "effort-missing" ? {} : { effort: "low" }),
+        },
       },
     });
     if (mode === "approval") {
@@ -120,16 +142,46 @@ async function handle(line: string): Promise<void> {
     });
     send({
       method: "thread/tokenUsage/updated",
-      params: { tokenUsage: { inputTokens: 12, outputTokens: 7 } },
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 12,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+            reasoningOutputTokens: 3,
+            totalTokens: 19,
+          },
+          last: {
+            inputTokens: 4,
+            cachedInputTokens: 1,
+            outputTokens: 2,
+            reasoningOutputTokens: 1,
+            totalTokens: 6,
+          },
+          modelContextWindow: 114000,
+        },
+      },
     });
     send({
       method: "turn/completed",
       params: { turn: { id: "turn-1", status: "completed" } },
     });
+    if (mode.startsWith("post-completion-")) {
+      await Bun.sleep(25);
+      if (mode === "post-completion-error") {
+        send({ method: "error", params: { message: "late provider failure" } });
+      }
+      if (mode === "post-completion-malformed") {
+        process.stdout.write("not-json\n");
+      }
+      if (mode === "post-completion-exit") process.exit(2);
+    }
     return;
   }
   if (message.method === "turn/interrupt" && message.id !== undefined) {
-    respond(message.id, {});
+    if (mode !== "interrupt-timeout") respond(message.id, {});
   }
 }
 

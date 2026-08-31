@@ -87,7 +87,8 @@ describe("SQLite state store", () => {
     const replay = await Effect.runPromise(
       second.service.getReceipt("command-1"),
     );
-    expect(replay).toEqual(original);
+    expect(original.created).toBe(true);
+    expect(replay).toEqual(original.receipt);
     expect(replay?.result._tag).toBe("started");
     second.close();
   });
@@ -102,8 +103,8 @@ describe("SQLite state store", () => {
         admission("ambiguous", "unused-2", [candidate(), candidate("I_2", 2)]),
       ),
     );
-    expect(empty.result._tag).toBe("no_candidate");
-    expect(ambiguous.result._tag).toBe("selection_ambiguous");
+    expect(empty.receipt.result._tag).toBe("no_candidate");
+    expect(ambiguous.receipt.result._tag).toBe("selection_ambiguous");
     expect(
       opened.database
         .query<
@@ -120,13 +121,13 @@ describe("SQLite state store", () => {
     const started = await Effect.runPromise(
       opened.service.admit(admission("first", "assignment-1", [candidate()])),
     );
-    expect(started.result._tag).toBe("started");
+    expect(started.receipt.result._tag).toBe("started");
     const busy = await Effect.runPromise(
       opened.service.admit(
         admission("second", "assignment-2", [candidate("I_2", 2)]),
       ),
     );
-    expect(busy.result._tag).toBe("provider_busy");
+    expect(busy.receipt.result._tag).toBe("provider_busy");
 
     await Effect.runPromise(
       opened.service.appendEvent(
@@ -142,7 +143,7 @@ describe("SQLite state store", () => {
     const seen = await Effect.runPromise(
       opened.service.admit(admission("third", "assignment-3", [candidate()])),
     );
-    expect(seen.result._tag).toBe("no_candidate");
+    expect(seen.receipt.result._tag).toBe("no_candidate");
     opened.close();
   });
 
@@ -162,7 +163,7 @@ describe("SQLite state store", () => {
         ),
       ),
     ]);
-    expect(results.map(({ result }) => result._tag).sort()).toEqual([
+    expect(results.map(({ receipt }) => receipt.result._tag).sort()).toEqual([
       "provider_busy",
       "started",
     ]);
@@ -174,6 +175,28 @@ describe("SQLite state store", () => {
         >("SELECT count(*) AS count FROM assignments")
         .get()?.count,
     ).toBe(1);
+    first.close();
+    second.close();
+  });
+
+  test("marks only one concurrent same-command admission as created", async () => {
+    const path = await databasePath();
+    const first = openStateStore(path);
+    const second = openStateStore(path);
+    const results = await Promise.all([
+      Effect.runPromise(
+        first.service.admit(
+          admission("same-command", "assignment-a", [candidate()]),
+        ),
+      ),
+      Effect.runPromise(
+        second.service.admit(
+          admission("same-command", "assignment-b", [candidate()]),
+        ),
+      ),
+    ]);
+    expect(results.map(({ created }) => created).sort()).toEqual([false, true]);
+    expect(results[0]?.receipt).toEqual(results[1]?.receipt);
     first.close();
     second.close();
   });

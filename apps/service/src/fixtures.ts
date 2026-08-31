@@ -6,6 +6,7 @@ import type {
 } from "@irudd-factory/application";
 import {
   Clock,
+  FactoryError,
   GitHub,
   IdGenerator,
   Provider,
@@ -19,9 +20,22 @@ import { layerStateStore } from "@irudd-factory/state-sqlite";
 import type { FactoryConfig } from "./config.ts";
 import type { FactoryDependencies } from "./service.ts";
 
+export interface FixtureControls {
+  readonly beforeRunning?: () => Promise<void>;
+  readonly beforeCompletion?: () => Promise<void>;
+  readonly onClaim?: () => void;
+  readonly onWorkspace?: () => void;
+  readonly onProviderRun?: () => void;
+  readonly failAfterObservation?: {
+    readonly model?: string;
+    readonly effort?: string;
+  };
+}
+
 export function fixtureDependencies(
   config: FactoryConfig,
   scenarioName: ScenarioName,
+  controls: FixtureControls = {},
 ): FactoryDependencies {
   const scenario = SCENARIOS[scenarioName];
   const workflow = {
@@ -36,7 +50,11 @@ export function fixtureDependencies(
   }));
   const github: GitHubService = {
     discoverCandidates: () => Effect.succeed(candidates),
-    claimIssue: () => Effect.succeed("confirmed"),
+    claimIssue: () =>
+      Effect.sync(() => {
+        controls.onClaim?.();
+        return "confirmed" as const;
+      }),
     verifyPullRequest: () =>
       Effect.succeed({
         url: "https://github.com/factory/fixture/pull/99",
@@ -46,18 +64,45 @@ export function fixtureDependencies(
   };
   const workspaces: WorkspaceService = {
     create: ({ assignmentId }) =>
-      Effect.succeed({
-        clonePath: "/fixture/clones/factory--fixture",
-        worktreePath: `/fixture/worktrees/${assignmentId}`,
-        worktreeGitDir: `/fixture/clones/factory--fixture/.git/worktrees/${assignmentId}`,
-        commonGitDir: "/fixture/clones/factory--fixture/.git",
-        branch: `factory/${assignmentId}`,
+      Effect.sync(() => {
+        controls.onWorkspace?.();
+        return {
+          clonePath: "/fixture/clones/factory--fixture",
+          worktreePath: `/fixture/worktrees/${assignmentId}`,
+          worktreeGitDir: `/fixture/clones/factory--fixture/.git/worktrees/${assignmentId}`,
+          commonGitDir: "/fixture/clones/factory--fixture/.git",
+          branch: `factory/${assignmentId}`,
+        };
       }),
   };
   const provider: ProviderService = {
     run: (_input, emit) =>
       Effect.gen(function* () {
-        yield* Effect.sleep("300 millis");
+        controls.onProviderRun?.();
+        if (controls.failAfterObservation) {
+          const observed = controls.failAfterObservation;
+          yield* emit({
+            type: "provider.settings.observed",
+            timestamp: scenario.now,
+            detail: {
+              ...(observed.model ? { observedModel: observed.model } : {}),
+              ...(observed.effort ? { observedEffort: observed.effort } : {}),
+            },
+            patch: {
+              ...(observed.model ? { observedModel: observed.model } : {}),
+              ...(observed.effort ? { observedEffort: observed.effort } : {}),
+            },
+          });
+          return yield* Effect.fail(
+            new FactoryError({
+              code: "observed_model_mismatch",
+              message: "Fixture observed a provider mismatch",
+            }),
+          );
+        }
+        yield* controls.beforeRunning
+          ? Effect.promise(controls.beforeRunning)
+          : Effect.sleep("300 millis");
         yield* emit({
           type: "provider.thread.started",
           timestamp: scenario.now,
@@ -70,7 +115,9 @@ export function fixtureDependencies(
             observedEffort: config.codex.reasoningEffort,
           },
         });
-        yield* Effect.sleep("700 millis");
+        yield* controls.beforeCompletion
+          ? Effect.promise(controls.beforeCompletion)
+          : Effect.sleep("700 millis");
         return {
           codexVersion: "codex-cli fixture",
           threadId: "thread-runnable",
@@ -79,7 +126,23 @@ export function fixtureDependencies(
           observedEffort: config.codex.reasoningEffort,
           finalResponse: "Opened the fixture pull request.",
           itemSummaries: [{ id: "item-1", type: "agentMessage" }],
-          tokenUsage: { inputTokens: 10, outputTokens: 5 },
+          tokenUsage: {
+            total: {
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              outputTokens: 5,
+              reasoningOutputTokens: 0,
+              totalTokens: 15,
+            },
+            last: {
+              inputTokens: 10,
+              cachedInputTokens: 0,
+              outputTokens: 5,
+              reasoningOutputTokens: 0,
+              totalTokens: 15,
+            },
+            modelContextWindow: null,
+          },
           approvalCount: 0,
           processExit: { code: 0, signal: "SIGTERM" },
         };

@@ -8,18 +8,35 @@ import {
   FactoryError,
   GitHub,
   parseWorkflow,
+  REQUIRED_ISSUE_LABELS,
 } from "@irudd-factory/application";
 import type { PullRequest } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { bunCommandRunner, type CommandRunner } from "./runner.ts";
 
 const RepositoryName = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const ForbiddenLabels = new Set([
-  "claimed",
-  "ready-for-human",
-  "epic",
-  "needs-refinement",
-]);
+const PageInfo = Schema.Struct({
+  hasNextPage: Schema.Boolean,
+  endCursor: Schema.NullOr(Schema.String),
+});
+const LabelNode = Schema.Struct({ name: Schema.String });
+const BlockerNode = Schema.Struct({ state: Schema.String });
+const IssueNode = Schema.Struct({
+  id: Schema.String,
+  number: Schema.Number,
+  url: Schema.String,
+  title: Schema.String,
+  author: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  labels: Schema.Struct({
+    nodes: Schema.Array(LabelNode),
+    pageInfo: PageInfo,
+  }),
+  blockedBy: Schema.Struct({
+    nodes: Schema.Array(BlockerNode),
+    pageInfo: PageInfo,
+  }),
+});
+type DiscoveredIssue = typeof IssueNode.Type;
 
 const DiscoveryResponse = Schema.Struct({
   data: Schema.Struct({
@@ -29,23 +46,34 @@ const DiscoveryResponse = Schema.Struct({
         target: Schema.Struct({ oid: Schema.String }),
       }),
       issues: Schema.Struct({
-        nodes: Schema.Array(
-          Schema.Struct({
-            id: Schema.String,
-            number: Schema.Number,
-            url: Schema.String,
-            title: Schema.String,
-            author: Schema.NullOr(Schema.Struct({ login: Schema.String })),
-            labels: Schema.Struct({
-              nodes: Schema.Array(Schema.Struct({ name: Schema.String })),
-            }),
-            blockedBy: Schema.Struct({
-              nodes: Schema.Array(Schema.Struct({ state: Schema.String })),
-            }),
-          }),
-        ),
+        nodes: Schema.Array(IssueNode),
+        pageInfo: PageInfo,
       }),
     }),
+  }),
+});
+const LabelsPageResponse = Schema.Struct({
+  data: Schema.Struct({
+    node: Schema.NullOr(
+      Schema.Struct({
+        labels: Schema.Struct({
+          nodes: Schema.Array(LabelNode),
+          pageInfo: PageInfo,
+        }),
+      }),
+    ),
+  }),
+});
+const BlockersPageResponse = Schema.Struct({
+  data: Schema.Struct({
+    node: Schema.NullOr(
+      Schema.Struct({
+        blockedBy: Schema.Struct({
+          nodes: Schema.Array(BlockerNode),
+          pageInfo: PageInfo,
+        }),
+      }),
+    ),
   }),
 });
 
@@ -56,52 +84,111 @@ const WorkflowResponse = Schema.Struct({
   content: Schema.String,
 });
 const LabelsResponse = Schema.Array(Schema.Struct({ name: Schema.String }));
+const IssueLabelsResponse = Schema.Struct({
+  labels: Schema.Array(Schema.Struct({ name: Schema.String })),
+});
+const ClosingIssueNode = Schema.Struct({
+  number: Schema.Number,
+  repository: Schema.Struct({ nameWithOwner: Schema.String }),
+});
+const PullRequestNode = Schema.Struct({
+  id: Schema.String,
+  number: Schema.Number,
+  url: Schema.String,
+  isDraft: Schema.Boolean,
+  headRefName: Schema.String,
+  closingIssuesReferences: Schema.Struct({
+    nodes: Schema.Array(ClosingIssueNode),
+    pageInfo: PageInfo,
+  }),
+});
+type PullRequestNode = typeof PullRequestNode.Type;
 const PullRequestsResponse = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
       pullRequests: Schema.Struct({
-        nodes: Schema.Array(
-          Schema.Struct({
-            number: Schema.Number,
-            url: Schema.String,
-            isDraft: Schema.Boolean,
-            headRefName: Schema.String,
-            closingIssuesReferences: Schema.Struct({
-              nodes: Schema.Array(
-                Schema.Struct({
-                  number: Schema.Number,
-                  repository: Schema.Struct({ nameWithOwner: Schema.String }),
-                }),
-              ),
-            }),
-          }),
-        ),
+        nodes: Schema.Array(PullRequestNode),
+        pageInfo: PageInfo,
       }),
     }),
   }),
 });
+const ClosingIssuesPageResponse = Schema.Struct({
+  data: Schema.Struct({
+    node: Schema.NullOr(
+      Schema.Struct({
+        closingIssuesReferences: Schema.Struct({
+          nodes: Schema.Array(ClosingIssueNode),
+          pageInfo: PageInfo,
+        }),
+      }),
+    ),
+  }),
+});
 
-const DISCOVERY_QUERY = `query($owner: String!, $name: String!) {
+const DISCOVERY_QUERY = `query($owner: String!, $name: String!, $issueCursor: String) {
   repository(owner: $owner, name: $name) {
     defaultBranchRef { name target { oid } }
-    issues(first: 100, states: OPEN, labels: ["ready-for-agent"]) {
+    issues(first: 100, after: $issueCursor, states: OPEN, labels: ${JSON.stringify(REQUIRED_ISSUE_LABELS)}) {
       nodes {
         id number url title author { login }
-        labels(first: 100) { nodes { name } }
-        blockedBy(first: 100) { nodes { state } }
+        labels(first: 100) {
+          nodes { name }
+          pageInfo { hasNextPage endCursor }
+        }
+        blockedBy(first: 100) {
+          nodes { state }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+const LABELS_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on Issue {
+      labels(first: 100, after: $cursor) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
 }`;
 
-const PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: String!) {
+const BLOCKERS_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on Issue {
+      blockedBy(first: 100, after: $cursor) {
+        nodes { state }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
+const PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: String!, $pullCursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(first: 50, states: OPEN, headRefName: $branch) {
+    pullRequests(first: 50, after: $pullCursor, states: OPEN, headRefName: $branch) {
       nodes {
-        number url isDraft headRefName
+        id number url isDraft headRefName
         closingIssuesReferences(first: 50) {
           nodes { number repository { nameWithOwner } }
+          pageInfo { hasNextPage endCursor }
         }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+const CLOSING_ISSUES_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on PullRequest {
+      closingIssuesReferences(first: 50, after: $cursor) {
+        nodes { number repository { nameWithOwner } }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -147,27 +234,163 @@ async function checked(
   return result.stdout;
 }
 
+async function graphql(
+  runner: CommandRunner,
+  query: string,
+  variables: Readonly<Record<string, string>>,
+): Promise<string> {
+  const args = ["gh", "api", "graphql", "-f", `query=${query}`];
+  for (const [name, value] of Object.entries(variables)) {
+    args.push("-F", `${name}=${value}`);
+  }
+  return checked(runner, args);
+}
+
+function nextCursor(
+  pageInfo: typeof PageInfo.Type,
+  connection: string,
+): string | null {
+  if (!pageInfo.hasNextPage) return null;
+  if (!pageInfo.endCursor) {
+    throw new FactoryError({
+      code: "github_response_invalid",
+      message: `GitHub returned no cursor for paginated ${connection}`,
+    });
+  }
+  return pageInfo.endCursor;
+}
+
+async function allLabels(
+  runner: CommandRunner,
+  issue: DiscoveredIssue,
+): Promise<ReadonlyArray<string>> {
+  const labels = issue.labels.nodes.map(({ name }) => name);
+  let cursor = nextCursor(issue.labels.pageInfo, "labels");
+  while (cursor) {
+    const response = decodeJson(
+      LabelsPageResponse,
+      await graphql(runner, LABELS_PAGE_QUERY, { id: issue.id, cursor }),
+    );
+    if (!response.data.node) {
+      throw new FactoryError({
+        code: "github_response_invalid",
+        message: `GitHub issue node ${issue.id} disappeared during label pagination`,
+      });
+    }
+    labels.push(...response.data.node.labels.nodes.map(({ name }) => name));
+    cursor = nextCursor(response.data.node.labels.pageInfo, "labels");
+  }
+  return labels;
+}
+
+async function allBlockerStates(
+  runner: CommandRunner,
+  issue: DiscoveredIssue,
+): Promise<ReadonlyArray<string>> {
+  const states = issue.blockedBy.nodes.map(({ state }) => state);
+  let cursor = nextCursor(issue.blockedBy.pageInfo, "blockers");
+  while (cursor) {
+    const response = decodeJson(
+      BlockersPageResponse,
+      await graphql(runner, BLOCKERS_PAGE_QUERY, { id: issue.id, cursor }),
+    );
+    if (!response.data.node) {
+      throw new FactoryError({
+        code: "github_response_invalid",
+        message: `GitHub issue node ${issue.id} disappeared during blocker pagination`,
+      });
+    }
+    states.push(
+      ...response.data.node.blockedBy.nodes.map(({ state }) => state),
+    );
+    cursor = nextCursor(response.data.node.blockedBy.pageInfo, "blockers");
+  }
+  return states;
+}
+
+function includesClosingIssue(
+  nodes: ReadonlyArray<typeof ClosingIssueNode.Type>,
+  repository: string,
+  issueNumber: number,
+): boolean {
+  return nodes.some(
+    (issue) =>
+      issue.number === issueNumber &&
+      issue.repository.nameWithOwner === repository,
+  );
+}
+
+async function pullClosesIssue(
+  runner: CommandRunner,
+  pull: PullRequestNode,
+  repository: string,
+  issueNumber: number,
+): Promise<boolean> {
+  if (
+    includesClosingIssue(
+      pull.closingIssuesReferences.nodes,
+      repository,
+      issueNumber,
+    )
+  ) {
+    return true;
+  }
+  let cursor = nextCursor(
+    pull.closingIssuesReferences.pageInfo,
+    "closing issues",
+  );
+  while (cursor) {
+    const response = decodeJson(
+      ClosingIssuesPageResponse,
+      await graphql(runner, CLOSING_ISSUES_PAGE_QUERY, {
+        id: pull.id,
+        cursor,
+      }),
+    );
+    if (!response.data.node) {
+      throw new FactoryError({
+        code: "github_response_invalid",
+        message: `GitHub pull request node ${pull.id} disappeared during closing-issue pagination`,
+      });
+    }
+    const page = response.data.node.closingIssuesReferences;
+    if (includesClosingIssue(page.nodes, repository, issueNumber)) return true;
+    cursor = nextCursor(page.pageInfo, "closing issues");
+  }
+  return false;
+}
+
 function makeService(runner: CommandRunner): GitHubService {
   return {
     discoverCandidates: (repository) =>
       Effect.tryPromise({
         try: async () => {
           const [owner, name] = splitRepository(repository);
-          const discovery = decodeJson(
-            DiscoveryResponse,
-            await checked(runner, [
-              "gh",
-              "api",
-              "graphql",
-              "-f",
-              `query=${DISCOVERY_QUERY}`,
-              "-F",
-              `owner=${owner}`,
-              "-F",
-              `name=${name}`,
-            ]),
-          );
-          const commit = discovery.data.repository.defaultBranchRef.target.oid;
+          const issues: DiscoveredIssue[] = [];
+          let issueCursor: string | null = null;
+          let commit: string | null = null;
+          do {
+            const discovery = decodeJson(
+              DiscoveryResponse,
+              await graphql(runner, DISCOVERY_QUERY, {
+                owner,
+                name,
+                ...(issueCursor ? { issueCursor } : {}),
+              }),
+            );
+            commit ??= discovery.data.repository.defaultBranchRef.target.oid;
+            issues.push(...discovery.data.repository.issues.nodes);
+            issueCursor = nextCursor(
+              discovery.data.repository.issues.pageInfo,
+              "issues",
+            );
+          } while (issueCursor);
+          if (!commit) {
+            throw new FactoryError({
+              code: "github_response_invalid",
+              message: "GitHub returned no default branch commit",
+            });
+          }
           const workflowPayload = decodeJson(
             WorkflowResponse,
             await checked(runner, [
@@ -185,14 +408,19 @@ function makeService(runner: CommandRunner): GitHubService {
             "base64",
           ).toString("utf8");
           const workflow = parseWorkflow(source);
+          const requiredLabels = new Set(workflow.policy.requiredLabels);
+          const forbiddenLabels = new Set(workflow.policy.forbiddenLabels);
 
           const candidates: Candidate[] = [];
-          for (const issue of discovery.data.repository.issues.nodes) {
-            const labels = new Set(issue.labels.nodes.map(({ name }) => name));
-            if (!labels.has("ready-for-agent")) continue;
-            if ([...ForbiddenLabels].some((label) => labels.has(label)))
+          for (const issue of issues) {
+            const labels = new Set(await allLabels(runner, issue));
+            if ([...requiredLabels].some((label) => !labels.has(label))) {
               continue;
-            if (issue.blockedBy.nodes.some(({ state }) => state !== "CLOSED")) {
+            }
+            if ([...forbiddenLabels].some((label) => labels.has(label)))
+              continue;
+            const blockerStates = await allBlockerStates(runner, issue);
+            if (blockerStates.some((state) => state !== "CLOSED")) {
               continue;
             }
             if (!issue.author) continue;
@@ -264,15 +492,18 @@ function makeService(runner: CommandRunner): GitHubService {
         }
 
         try {
-          const read = await checked(runner, [
+          const read = await runner.run([
             "gh",
             "api",
-            `repos/${issue.repository}/issues/${issue.number}/labels`,
+            `repos/${issue.repository}/issues/${issue.number}`,
           ]);
-          const labels = decodeJson(LabelsResponse, read);
-          return labels.some(({ name }) => name === "claimed")
-            ? "confirmed"
-            : "unclaimed";
+          if (read.exitCode === 0) {
+            const current = decodeJson(IssueLabelsResponse, read.stdout);
+            return current.labels.some(({ name }) => name === "claimed")
+              ? "confirmed"
+              : "unclaimed";
+          }
+          return "unknown";
         } catch {
           return "unknown";
         }
@@ -281,49 +512,45 @@ function makeService(runner: CommandRunner): GitHubService {
       Effect.tryPromise({
         try: async (): Promise<PullRequest> => {
           const [owner, name] = splitRepository(repository);
-          const response = decodeJson(
-            PullRequestsResponse,
-            await checked(runner, [
-              "gh",
-              "api",
-              "graphql",
-              "-f",
-              `query=${PULL_REQUEST_QUERY}`,
-              "-F",
-              `owner=${owner}`,
-              "-F",
-              `name=${name}`,
-              "-F",
-              `branch=${branch}`,
-            ]),
-          );
-          const pullRequest = response.data.repository.pullRequests.nodes.find(
-            (pull) =>
-              pull.headRefName === branch &&
-              pull.closingIssuesReferences.nodes.some(
-                (issue) =>
-                  issue.number === issueNumber &&
-                  issue.repository.nameWithOwner === repository,
-              ),
-          );
-          if (!pullRequest) {
-            throw new FactoryError({
-              code: "pull_request_unverified",
-              message: `No pull request from ${branch} closes ${repository}#${issueNumber}`,
-            });
-          }
-          return {
-            url: pullRequest.url,
-            number: pullRequest.number,
-            draft: pullRequest.isDraft,
-          };
+          let pullCursor: string | null = null;
+          do {
+            const response = decodeJson(
+              PullRequestsResponse,
+              await graphql(runner, PULL_REQUEST_QUERY, {
+                owner,
+                name,
+                branch,
+                ...(pullCursor ? { pullCursor } : {}),
+              }),
+            );
+            for (const pull of response.data.repository.pullRequests.nodes) {
+              if (
+                pull.headRefName === branch &&
+                (await pullClosesIssue(runner, pull, repository, issueNumber))
+              ) {
+                return {
+                  url: pull.url,
+                  number: pull.number,
+                  draft: pull.isDraft,
+                };
+              }
+            }
+            pullCursor = nextCursor(
+              response.data.repository.pullRequests.pageInfo,
+              "pull requests",
+            );
+          } while (pullCursor);
+          throw new FactoryError({
+            code: "pull_request_unverified",
+            message: `No pull request from ${branch} closes ${repository}#${issueNumber}`,
+          });
         },
         catch: (error) =>
           error instanceof FactoryError
             ? error
             : new FactoryError({
                 code: "pull_request_verification_failed",
-                message: String(error),
+                message: "Pull request verification failed unexpectedly",
               }),
       }),
   };

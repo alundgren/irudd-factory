@@ -27,18 +27,25 @@ export class AppServerRpc {
   private readonly pending = new Map<number | string, Pending>();
   private readonly waiters = new Set<Waiter>();
   private readonly listeners = new Set<(message: RpcMessage) => void>();
+  private failure: FactoryError | null = null;
+  private processExitExpected = false;
+  private outputDrained: Promise<void> = Promise.resolve();
   private stopped = false;
 
   constructor(
     private readonly child: ManagedProcess,
     private readonly onApproval: (message: RpcMessage) => void,
+    private readonly onFailure: (error: FactoryError) => void,
   ) {}
 
   start(): void {
-    void this.readStdout();
-    void new Response(this.child.process.stderr).text();
+    const stdout = this.readStdout();
+    const stderr = new Response(this.child.process.stderr)
+      .text()
+      .then(() => {});
+    this.outputDrained = Promise.all([stdout, stderr]).then(() => {});
     void this.child.exited.then((code) => {
-      if (!this.stopped) {
+      if (!this.stopped && !this.processExitExpected) {
         this.fail(
           new FactoryError({
             code: "provider_exited",
@@ -47,6 +54,23 @@ export class AppServerRpc {
         );
       }
     });
+  }
+
+  expectProcessExit(): void {
+    if (this.child.hasExited) {
+      this.fail(
+        new FactoryError({
+          code: "provider_exited",
+          message: "Codex App Server exited before termination",
+        }),
+      );
+      return;
+    }
+    this.processExitExpected = true;
+  }
+
+  drainOutput(): Promise<void> {
+    return this.outputDrained;
   }
 
   onMessage(listener: (message: RpcMessage) => void): () => void {
@@ -60,6 +84,15 @@ export class AppServerRpc {
     timeoutMs: number,
     timeoutCode: string,
   ): Promise<any> {
+    if (this.failure) return Promise.reject(this.failure);
+    if (this.stopped) {
+      return Promise.reject(
+        new FactoryError({
+          code: "provider_stopped",
+          message: "Codex App Server client stopped",
+        }),
+      );
+    }
     const id = this.nextId++;
     const promise = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -90,6 +123,15 @@ export class AppServerRpc {
     timeoutMs: number,
     timeoutCode: string,
   ): Promise<RpcMessage> {
+    if (this.failure) return Promise.reject(this.failure);
+    if (this.stopped) {
+      return Promise.reject(
+        new FactoryError({
+          code: "provider_stopped",
+          message: "Codex App Server client stopped",
+        }),
+      );
+    }
     return new Promise((resolve, reject) => {
       const waiter: Waiter = {
         predicate,
@@ -111,7 +153,7 @@ export class AppServerRpc {
 
   stop(): void {
     this.stopped = true;
-    this.fail(
+    this.rejectActive(
       new FactoryError({
         code: "provider_stopped",
         message: "Codex App Server client stopped",
@@ -150,7 +192,7 @@ export class AppServerRpc {
           ? error
           : new FactoryError({
               code: "provider_protocol_error",
-              message: String(error),
+              message: "Codex App Server protocol processing failed",
             }),
       );
     }
@@ -178,7 +220,7 @@ export class AppServerRpc {
         pending.reject(
           new FactoryError({
             code: "provider_rpc_error",
-            message: message.error.message ?? "Codex RPC failed",
+            message: "Codex App Server rejected the request",
           }),
         );
       } else {
@@ -202,6 +244,14 @@ export class AppServerRpc {
   }
 
   private fail(error: FactoryError): void {
+    if (!this.failure) {
+      this.failure = error;
+      this.onFailure(error);
+    }
+    this.rejectActive(this.failure);
+  }
+
+  private rejectActive(error: FactoryError): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);

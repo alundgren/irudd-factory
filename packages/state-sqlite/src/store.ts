@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import type {
   AdmissionInput,
   AssignmentPatch,
+  AdmissionResult,
   StateStoreService,
 } from "@irudd-factory/application";
 import { FactoryError, StateStore } from "@irudd-factory/application";
@@ -208,11 +209,11 @@ export function openStateStore(path: string): OpenStateStore {
       );
   }
 
-  function admitSync(input: AdmissionInput): CommandReceipt {
+  function admitSync(input: AdmissionInput): AdmissionResult {
     return database
       .transaction(() => {
         const existing = getReceiptSync(input.commandId);
-        if (existing) return existing;
+        if (existing) return { receipt: existing, created: false };
 
         const activeRow = database
           .query<AssignmentRow, [string]>(
@@ -222,11 +223,17 @@ export function openStateStore(path: string): OpenStateStore {
           )
           .get(input.provider);
         if (activeRow) {
-          return insertReceipt(
-            input.commandId,
-            { _tag: "provider_busy", assignment: decodeAssignment(activeRow) },
-            input.timestamp,
-          );
+          return {
+            receipt: insertReceipt(
+              input.commandId,
+              {
+                _tag: "provider_busy",
+                assignment: decodeAssignment(activeRow),
+              },
+              input.timestamp,
+            ),
+            created: true,
+          };
         }
 
         const unseen = input.candidates.filter((candidate) => {
@@ -239,21 +246,27 @@ export function openStateStore(path: string): OpenStateStore {
           return !found;
         });
         if (unseen.length === 0) {
-          return insertReceipt(
-            input.commandId,
-            { _tag: "no_candidate" },
-            input.timestamp,
-          );
+          return {
+            receipt: insertReceipt(
+              input.commandId,
+              { _tag: "no_candidate" },
+              input.timestamp,
+            ),
+            created: true,
+          };
         }
         if (unseen.length > 1) {
-          return insertReceipt(
-            input.commandId,
-            {
-              _tag: "selection_ambiguous",
-              issueLinks: unseen.map(({ issue }) => issue.url),
-            },
-            input.timestamp,
-          );
+          return {
+            receipt: insertReceipt(
+              input.commandId,
+              {
+                _tag: "selection_ambiguous",
+                issueLinks: unseen.map(({ issue }) => issue.url),
+              },
+              input.timestamp,
+            ),
+            created: true,
+          };
         }
 
         const candidate = unseen[0];
@@ -294,11 +307,14 @@ export function openStateStore(path: string): OpenStateStore {
           .query("UPDATE assignments SET last_event_sequence = ? WHERE id = ?")
           .run(sequence, value.id);
         const assignment = { ...value, lastEventSequence: sequence };
-        return insertReceipt(
-          input.commandId,
-          { _tag: "started", assignment },
-          input.timestamp,
-        );
+        return {
+          receipt: insertReceipt(
+            input.commandId,
+            { _tag: "started", assignment },
+            input.timestamp,
+          ),
+          created: true,
+        };
       })
       .immediate();
   }

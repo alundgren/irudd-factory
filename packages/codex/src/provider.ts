@@ -4,6 +4,8 @@ import { join, relative, resolve } from "node:path";
 import type {
   ProviderRunResult,
   ProviderService,
+  ProviderTokenUsage,
+  TokenUsageBreakdown,
 } from "@irudd-factory/application";
 import { FactoryError, Provider } from "@irudd-factory/application";
 import { Effect, Layer } from "effect";
@@ -11,6 +13,7 @@ import {
   runManagedCommand,
   spawnManaged,
   terminateOwnedGroup,
+  type ManagedProcess,
   type ProcessExit,
 } from "./process.ts";
 import { AppServerRpc, type RpcMessage } from "./rpc.ts";
@@ -29,6 +32,10 @@ export interface CodexProviderOptions {
   readonly model: string;
   readonly reasoningEffort: string;
   readonly timeouts: ProviderTimeouts;
+  readonly terminateProcessGroup?: (
+    child: ManagedProcess,
+    shutdownMs: number,
+  ) => Promise<ProcessExit>;
 }
 
 const RequiredSchemaMarkers = [
@@ -128,13 +135,81 @@ function normalizedItem(
   };
 }
 
-function numericRecord(value: unknown): Readonly<Record<string, number>> {
-  if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, number] => typeof entry[1] === "number",
-    ),
-  );
+function numericField(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): number {
+  const field = value[key];
+  if (!Number.isSafeInteger(field) || (field as number) < 0) {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: `Codex token usage has an invalid ${key}`,
+    });
+  }
+  return field as number;
+}
+
+function tokenBreakdown(value: unknown): TokenUsageBreakdown {
+  if (!value || typeof value !== "object") {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: "Codex token usage breakdown is missing",
+    });
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  return {
+    inputTokens: numericField(record, "inputTokens"),
+    cachedInputTokens: numericField(record, "cachedInputTokens"),
+    outputTokens: numericField(record, "outputTokens"),
+    reasoningOutputTokens: numericField(record, "reasoningOutputTokens"),
+    totalTokens: numericField(record, "totalTokens"),
+    ...(record.cacheWriteInputTokens === undefined
+      ? {}
+      : {
+          cacheWriteInputTokens: numericField(record, "cacheWriteInputTokens"),
+        }),
+  };
+}
+
+function normalizeTokenUsage(value: unknown): ProviderTokenUsage {
+  if (!value || typeof value !== "object") {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: "Codex token usage is missing",
+    });
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const contextWindow = record.modelContextWindow;
+  if (
+    contextWindow !== null &&
+    contextWindow !== undefined &&
+    (!Number.isSafeInteger(contextWindow) || (contextWindow as number) <= 0)
+  ) {
+    throw new FactoryError({
+      code: "provider_protocol_error",
+      message: "Codex token usage has an invalid modelContextWindow",
+    });
+  }
+  return {
+    total: tokenBreakdown(record.total),
+    last: tokenBreakdown(record.last),
+    modelContextWindow:
+      contextWindow === undefined ? null : (contextWindow as number | null),
+  };
+}
+
+function normalizeVersion(stdout: string): string {
+  const version = stdout
+    .split(/\r?\n/)
+    .find((line) => line.trim())
+    ?.trim();
+  if (!version) {
+    throw new FactoryError({
+      code: "codex_version_failed",
+      message: "codex --version returned no version",
+    });
+  }
+  return version.slice(0, 200);
 }
 
 export function makeCodexProvider(
@@ -142,6 +217,8 @@ export function makeCodexProvider(
 ): ProviderService {
   validateTimeouts(options.timeouts);
   const prefix = options.commandPrefix ?? ["codex"];
+  const terminateProcessGroup =
+    options.terminateProcessGroup ?? terminateOwnedGroup;
   if (prefix.length === 0) {
     throw new FactoryError({
       code: "provider_command_invalid",
@@ -165,9 +242,10 @@ export function makeCodexProvider(
           if (version.code !== 0) {
             throw new FactoryError({
               code: "codex_version_failed",
-              message: version.stderr.trim() || "codex --version failed",
+              message: `codex --version exited with code ${version.code}`,
             });
           }
+          const codexVersion = normalizeVersion(version.stdout);
           const schema = await runManagedCommand({
             command: [
               ...prefix,
@@ -183,7 +261,7 @@ export function makeCodexProvider(
           if (schema.code !== 0) {
             throw new FactoryError({
               code: "schema_generation_failed",
-              message: schema.stderr.trim() || "Schema generation failed",
+              message: `App Server schema generation exited with code ${schema.code}`,
             });
           }
           const schemaDigest = await inspectSchemas(schemaRoot);
@@ -198,41 +276,88 @@ export function makeCodexProvider(
           let observedModel: string | null = null;
           let observedEffort: string | null = null;
           let finalResponse = "";
-          let tokenUsage: Readonly<Record<string, number>> = {};
+          let tokenUsage: ProviderTokenUsage | null = null;
           const itemSummaries: Array<Readonly<Record<string, unknown>>> = [];
           let terminalFailure: FactoryError | null = null;
-          const rpc = new AppServerRpc(child, (message) => {
-            approvalCount += 1;
-            if (message.id !== undefined) {
-              rpc.respond(
-                message.id,
-                message.method === "item/permissions/requestApproval"
-                  ? { permissions: {} }
-                  : { decision: "cancel" },
-              );
-            }
-            terminalFailure = new FactoryError({
-              code: "approval_requested",
-              message: `Codex requested approval through ${message.method ?? "unknown"}`,
-            });
+          let resolveTerminal!: (error: FactoryError) => void;
+          const terminalSignal = new Promise<FactoryError>((resolve) => {
+            resolveTerminal = resolve;
           });
+          const recordTerminal = (error: FactoryError): void => {
+            if (terminalFailure) return;
+            terminalFailure = error;
+            resolveTerminal(error);
+          };
+          const throwIfTerminal = (): void => {
+            if (terminalFailure) throw terminalFailure;
+          };
+          const guardTerminal = async <A>(
+            operation: () => Promise<A>,
+          ): Promise<A> => {
+            throwIfTerminal();
+            const result = await operation();
+            throwIfTerminal();
+            return result;
+          };
+          const raceTerminal = async <A>(
+            operation: () => Promise<A>,
+          ): Promise<A> => {
+            throwIfTerminal();
+            const result = await Promise.race([
+              operation(),
+              terminalSignal.then((error) => Promise.reject(error)),
+            ]);
+            throwIfTerminal();
+            return result;
+          };
+          const rpc = new AppServerRpc(
+            child,
+            (message) => {
+              approvalCount += 1;
+              if (message.id !== undefined) {
+                rpc.respond(
+                  message.id,
+                  message.method === "item/permissions/requestApproval"
+                    ? { permissions: {} }
+                    : { decision: "cancel" },
+                );
+              }
+              recordTerminal(
+                new FactoryError({
+                  code: "approval_requested",
+                  message: `Codex requested approval through ${message.method ?? "unknown"}`,
+                }),
+              );
+            },
+            recordTerminal,
+          );
           const unsubscribe = rpc.onMessage((message) => {
             if (message.method === "model/rerouted") {
               reroutes.push({
-                ...(message.params ?? {}),
+                ...(stringAt(message.params, "fromModel")
+                  ? { fromModel: stringAt(message.params, "fromModel") }
+                  : {}),
+                ...(stringAt(message.params, "toModel")
+                  ? { toModel: stringAt(message.params, "toModel") }
+                  : {}),
+                ...(stringAt(message.params, "reason")
+                  ? { reason: stringAt(message.params, "reason") }
+                  : {}),
               });
-              terminalFailure = new FactoryError({
-                code: "model_rerouted",
-                message: "Codex rerouted the requested model",
-              });
+              recordTerminal(
+                new FactoryError({
+                  code: "model_rerouted",
+                  message: "Codex rerouted the requested model",
+                }),
+              );
             }
             if (message.method === "error") {
-              terminalFailure = new FactoryError({
-                code: "provider_error_notification",
-                message:
-                  stringAt(message.params, "message") ??
-                  "Codex emitted an error notification",
-              });
+              recordTerminal(
+                new FactoryError({
+                  code: "provider_error_notification",
+                  message: "Codex emitted an error notification",
+                }),
+              );
             }
             if (message.method === "thread/settings/updated") {
               observedModel =
@@ -260,43 +385,48 @@ export function makeCodexProvider(
               }
             }
             if (message.method === "thread/tokenUsage/updated") {
-              tokenUsage = numericRecord(
-                message.params?.tokenUsage ?? message.params?.usage,
-              );
+              tokenUsage = normalizeTokenUsage(message.params?.tokenUsage);
             }
           });
           rpc.start();
           let processExit: ProcessExit | null = null;
+          let cleanupDeadline: number | null = null;
           try {
-            await Effect.runPromise(
-              emit({
-                type: "provider.process.started",
-                timestamp: new Date().toISOString(),
-                detail: { pid: child.pid, schemaDigest },
-                patch: { codexVersion: version.stdout.trim() },
-              }),
+            await guardTerminal(() =>
+              Effect.runPromise(
+                emit({
+                  type: "provider.process.started",
+                  timestamp: new Date().toISOString(),
+                  detail: { pid: child.pid, schemaDigest },
+                  patch: { codexVersion },
+                }),
+              ),
             );
-            await rpc.request(
-              "initialize",
-              {
-                clientInfo: {
-                  name: "irudd_factory",
-                  title: "Irudd Factory",
-                  version: "0.1.0",
+            await raceTerminal(() =>
+              rpc.request(
+                "initialize",
+                {
+                  clientInfo: {
+                    name: "irudd_factory",
+                    title: "Irudd Factory",
+                    version: "0.1.0",
+                  },
+                  capabilities: { experimentalApi: true },
                 },
-                capabilities: { experimentalApi: true },
-              },
-              options.timeouts.childStartupMs,
-              "child_startup_timeout",
+                options.timeouts.childStartupMs,
+                "child_startup_timeout",
+              ),
             );
-            rpc.notify("initialized", {});
+            await guardTerminal(async () => rpc.notify("initialized", {}));
             let models: unknown;
             try {
-              models = await rpc.request(
-                "model/list",
-                { limit: 100, includeHidden: true },
-                options.timeouts.modelSchemaMs,
-                "model_schema_timeout",
+              models = await raceTerminal(() =>
+                rpc.request(
+                  "model/list",
+                  { limit: 100, includeHidden: true },
+                  options.timeouts.modelSchemaMs,
+                  "model_schema_timeout",
+                ),
               );
             } catch (error) {
               if (
@@ -318,17 +448,19 @@ export function makeCodexProvider(
                 message: `${options.model} with ${options.reasoningEffort} effort is unavailable`,
               });
             }
-            const thread = await rpc.request(
-              "thread/start",
-              {
-                model: options.model,
-                cwd: input.workspace.worktreePath,
-                approvalPolicy: "never",
-                sandbox: "workspace-write",
-                serviceName: "irudd_factory",
-              },
-              options.timeouts.initializationMs,
-              "initialization_timeout",
+            const thread = await raceTerminal(() =>
+              rpc.request(
+                "thread/start",
+                {
+                  model: options.model,
+                  cwd: input.workspace.worktreePath,
+                  approvalPolicy: "never",
+                  sandbox: "workspace-write",
+                  serviceName: "irudd_factory",
+                },
+                options.timeouts.initializationMs,
+                "initialization_timeout",
+              ),
             );
             threadId = stringAt(thread, "thread", "id");
             observedModel =
@@ -340,6 +472,26 @@ export function makeCodexProvider(
                 message: "thread/start returned no thread ID",
               });
             }
+            const activeThreadId = threadId;
+            await guardTerminal(() =>
+              Effect.runPromise(
+                emit({
+                  type: "provider.settings.observed",
+                  timestamp: new Date().toISOString(),
+                  detail: {
+                    threadId: activeThreadId,
+                    ...(observedModel ? { observedModel } : {}),
+                    ...(observedEffort ? { observedEffort } : {}),
+                  },
+                  patch: {
+                    threadId: activeThreadId,
+                    codexVersion,
+                    ...(observedModel ? { observedModel } : {}),
+                    ...(observedEffort ? { observedEffort } : {}),
+                  },
+                }),
+              ),
+            );
             if (observedModel !== options.model) {
               throw new FactoryError({
                 code: "observed_model_mismatch",
@@ -355,55 +507,55 @@ export function makeCodexProvider(
                 message: `Requested ${options.reasoningEffort}, observed ${observedEffort}`,
               });
             }
-            await Effect.runPromise(
-              emit({
-                type: "provider.thread.started",
-                timestamp: new Date().toISOString(),
-                detail: { threadId, schemaDigest },
-                patch: {
-                  state: "running",
-                  threadId,
-                  codexVersion: version.stdout.trim(),
-                  ...(observedModel ? { observedModel } : {}),
-                  ...(observedEffort ? { observedEffort } : {}),
-                },
-              }),
+            await guardTerminal(() =>
+              Effect.runPromise(
+                emit({
+                  type: "provider.thread.started",
+                  timestamp: new Date().toISOString(),
+                  detail: { threadId: activeThreadId, schemaDigest },
+                  patch: {
+                    state: "running",
+                    threadId: activeThreadId,
+                    codexVersion,
+                    ...(observedModel ? { observedModel } : {}),
+                    ...(observedEffort ? { observedEffort } : {}),
+                  },
+                }),
+              ),
             );
-            const completion = rpc.waitFor(
-              (message) =>
-                message.method === "turn/completed" ||
-                message.method === "model/rerouted" ||
-                message.method === "error" ||
-                (message.id !== undefined &&
-                  Boolean(
-                    message.method?.toLowerCase().includes("requestapproval"),
-                  )),
-              options.timeouts.turnMs,
-              "turn_completion_timeout",
+            const completion = raceTerminal(() =>
+              rpc.waitFor(
+                (message) => message.method === "turn/completed",
+                options.timeouts.turnMs,
+                "turn_completion_timeout",
+              ),
             );
-            const turn = await rpc.request(
-              "turn/start",
-              {
-                threadId,
-                input: [{ type: "text", text: input.prompt }],
-                cwd: input.workspace.worktreePath,
-                approvalPolicy: "never",
-                sandboxPolicy: {
-                  type: "workspaceWrite",
-                  writableRoots: [
-                    input.workspace.worktreePath,
-                    input.workspace.worktreeGitDir,
-                    input.workspace.commonGitDir,
-                  ],
-                  networkAccess: true,
-                  excludeSlashTmp: true,
-                  excludeTmpdirEnvVar: true,
+            void completion.catch(() => {});
+            const turn = await raceTerminal(() =>
+              rpc.request(
+                "turn/start",
+                {
+                  threadId: activeThreadId,
+                  input: [{ type: "text", text: input.prompt }],
+                  cwd: input.workspace.worktreePath,
+                  approvalPolicy: "never",
+                  sandboxPolicy: {
+                    type: "workspaceWrite",
+                    writableRoots: [
+                      input.workspace.worktreePath,
+                      input.workspace.worktreeGitDir,
+                      input.workspace.commonGitDir,
+                    ],
+                    networkAccess: true,
+                    excludeSlashTmp: true,
+                    excludeTmpdirEnvVar: true,
+                  },
+                  model: options.model,
+                  effort: options.reasoningEffort,
                 },
-                model: options.model,
-                effort: options.reasoningEffort,
-              },
-              options.timeouts.initializationMs,
-              "initialization_timeout",
+                options.timeouts.initializationMs,
+                "initialization_timeout",
+              ),
             );
             turnId = stringAt(turn, "turn", "id");
             if (!turnId) {
@@ -412,16 +564,19 @@ export function makeCodexProvider(
                 message: "turn/start returned no turn ID",
               });
             }
-            await Effect.runPromise(
-              emit({
-                type: "provider.turn.started",
-                timestamp: new Date().toISOString(),
-                detail: { turnId },
-                patch: { turnId },
-              }),
+            const activeTurnId = turnId;
+            await guardTerminal(() =>
+              Effect.runPromise(
+                emit({
+                  type: "provider.turn.started",
+                  timestamp: new Date().toISOString(),
+                  detail: { turnId: activeTurnId },
+                  patch: { turnId: activeTurnId },
+                }),
+              ),
             );
             const completed = await completion;
-            if (terminalFailure) throw terminalFailure;
+            throwIfTerminal();
             if (completed.method === "model/rerouted") {
               throw new FactoryError({
                 code: "model_rerouted",
@@ -436,22 +591,55 @@ export function makeCodexProvider(
                 message: `Codex turn finished with ${status}`,
               });
             }
+            await guardTerminal(() =>
+              Effect.runPromise(
+                emit({
+                  type: "provider.settings.observed",
+                  timestamp: new Date().toISOString(),
+                  detail: {
+                    ...(observedModel ? { observedModel } : {}),
+                    ...(observedEffort ? { observedEffort } : {}),
+                  },
+                  patch: {
+                    ...(observedModel ? { observedModel } : {}),
+                    ...(observedEffort ? { observedEffort } : {}),
+                  },
+                }),
+              ),
+            );
             if (observedModel !== options.model) {
               throw new FactoryError({
                 code: "observed_model_mismatch",
                 message: `Requested ${options.model}, observed ${observedModel ?? "none"}`,
               });
             }
-            observedEffort ??= options.reasoningEffort;
+            if (observedEffort === null) {
+              throw new FactoryError({
+                code: "observed_effort_missing",
+                message: "Codex did not report the observed reasoning effort",
+              });
+            }
             if (observedEffort !== options.reasoningEffort) {
               throw new FactoryError({
                 code: "observed_effort_mismatch",
                 message: `Requested ${options.reasoningEffort}, observed ${observedEffort}`,
               });
             }
-            processExit = await terminateOwnedGroup(
-              child,
-              options.timeouts.shutdownMs,
+            if (!tokenUsage) {
+              throw new FactoryError({
+                code: "token_usage_missing",
+                message: "Codex completed without token usage",
+              });
+            }
+            throwIfTerminal();
+            cleanupDeadline = Date.now() + options.timeouts.shutdownMs;
+            rpc.expectProcessExit();
+            throwIfTerminal();
+            processExit = await guardTerminal(() =>
+              terminateProcessGroup(
+                child,
+                Math.max(0, cleanupDeadline! - Date.now()),
+              ),
             );
             if (processExit.cleanupTimedOut) {
               throw new FactoryError({
@@ -459,8 +647,10 @@ export function makeCodexProvider(
                 message: "Codex process group did not exit before shutdownMs",
               });
             }
-            return {
-              codexVersion: version.stdout.trim(),
+            await guardTerminal(() => rpc.drainOutput());
+            throwIfTerminal();
+            const result: ProviderRunResult = {
+              codexVersion,
               threadId,
               turnId,
               observedModel,
@@ -475,27 +665,34 @@ export function makeCodexProvider(
                 schemaDigest,
               },
             };
+            throwIfTerminal();
+            return result;
           } catch (primary) {
-            const cleanupDeadline = Date.now() + options.timeouts.shutdownMs;
-            if (threadId && turnId && !child.hasExited) {
-              try {
-                await rpc.request(
-                  "turn/interrupt",
-                  { threadId, turnId },
-                  Math.min(
-                    options.timeouts.initializationMs,
-                    Math.max(1, Math.floor(options.timeouts.shutdownMs / 2)),
-                  ),
-                  "interrupt_timeout",
-                );
-              } catch {
-                // The primary failure remains authoritative.
+            cleanupDeadline ??= Date.now() + options.timeouts.shutdownMs;
+            if (!processExit && threadId && turnId && !child.hasExited) {
+              const interruptMs = Math.min(
+                options.timeouts.initializationMs,
+                Math.max(0, cleanupDeadline - Date.now()),
+                Math.max(1, Math.floor(options.timeouts.shutdownMs / 2)),
+              );
+              if (interruptMs > 0) {
+                try {
+                  await rpc.request(
+                    "turn/interrupt",
+                    { threadId, turnId },
+                    interruptMs,
+                    "interrupt_timeout",
+                  );
+                } catch {
+                  // The primary failure remains authoritative.
+                }
               }
             }
-            processExit ??= await terminateOwnedGroup(
-              child,
-              Math.max(1, cleanupDeadline - Date.now()),
-            );
+            if (!processExit) {
+              rpc.expectProcessExit();
+              const remainingMs = Math.max(0, cleanupDeadline - Date.now());
+              processExit = await terminateProcessGroup(child, remainingMs);
+            }
             try {
               await Effect.runPromise(
                 emit({
@@ -510,6 +707,7 @@ export function makeCodexProvider(
                     reroutes,
                     itemSummaries,
                     tokenUsage,
+                    finalResponse,
                     processExit,
                   },
                 }),
@@ -526,7 +724,7 @@ export function makeCodexProvider(
                 message:
                   primary instanceof FactoryError
                     ? primary.message
-                    : String(primary),
+                    : "Codex provider failed unexpectedly",
                 detail: "cleanup_timeout",
               });
             }
@@ -541,7 +739,7 @@ export function makeCodexProvider(
             ? error
             : new FactoryError({
                 code: "provider_failed",
-                message: String(error),
+                message: "Codex provider failed unexpectedly",
               }),
       }),
   };

@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { buildAssignmentPrompt, parseWorkflow } from "../src/index.ts";
 
 const source = `---
-poll_interval: 5m
 required_labels: [ready-for-agent]
-concurrency: 1
+forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
 runtime: bun
 test: bun test
 ---
@@ -14,9 +13,25 @@ describe("workflow policy", () => {
   test("validates policy and hashes the exact blob bytes", () => {
     const parsed = parseWorkflow(source);
     expect(parsed.policy.requiredLabels).toEqual(["ready-for-agent"]);
-    expect(parsed.policy.concurrency).toBe(1);
+    expect(parsed.policy.forbiddenLabels).toEqual([
+      "claimed",
+      "ready-for-human",
+      "epic",
+      "needs-refinement",
+    ]);
     expect(parsed.digest).toHaveLength(64);
     expect(parseWorkflow(`${source}\n`).digest).not.toBe(parsed.digest);
+  });
+
+  test("accepts the checked-in repository policy", async () => {
+    const parsed = parseWorkflow(await Bun.file("WORKFLOW.md").text());
+    expect(parsed.policy.requiredLabels).toEqual(["ready-for-agent"]);
+    expect(parsed.policy.forbiddenLabels).toEqual([
+      "claimed",
+      "ready-for-human",
+      "epic",
+      "needs-refinement",
+    ]);
   });
 
   test("builds the narrow preclaimed prompt", () => {
@@ -34,5 +49,19 @@ describe("workflow policy", () => {
     expect(() => parseWorkflow("No front matter")).toThrow(
       "needs YAML front matter",
     );
+  });
+
+  test("rejects unsupported and ineffective policy", () => {
+    expect(() =>
+      parseWorkflow(source.replace("runtime: bun", "poll_interval: 5m")),
+    ).toThrow("unsupported policy key poll_interval");
+    expect(() =>
+      parseWorkflow(
+        source.replace(
+          "required_labels: [ready-for-agent]",
+          "required_labels: [another-label]",
+        ),
+      ),
+    ).toThrow("required_labels must be [ready-for-agent]");
   });
 });

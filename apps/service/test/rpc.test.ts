@@ -52,6 +52,28 @@ async function waitForRpc(url: string): Promise<void> {
   throw new Error("RPC service did not start");
 }
 
+function gate() {
+  let release!: () => void;
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { wait: () => opened, release };
+}
+
+async function waitForAssignmentState(
+  url: string,
+  state: "reserved" | "starting" | "running" | "completed" | "failed",
+): Promise<Awaited<ReturnType<typeof getFactorySnapshot>>> {
+  const deadline = Date.now() + 3_000;
+  let snapshot = await getFactorySnapshot(url);
+  while (snapshot.assignment?.state !== state && Date.now() < deadline) {
+    await Bun.sleep(20);
+    snapshot = await getFactorySnapshot(url);
+  }
+  expect(snapshot.assignment?.state).toBe(state);
+  return snapshot;
+}
+
 describe("Factory RPC service", () => {
   test("takes one fake issue through a durable completed pull request", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-test-"));
@@ -71,29 +93,34 @@ describe("Factory RPC service", () => {
         shutdownMs: 1_000,
       },
     };
+    const enterRunning = gate();
+    const finish = gate();
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, "runnable"),
+      fixtureDependencies(config, "runnable", {
+        beforeRunning: enterRunning.wait,
+        beforeCompletion: finish.wait,
+      }),
     );
     stops.push(service.stop);
     const rpcUrl = `${service.url}/rpc`;
     await waitForRpc(rpcUrl);
+    const consoleResponse = await fetch(service.url);
+    expect(consoleResponse.status).toBe(200);
+    expect(await consoleResponse.text()).toContain(
+      "<title>Irudd Factory</title>",
+    );
 
     const receipt = await runNextEligibleIssue(rpcUrl, "command-1");
     expect(receipt.result._tag).toBe("started");
     const replay = await runNextEligibleIssue(rpcUrl, "command-1");
     expect(replay).toEqual(receipt);
 
-    let snapshot = await getFactorySnapshot(rpcUrl);
-    const deadline = Date.now() + 4_000;
-    while (
-      snapshot.assignment?.state !== "completed" &&
-      Date.now() < deadline
-    ) {
-      await Bun.sleep(50);
-      snapshot = await getFactorySnapshot(rpcUrl);
-    }
-    expect(snapshot.assignment?.state).toBe("completed");
+    await waitForAssignmentState(rpcUrl, "starting");
+    enterRunning.release();
+    await waitForAssignmentState(rpcUrl, "running");
+    finish.release();
+    const snapshot = await waitForAssignmentState(rpcUrl, "completed");
     expect(snapshot.assignment?.pullRequest).toEqual({
       url: "https://github.com/factory/fixture/pull/99",
       number: 99,
@@ -110,6 +137,96 @@ describe("Factory RPC service", () => {
 
     const afterHistory = await runNextEligibleIssue(rpcUrl, "command-2");
     expect(afterHistory.result._tag).toBe("no_candidate");
+  });
+
+  test("starts side effects once for concurrent replay of one command", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-replay-race-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repository: "factory/fixture",
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: await availablePort(),
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const enterRunning = gate();
+    const finish = gate();
+    const calls = { claim: 0, workspace: 0, provider: 0 };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, "runnable", {
+        beforeRunning: enterRunning.wait,
+        beforeCompletion: finish.wait,
+        onClaim: () => calls.claim++,
+        onWorkspace: () => calls.workspace++,
+        onProviderRun: () => calls.provider++,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+
+    const receipts = await Promise.all([
+      runNextEligibleIssue(rpcUrl, "same-command"),
+      runNextEligibleIssue(rpcUrl, "same-command"),
+    ]);
+    expect(receipts[0]).toEqual(receipts[1]);
+    await waitForAssignmentState(rpcUrl, "starting");
+    expect(calls).toEqual({ claim: 1, workspace: 1, provider: 1 });
+
+    enterRunning.release();
+    await waitForAssignmentState(rpcUrl, "running");
+    finish.release();
+    await waitForAssignmentState(rpcUrl, "completed");
+    expect(calls).toEqual({ claim: 1, workspace: 1, provider: 1 });
+  });
+
+  test("persists observed provider values before mismatch failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-mismatch-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repository: "factory/fixture",
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: await availablePort(),
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, "runnable", {
+        failAfterObservation: {
+          model: "unexpected-model",
+          effort: "high",
+        },
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+    await runNextEligibleIssue(rpcUrl, "mismatch-command");
+
+    const snapshot = await waitForAssignmentState(rpcUrl, "failed");
+    expect(snapshot.assignment).toMatchObject({
+      observedModel: "unexpected-model",
+      observedEffort: "high",
+      error: { code: "observed_model_mismatch" },
+    });
   });
 
   test("returns every command result through the same RPC", async () => {

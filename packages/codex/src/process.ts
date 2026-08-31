@@ -93,7 +93,7 @@ export async function terminateOwnedGroup(
   }
   const deadline = Date.now() + shutdownMs;
   signal(child, "SIGTERM");
-  const termWait = Math.min(250, Math.max(1, Math.floor(shutdownMs / 2)));
+  const termWait = Math.min(250, Math.max(0, Math.floor(shutdownMs / 2)));
   const graceful = await waitUntil(child, termWait);
   if (graceful !== null) {
     return { code: graceful, signal: "SIGTERM", cleanupTimedOut: false };
