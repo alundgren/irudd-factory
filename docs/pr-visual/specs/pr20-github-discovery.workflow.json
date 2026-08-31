@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "PR #20: pinned GitHub discovery",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1100, 900],
+    "views": [
+      { "id": "policy-and-issue", "label": "Pinned policy", "focus": ["issues", "commit", "workflow", "labels", "blockers", "permission", "candidate"], "note": "Candidate data and WORKFLOW.md are tied to the resolved default-branch commit." },
+      { "id": "eligibility-gates", "label": "Eligibility gates", "focus": ["labels", "blockers", "permission", "labelRejected", "blockerRejected", "permissionRejected"], "note": "A forbidden label, open blocker, missing author, or insufficient permission removes the issue." }
+    ]
+  },
+  "lanes": [
+    { "id": "github", "label": "GitHub reads" },
+    { "id": "policy", "label": "Policy revision" },
+    { "id": "gates", "label": "Eligibility checks" },
+    { "id": "accepted", "label": "Accepted" },
+    { "id": "outcome", "label": "Excluded", "variant": "exception" }
+  ],
+  "mainPath": ["issues", "commit", "workflow", "labels", "blockers", "permission", "candidate"],
+  "nodes": [
+    { "id": "issues", "lane": "github", "col": 0, "type": "cloud", "label": "Issues", "width": 68 },
+    { "id": "commit", "lane": "policy", "col": 1, "type": "security", "label": "Commit", "width": 64 },
+    { "id": "workflow", "lane": "policy", "col": 2, "type": "backend", "label": "Policy", "width": 64 },
+    { "id": "labels", "lane": "gates", "col": 3, "type": "security", "label": "Labels", "width": 52 },
+    { "id": "blockers", "lane": "gates", "col": 4, "type": "security", "label": "Blocks", "width": 52 },
+    { "id": "permission", "lane": "gates", "col": 5, "type": "security", "label": "Author", "width": 68 },
+    { "id": "candidate", "lane": "accepted", "col": 5, "type": "backend", "label": "Candidate", "width": 68 },
+    { "id": "labelRejected", "lane": "outcome", "col": 3, "type": "external", "label": "Out", "width": 52 },
+    { "id": "blockerRejected", "lane": "outcome", "col": 4, "type": "external", "label": "Out", "width": 52 },
+    { "id": "permissionRejected", "lane": "outcome", "col": 5, "type": "external", "label": "Out", "width": 52 }
+  ],
+  "edges": [
+    { "id": "resolve-commit", "from": "issues", "to": "commit", "role": "main", "variant": "emphasis" },
+    { "id": "read-policy", "from": "commit", "to": "workflow", "role": "main", "route": "bottom-channel" },
+    { "id": "apply-labels", "from": "workflow", "to": "labels", "role": "main" },
+    { "id": "apply-blockers", "from": "labels", "to": "blockers", "role": "main", "route": "bottom-channel" },
+    { "id": "apply-permission", "from": "blockers", "to": "permission", "role": "main" },
+    { "id": "emit-candidate", "from": "permission", "to": "candidate", "role": "main", "variant": "emphasis" },
+    { "id": "label-reject", "from": "labels", "to": "labelRejected", "role": "branch", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "blocker-reject", "from": "blockers", "to": "blockerRejected", "role": "branch", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "permission-reject", "from": "permission", "to": "permissionRejected", "role": "branch", "variant": "security", "fromSide": "right", "toSide": "right", "route": "outside-right" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Immutable input", "items": ["The candidate stores the default-branch commit and workflow identity", "Later worktree and prompt creation use that stored revision"] },
+    { "dot": "rose", "title": "Boundary checks", "items": ["The adapter validates every GitHub response before using it", "Only issue authors with write, maintain, or admin permission pass"] }
+  ]
+}

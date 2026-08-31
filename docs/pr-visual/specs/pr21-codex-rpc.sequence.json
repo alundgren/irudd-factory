@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "PR #21: Codex App Server run",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [980, 860],
+    "views": [
+      { "id": "preflight", "label": "Preflight", "focus": ["provider", "cli", "appserver"], "note": "The provider records the Codex version, generates protocol schemas, and checks model support before starting work." },
+      { "id": "turn", "label": "Structured turn", "focus": ["provider", "rpc", "appserver", "state"], "note": "JSON-RPC requests and normalized events produce the durable turn evidence." }
+    ]
+  },
+  "participants": [
+    { "id": "application", "type": "backend", "label": "Application", "sublabel": "Provider port" },
+    { "id": "provider", "type": "backend", "label": "Codex adapter", "sublabel": "run lifecycle" },
+    { "id": "cli", "type": "external", "label": "Codex CLI", "sublabel": "version and schema" },
+    { "id": "rpc", "type": "messagebus", "label": "AppServerRpc", "sublabel": "JSON-RPC client" },
+    { "id": "appserver", "type": "external", "label": "App Server", "sublabel": "stdio child process" },
+    { "id": "state", "type": "database", "label": "StateStore", "sublabel": "normalized events" }
+  ],
+  "segments": [
+    { "from": 150, "to": 292, "label": "Preflight" },
+    { "from": 310, "to": 548, "label": "Initialize" },
+    { "from": 566, "to": 772, "label": "Run and finish" }
+  ],
+  "messages": [
+    { "id": "run", "from": "application", "to": "provider", "y": 176, "label": "run assignment", "variant": "emphasis" },
+    { "id": "version", "from": "provider", "to": "cli", "y": 220, "label": "codex --version" },
+    { "id": "schema", "from": "provider", "to": "cli", "y": 264, "label": "generate JSON schema" },
+    { "id": "spawn", "from": "provider", "to": "appserver", "y": 336, "label": "spawn --stdio" },
+    { "id": "initialize", "from": "rpc", "to": "appserver", "y": 380, "label": "initialize" },
+    { "id": "models", "from": "rpc", "to": "appserver", "y": 424, "label": "model/list" },
+    { "id": "thread", "from": "rpc", "to": "appserver", "y": 468, "label": "thread/start" },
+    { "id": "running", "from": "provider", "to": "state", "y": 512, "label": "thread started", "variant": "dashed" },
+    { "id": "turn", "from": "rpc", "to": "appserver", "y": 592, "label": "turn/start", "variant": "emphasis" },
+    { "id": "events", "from": "appserver", "to": "rpc", "y": 636, "label": "items, usage, settings", "variant": "dashed" },
+    { "id": "persist-events", "from": "provider", "to": "state", "y": 680, "label": "normalized events", "variant": "dashed" },
+    { "id": "completed", "from": "appserver", "to": "rpc", "y": 724, "label": "turn/completed", "variant": "return" },
+    { "id": "evidence", "from": "provider", "to": "application", "y": 768, "label": "turn evidence", "variant": "return" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Protocol checks", "items": ["Generated schemas must contain the required App Server message types", "The provider records a digest of the generated schema set", "Configured model and effort are checked before thread creation"] },
+    { "dot": "rose", "title": "No interactive fallback", "items": ["Any approval request records approval_requested", "Model reroutes and observed-setting mismatches fail the run", "Raw JSON-RPC messages are not persisted"] }
+  ]
+}

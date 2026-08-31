@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "PR #21: terminal provider cleanup",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [900, 760],
+    "views": [
+      { "id": "primary-failure", "label": "Primary failure", "focus": ["appserver", "rpc", "provider", "state", "application"], "note": "The original provider error remains authoritative while cleanup evidence is recorded." },
+      { "id": "owned-process", "label": "Owned process", "focus": ["provider", "rpc", "appserver"], "note": "The provider interrupts the active turn and terminates only the detached App Server process group." }
+    ]
+  },
+  "participants": [
+    { "id": "application", "type": "backend", "label": "Application", "sublabel": "Provider caller" },
+    { "id": "provider", "type": "backend", "label": "Codex adapter", "sublabel": "failure owner" },
+    { "id": "rpc", "type": "messagebus", "label": "AppServerRpc", "sublabel": "active requests" },
+    { "id": "appserver", "type": "external", "label": "App Server", "sublabel": "owned process group" },
+    { "id": "state", "type": "database", "label": "StateStore", "sublabel": "failure event" }
+  ],
+  "segments": [
+    { "from": 150, "to": 292, "label": "Detect" },
+    { "from": 310, "to": 502, "label": "Clean up" },
+    { "from": 520, "to": 660, "label": "Persist and return" }
+  ],
+  "messages": [
+    { "id": "terminal", "from": "appserver", "to": "rpc", "y": 178, "label": "approval, error, reroute, or exit", "variant": "security" },
+    { "id": "primary", "from": "rpc", "to": "provider", "y": 222, "label": "primary failure", "variant": "security" },
+    { "id": "interrupt", "from": "provider", "to": "rpc", "y": 334, "label": "turn/interrupt", "variant": "dashed" },
+    { "id": "term", "from": "provider", "to": "appserver", "y": 378, "label": "SIGTERM process group", "variant": "emphasis" },
+    { "id": "kill", "from": "provider", "to": "appserver", "y": 422, "label": "SIGKILL if still running", "variant": "security" },
+    { "id": "exit", "from": "appserver", "to": "provider", "y": 466, "label": "exit or cleanup timeout", "variant": "return" },
+    { "id": "failed-event", "from": "provider", "to": "state", "y": 546, "label": "provider.failed evidence", "variant": "dashed" },
+    { "id": "return", "from": "provider", "to": "application", "y": 590, "label": "original failure", "variant": "return" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Bounded shutdown", "items": ["Interrupt and termination share the configured shutdownMs budget", "SIGKILL is used only after the SIGTERM grace period", "Signals target the verified detached process group"] },
+    { "dot": "rose", "title": "Failure evidence", "items": ["provider.failed records approvals, reroutes, item summaries, token usage, and process exit", "cleanup_timeout is added without replacing the original failure code"] }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PR #22: shared RPC service composition",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/alundgren/irudd-factory",
+      "revision": "4a7afcdc98a1a4f46e94d5e3f0067be0128257fe"
+    },
+    "views": [
+      { "id": "client-command", "label": "Client command", "focus": ["operator", "cli", "service", "application", "sqlite"], "note": "The CLI calls the same application command through loopback Effect RPC." },
+      { "id": "production-layers", "label": "Production layers", "focus": ["application", "sqlite", "githubAdapter", "github", "workspaces", "codexAdapter", "appserver"], "note": "The service supplies concrete adapters to the application ports." }
+    ]
+  },
+  "layout": { "mode": "grid", "origin": [32, 96], "cols": 5, "gapX": 56, "gapY": 92, "cellW": 150, "cellH": 68 },
+  "components": [
+    { "id": "operator", "type": "external", "label": "Operator", "sublabel": "local user", "row": 1, "col": 0 },
+    { "id": "cli", "type": "frontend", "label": "Factory CLI", "sublabel": "RPC client", "row": 1, "col": 1, "sources": [{ "path": "apps/cli/src/main.ts" }, { "path": "apps/cli/src/client.ts" }] },
+    { "id": "service", "type": "backend", "label": "Factory service", "sublabel": "loopback HTTP", "row": 1, "col": 2, "sources": [{ "path": "apps/service/src/service.ts" }] },
+    { "id": "application", "type": "backend", "label": "Application", "sublabel": "shared commands", "row": 1, "col": 3, "sources": [{ "path": "packages/application/src/service.ts" }] },
+    { "id": "sqlite", "type": "database", "label": "SQLite store", "sublabel": "receipts and events", "row": 1, "col": 4, "sources": [{ "path": "packages/state-sqlite/src/store.ts" }] },
+    { "id": "githubAdapter", "type": "backend", "label": "GitHub adapter", "sublabel": "application port", "row": 0, "col": 3, "sources": [{ "path": "packages/github/src/github.ts" }] },
+    { "id": "github", "type": "cloud", "label": "GitHub", "sublabel": "issues and pull requests", "row": 0, "col": 4 },
+    { "id": "workspaces", "type": "backend", "label": "Workspace adapter", "sublabel": "retained worktrees", "row": 2, "col": 2, "sources": [{ "path": "packages/workspaces/src/workspaces.ts" }] },
+    { "id": "codexAdapter", "type": "backend", "label": "Codex adapter", "sublabel": "provider port", "row": 2, "col": 3, "sources": [{ "path": "packages/codex/src/provider.ts" }] },
+    { "id": "appserver", "type": "external", "label": "Codex App Server", "sublabel": "managed child", "row": 2, "col": 4 }
+  ],
+  "connections": [
+    { "id": "operator-cli", "from": "operator", "to": "cli", "variant": "emphasis" },
+    { "id": "cli-service", "from": "cli", "to": "service", "label": "Effect RPC /rpc", "variant": "emphasis" },
+    { "id": "service-application", "from": "service", "to": "application", "label": "shared handlers", "variant": "emphasis" },
+    { "id": "application-state", "from": "application", "to": "sqlite" },
+    { "id": "application-github", "from": "application", "to": "githubAdapter", "label": "GitHub port" },
+    { "id": "github-api", "from": "githubAdapter", "to": "github", "label": "gh api" },
+    { "id": "application-workspaces", "from": "application", "to": "workspaces", "label": "workspace port" },
+    { "id": "application-codex", "from": "application", "to": "codexAdapter" },
+    { "id": "codex-rpc", "from": "codexAdapter", "to": "appserver", "label": "JSON-RPC stdio" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "One command path", "items": ["The CLI does not import application or adapter packages", "Both RPC methods use the shared contracts package", "The service maps application errors to RPC errors"] },
+    { "dot": "emerald", "title": "Runtime composition", "items": ["factory.json selects loopback address, paths, model, effort, and timeouts", "Effect layers provide SQLite, GitHub, workspace, Codex, clock, and ID services"] }
+  ]
+}

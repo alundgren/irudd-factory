@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "PR #23: first terminal failure wins",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1100, 900],
+    "views": [
+      { "id": "failure-precedence", "label": "Failure precedence", "focus": ["signal", "record", "reject", "interrupt", "terminate", "persist", "return"], "note": "The first terminal error rejects active RPC work and remains the returned provider failure." },
+      { "id": "deadline", "label": "One cleanup deadline", "focus": ["interrupt", "terminate", "timeout", "persist"], "note": "Interrupt and process-group termination consume one shutdownMs budget, even when the first termination attempt rejects." }
+    ]
+  },
+  "lanes": [
+    { "id": "rpc", "label": "RPC monitoring" },
+    { "id": "cleanup", "label": "Bounded cleanup" },
+    { "id": "state", "label": "Durable failure" },
+    { "id": "result", "label": "Returned error" },
+    { "id": "exception", "label": "Cleanup outcome", "variant": "exception" }
+  ],
+  "mainPath": ["signal", "record", "reject", "interrupt", "terminate", "persist", "return"],
+  "nodes": [
+    { "id": "signal", "lane": "rpc", "col": 0, "type": "external", "label": "Signal", "width": 68 },
+    { "id": "record", "lane": "rpc", "col": 1, "type": "security", "label": "First", "width": 64 },
+    { "id": "reject", "lane": "rpc", "col": 2, "type": "messagebus", "label": "Reject", "width": 64 },
+    { "id": "interrupt", "lane": "cleanup", "col": 3, "type": "backend", "label": "Turn", "width": 52 },
+    { "id": "terminate", "lane": "cleanup", "col": 4, "type": "security", "label": "Stop", "width": 52 },
+    { "id": "persist", "lane": "state", "col": 5, "type": "database", "label": "Persist", "width": 68 },
+    { "id": "return", "lane": "result", "col": 5, "type": "backend", "label": "Return", "width": 68 },
+    { "id": "timeout", "lane": "exception", "col": 4, "type": "external", "label": "Timeout", "width": 68 }
+  ],
+  "edges": [
+    { "id": "capture", "from": "signal", "to": "record", "role": "main", "variant": "security" },
+    { "id": "wake", "from": "record", "to": "reject", "role": "main", "variant": "emphasis", "route": "bottom-channel" },
+    { "id": "start-cleanup", "from": "reject", "to": "interrupt", "role": "main" },
+    { "id": "use-deadline", "from": "interrupt", "to": "terminate", "role": "main", "variant": "emphasis", "route": "bottom-channel" },
+    { "id": "record-evidence", "from": "terminate", "to": "persist", "role": "main" },
+    { "id": "return-error", "from": "persist", "to": "return", "role": "main", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "deadline-expired", "from": "terminate", "to": "timeout", "role": "error", "variant": "security" },
+    { "id": "attach-timeout", "from": "timeout", "to": "persist", "role": "return", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "Terminal sources", "items": ["Approval requests, reroutes, error notifications, malformed output, and unexpected process exits all enter one failure path", "A response followed by an error notification cannot report success"] },
+    { "dot": "emerald", "title": "Persistence order", "items": ["Cleanup finishes before provider.failed is emitted", "Final response, items, token usage, approvals, reroutes, and process exit are retained on failure"] }
+  ]
+}

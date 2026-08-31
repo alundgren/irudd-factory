@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "PR #23: operator console loop",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [900, 800],
+    "views": [
+      { "id": "load-and-poll", "label": "Load and poll", "focus": ["console", "rpc", "application", "sqlite"], "note": "The console polls the durable snapshot every 300 ms and keeps the last loaded state during connection loss." },
+      { "id": "submit-command", "label": "Submit command", "focus": ["operator", "console", "rpc", "application", "sqlite"], "note": "The displayed command ID is submitted once, replaced after success, and backed by a durable receipt." }
+    ]
+  },
+  "participants": [
+    { "id": "operator", "type": "external", "label": "Operator", "sublabel": "loopback browser" },
+    { "id": "console", "type": "frontend", "label": "React console", "sublabel": "command and status" },
+    { "id": "rpc", "type": "messagebus", "label": "Effect RPC", "sublabel": "/rpc" },
+    { "id": "application", "type": "backend", "label": "Application", "sublabel": "shared command" },
+    { "id": "sqlite", "type": "database", "label": "SQLite", "sublabel": "durable snapshot" }
+  ],
+  "segments": [
+    { "from": 150, "to": 346, "label": "Initial state" },
+    { "from": 364, "to": 566, "label": "Run command" },
+    { "from": 584, "to": 720, "label": "Observe progress" }
+  ],
+  "messages": [
+    { "id": "open", "from": "operator", "to": "console", "y": 178, "label": "open console" },
+    { "id": "snapshot", "from": "console", "to": "rpc", "y": 222, "label": "GetFactorySnapshot" },
+    { "id": "snapshot-read", "from": "application", "to": "sqlite", "y": 266, "label": "latest receipt, assignment, events" },
+    { "id": "render", "from": "rpc", "to": "console", "y": 310, "label": "durable snapshot", "variant": "return" },
+    { "id": "click", "from": "operator", "to": "console", "y": 392, "label": "Run next issue", "variant": "emphasis" },
+    { "id": "submit", "from": "console", "to": "rpc", "y": 436, "label": "RunNextEligibleIssue(commandId)", "variant": "emphasis" },
+    { "id": "admit", "from": "rpc", "to": "application", "y": 480, "label": "shared command" },
+    { "id": "receipt-write", "from": "application", "to": "sqlite", "y": 524, "label": "replay or commit receipt", "variant": "emphasis" },
+    { "id": "receipt", "from": "rpc", "to": "console", "y": 568, "label": "command result", "variant": "return" },
+    { "id": "poll", "from": "console", "to": "rpc", "y": 616, "label": "poll every 300 ms", "variant": "dashed" },
+    { "id": "progress", "from": "application", "to": "sqlite", "y": 660, "label": "append progress events", "variant": "dashed" },
+    { "id": "refresh", "from": "rpc", "to": "console", "y": 704, "label": "current state and history", "variant": "return" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Operator safeguards", "items": ["The action is disabled while an assignment is reserved, starting, or running", "A failed submission keeps the same displayed command ID for a safe retry", "Long errors and retained paths remain visible"] },
+    { "dot": "cyan", "title": "Single source of truth", "items": ["Reloading reconstructs the page from SQLite", "The CLI and console call the same RPC contracts", "The browser has no second dispatcher implementation"] }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "PR #20: retained linked worktree",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1100, 900],
+    "views": [
+      { "id": "creation", "label": "Creation path", "focus": ["input", "roots", "clone", "fetch", "worktree", "canonical", "paths"], "note": "A reusable clone creates one retained assignment branch at the pinned commit." },
+      { "id": "path-safety", "label": "Path checks", "focus": ["input", "roots", "canonical", "invalid", "escape"], "note": "Lexical and canonical path checks keep every retained path under application-owned roots." }
+    ]
+  },
+  "lanes": [
+    { "id": "request", "label": "Assignment input" },
+    { "id": "filesystem", "label": "Application-owned storage" },
+    { "id": "git", "label": "Git operations" },
+    { "id": "result", "label": "Persisted metadata" },
+    { "id": "rejected", "label": "Rejected", "variant": "exception" }
+  ],
+  "mainPath": ["input", "roots", "clone", "fetch", "worktree", "canonical", "paths"],
+  "nodes": [
+    { "id": "input", "lane": "request", "col": 0, "type": "external", "label": "Input", "width": 68 },
+    { "id": "roots", "lane": "filesystem", "col": 1, "type": "security", "label": "Roots", "width": 68 },
+    { "id": "clone", "lane": "git", "col": 2, "type": "database", "label": "Clone", "width": 68 },
+    { "id": "fetch", "lane": "git", "col": 3, "type": "cloud", "label": "Fetch", "width": 52 },
+    { "id": "worktree", "lane": "git", "col": 4, "type": "backend", "label": "Tree", "width": 52 },
+    { "id": "canonical", "lane": "filesystem", "col": 5, "type": "security", "label": "Paths", "width": 68 },
+    { "id": "paths", "lane": "result", "col": 5, "type": "database", "label": "Return", "width": 68 },
+    { "id": "invalid", "lane": "rejected", "col": 0, "type": "external", "label": "Invalid", "width": 68 },
+    { "id": "escape", "lane": "rejected", "col": 5, "type": "external", "label": "Escape", "width": 68 }
+  ],
+  "edges": [
+    { "id": "prepare-roots", "from": "input", "to": "roots", "role": "main" },
+    { "id": "open-clone", "from": "roots", "to": "clone", "role": "main" },
+    { "id": "fetch-origin", "from": "clone", "to": "fetch", "role": "main" },
+    { "id": "add-linked", "from": "fetch", "to": "worktree", "role": "main", "variant": "emphasis", "route": "bottom-channel" },
+    { "id": "resolve-created", "from": "worktree", "to": "canonical", "role": "main" },
+    { "id": "return-metadata", "from": "canonical", "to": "paths", "role": "main", "variant": "emphasis" },
+    { "id": "invalid-input", "from": "input", "to": "invalid", "role": "error", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "path-escape", "from": "canonical", "to": "escape", "role": "error", "variant": "security", "fromSide": "right", "toSide": "right", "route": "outside-right" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Retained assets", "items": ["One clone is reused per repository", "Each assignment gets a new linked worktree and branch", "No cleanup runs in this PR"] },
+    { "dot": "amber", "title": "Recorded paths", "items": ["The clone, worktree, worktree Git directory, and common Git directory are canonicalized", "Those paths later define Codex writable roots"] }
+  ]
+}

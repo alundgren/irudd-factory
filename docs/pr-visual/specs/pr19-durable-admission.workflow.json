@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "PR #19: serialized durable admission",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1100, 900],
+    "views": [
+      { "id": "started-path", "label": "New assignment", "focus": ["command", "transaction", "replay", "provider", "candidates", "started"], "note": "One immediate SQLite transaction decides admission and commits the started receipt with its assignment." },
+      { "id": "durable-rejections", "label": "Durable outcomes", "focus": ["replayed", "busy", "none", "ambiguous"], "note": "Every rejection is a receipt, so repeating the command returns the same result." }
+    ]
+  },
+  "lanes": [
+    { "id": "request", "label": "Command" },
+    { "id": "sqlite", "label": "BEGIN IMMEDIATE" },
+    { "id": "outcomes", "label": "Durable outcomes", "variant": "exception" }
+  ],
+  "mainPath": ["command", "transaction", "replay", "provider", "candidates", "started"],
+  "nodes": [
+    { "id": "command", "lane": "request", "col": 0, "type": "external", "label": "Command", "width": 68 },
+    { "id": "transaction", "lane": "sqlite", "col": 1, "type": "database", "label": "Writer", "width": 64 },
+    { "id": "replay", "lane": "sqlite", "col": 2, "type": "security", "label": "Replay?", "width": 64 },
+    { "id": "provider", "lane": "sqlite", "col": 3, "type": "security", "label": "Busy?", "width": 52 },
+    { "id": "candidates", "lane": "sqlite", "col": 4, "type": "security", "label": "Count", "width": 52 },
+    { "id": "started", "lane": "sqlite", "col": 5, "type": "database", "label": "Started", "width": 68 },
+    { "id": "replayed", "lane": "outcomes", "col": 2, "type": "database", "label": "Replay", "width": 52 },
+    { "id": "busy", "lane": "outcomes", "col": 3, "type": "backend", "label": "Busy", "width": 52 },
+    { "id": "none", "lane": "outcomes", "col": 4, "type": "backend", "label": "None", "width": 52 },
+    { "id": "ambiguous", "lane": "outcomes", "col": 5, "type": "backend", "label": "Many", "width": 52 }
+  ],
+  "edges": [
+    { "id": "begin", "from": "command", "to": "transaction", "role": "main", "variant": "emphasis" },
+    { "id": "check-replay", "from": "transaction", "to": "replay", "role": "main", "route": "bottom-channel" },
+    { "id": "check-provider", "from": "replay", "to": "provider", "role": "main" },
+    { "id": "count-candidates", "from": "provider", "to": "candidates", "role": "main", "route": "bottom-channel" },
+    { "id": "reserve-one", "from": "candidates", "to": "started", "role": "main", "variant": "emphasis" },
+    { "id": "return-replay", "from": "replay", "to": "replayed", "role": "branch", "variant": "dashed" },
+    { "id": "return-busy", "from": "provider", "to": "busy", "role": "branch", "variant": "security" },
+    { "id": "return-none", "from": "candidates", "to": "none", "role": "branch", "variant": "dashed" },
+    { "id": "return-ambiguous", "from": "candidates", "to": "ambiguous", "role": "branch", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "drop" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Atomic write", "items": ["The started path inserts the assignment, reservation event, and command receipt together", "The issue node ID and active-provider indexes enforce the two concurrency rules"] },
+    { "dot": "amber", "title": "Replay contract", "items": ["The command ID is checked inside the writer transaction", "Repository eligibility is not queried again when the receipt already exists"] }
+  ]
+}

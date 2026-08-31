@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Issue #14 pull request review</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f2eade;
+        color: #604939;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #f2eade; }
+      button, a { font: inherit; }
+      button { color: inherit; }
+      .layout { min-height: 100vh; display: grid; grid-template-columns: 18rem minmax(0, 1fr); }
+      aside { padding: 1.5rem 1.25rem; background: #eadfcd; border-right: 1px solid #c1af9a; }
+      .label { margin: 0 0 .55rem; font-size: .72rem; font-weight: 500; letter-spacing: .07em; text-transform: uppercase; color: #66574d; }
+      h1 { margin: 0; max-width: 12ch; font-size: clamp(1.65rem, 2.4vw, 2.25rem); line-height: 1.08; font-weight: 600; letter-spacing: -.015em; }
+      .intro { margin: 1rem 0 1.5rem; line-height: 1.55; color: #66574d; }
+      .pr-list { display: grid; gap: .35rem; }
+      .pr-button { width: 100%; display: grid; grid-template-columns: 2.7rem 1fr; gap: .7rem; align-items: baseline; padding: .7rem .75rem; border: 0; border-radius: .65rem; background: transparent; text-align: left; cursor: pointer; }
+      .pr-button:hover { background: #e0d2bd; }
+      .pr-button[aria-current="true"] { background: #f9f6f0; color: #784f26; }
+      .pr-number { font-variant-numeric: tabular-nums; font-weight: 600; }
+      .pr-name { line-height: 1.3; }
+      main { min-width: 0; padding: 1.4rem clamp(1rem, 2.4vw, 2rem) 2rem; }
+      .topbar { display: flex; gap: 1rem; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem; }
+      h2 { margin: 0; font-size: 1.4rem; line-height: 1.25; font-weight: 600; letter-spacing: -.01em; }
+      .basis { margin: .4rem 0 0; color: #66574d; line-height: 1.45; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+      .links { flex: none; display: flex; gap: .55rem; }
+      .links a, .step { min-height: 2.6rem; display: inline-flex; align-items: center; justify-content: center; padding: .55rem .85rem; border: 1px solid #c1af9a; border-radius: .65rem; background: #f9f6f0; color: #3d5d71; text-decoration: none; cursor: pointer; }
+      .links a:hover, .step:hover:not(:disabled) { border-color: #784f26; color: #784f26; }
+      .diagram-tabs { display: flex; flex-wrap: wrap; gap: .45rem; margin: 0 0 .85rem; }
+      .diagram-tab { padding: .55rem .8rem; border: 1px solid #c1af9a; border-radius: 999px; background: transparent; cursor: pointer; }
+      .diagram-tab[aria-selected="true"] { background: #784f26; border-color: #784f26; color: #f9f6f0; }
+      .viewer { width: 100%; height: calc(100vh - 12.25rem); min-height: 40rem; display: block; border: 1px solid #c1af9a; border-radius: .8rem; background: #f9f6f0; }
+      .footer-nav { display: flex; justify-content: space-between; gap: .75rem; margin-top: .85rem; }
+      .step { color: #604939; }
+      .step:disabled { opacity: .45; cursor: default; }
+      .status { align-self: center; color: #66574d; font-variant-numeric: tabular-nums; }
+      @media (max-width: 860px) {
+        .layout { grid-template-columns: 1fr; }
+        aside { border-right: 0; border-bottom: 1px solid #c1af9a; }
+        h1 { max-width: none; }
+        .intro { margin-bottom: 1rem; }
+        .pr-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .pr-button { grid-template-columns: 1fr; gap: .15rem; }
+        .pr-name { font-size: .85rem; }
+        .topbar { flex-direction: column; }
+        .viewer { height: 70vh; min-height: 34rem; }
+      }
+      @media (max-width: 560px) {
+        .pr-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        main { padding-inline: .75rem; }
+        .links { width: 100%; }
+        .links a { flex: 1; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside>
+        <p class="label">Review presentation</p>
+        <h1>Issue #14 pull requests</h1>
+        <p class="intro">Start at PR #18 and follow the implementation in stack order.</p>
+        <nav class="pr-list" aria-label="Pull requests" id="pr-list"></nav>
+      </aside>
+      <main>
+        <div class="topbar">
+          <div>
+            <p class="label" id="pr-position"></p>
+            <h2 id="pr-title"></h2>
+            <p class="basis" id="pr-basis"></p>
+          </div>
+          <div class="links">
+            <a id="github-link" rel="noreferrer">View PR</a>
+            <a id="diagram-link" target="_blank" rel="noreferrer">Open diagram</a>
+          </div>
+        </div>
+        <div class="diagram-tabs" id="diagram-tabs" role="tablist" aria-label="Diagrams"></div>
+        <iframe class="viewer" id="viewer" title="Pull request diagram"></iframe>
+        <div class="footer-nav">
+          <button class="step" id="previous" type="button">Previous PR</button>
+          <span class="status" id="diagram-position" aria-live="polite"></span>
+          <button class="step" id="next" type="button">Next PR</button>
+        </div>
+      </main>
+    </div>
+    <script>
+      const pullRequests = [
+        {
+          number: 18,
+          title: "Establish Factory application contracts",
+          basis: "main ... issue-14/01-core",
+          diagrams: [
+            { label: "Assignment lifecycle", file: "html/pr18-assignment-lifecycle.html" }
+          ]
+        },
+        {
+          number: 19,
+          title: "Add durable SQLite admission",
+          basis: "issue-14/01-core ... issue-14/02-state",
+          diagrams: [
+            { label: "Durable admission", file: "html/pr19-durable-admission.html" }
+          ]
+        },
+        {
+          number: 20,
+          title: "Add GitHub and retained worktree adapters",
+          basis: "issue-14/02-state ... issue-14/03-adapters",
+          diagrams: [
+            { label: "GitHub discovery", file: "html/pr20-github-discovery.html" },
+            { label: "Retained worktree", file: "html/pr20-retained-worktree.html" }
+          ]
+        },
+        {
+          number: 21,
+          title: "Run Codex through App Server",
+          basis: "issue-14/03-adapters ... issue-14/04-codex",
+          diagrams: [
+            { label: "App Server run", file: "html/pr21-codex-rpc.html" },
+            { label: "Terminal cleanup", file: "html/pr21-provider-cleanup.html" }
+          ]
+        },
+        {
+          number: 22,
+          title: "Expose Factory through RPC and CLI",
+          basis: "issue-14/04-codex ... issue-14/05-service",
+          diagrams: [
+            { label: "Service composition", file: "html/pr22-service-composition.html" }
+          ]
+        },
+        {
+          number: 23,
+          title: "Complete the retained Factory application slice",
+          basis: "Incremental review against issue-14/05-service, despite the PR targeting main",
+          diagrams: [
+            { label: "Operator console", file: "html/pr23-console-review.html" },
+            { label: "Terminal failure", file: "html/pr23-terminal-failure.html" }
+          ]
+        }
+      ];
+
+      const prList = document.querySelector("#pr-list");
+      const tabs = document.querySelector("#diagram-tabs");
+      const viewer = document.querySelector("#viewer");
+      const previous = document.querySelector("#previous");
+      const next = document.querySelector("#next");
+
+      function selection() {
+        const values = new URLSearchParams(location.hash.slice(1));
+        const requested = Number(values.get("pr"));
+        const prIndex = Math.max(0, pullRequests.findIndex((pr) => pr.number === requested));
+        const diagramIndex = Math.min(
+          Math.max(0, Number(values.get("diagram")) || 0),
+          pullRequests[prIndex].diagrams.length - 1
+        );
+        return { prIndex, diagramIndex };
+      }
+
+      function go(prIndex, diagramIndex = 0) {
+        const nextHash = `pr=${pullRequests[prIndex].number}&diagram=${diagramIndex}`;
+        if (location.hash.slice(1) === nextHash) render();
+        else location.hash = nextHash;
+      }
+
+      function render() {
+        const { prIndex, diagramIndex } = selection();
+        const pr = pullRequests[prIndex];
+        const diagram = pr.diagrams[diagramIndex];
+
+        prList.replaceChildren(...pullRequests.map((item, index) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "pr-button";
+          button.setAttribute("aria-current", String(index === prIndex));
+          button.innerHTML = `<span class="pr-number">#${item.number}</span><span class="pr-name">${item.title}</span>`;
+          button.addEventListener("click", () => go(index));
+          return button;
+        }));
+
+        tabs.replaceChildren(...pr.diagrams.map((item, index) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "diagram-tab";
+          button.role = "tab";
+          button.setAttribute("aria-selected", String(index === diagramIndex));
+          button.textContent = item.label;
+          button.addEventListener("click", () => go(prIndex, index));
+          return button;
+        }));
+
+        document.querySelector("#pr-position").textContent = `PR ${prIndex + 1} of ${pullRequests.length}`;
+        document.querySelector("#pr-title").textContent = `#${pr.number} ${pr.title}`;
+        document.querySelector("#pr-basis").innerHTML = `Diff basis: <code>${pr.basis}</code>`;
+        document.querySelector("#github-link").href = `https://github.com/alundgren/irudd-factory/pull/${pr.number}`;
+        document.querySelector("#diagram-link").href = diagram.file;
+        document.querySelector("#diagram-position").textContent = `${diagramIndex + 1} of ${pr.diagrams.length}`;
+        viewer.src = diagram.file;
+        viewer.title = `PR #${pr.number}: ${diagram.label}`;
+        previous.disabled = prIndex === 0;
+        next.disabled = prIndex === pullRequests.length - 1;
+        previous.onclick = () => go(prIndex - 1);
+        next.onclick = () => go(prIndex + 1);
+      }
+
+      addEventListener("hashchange", render);
+      addEventListener("keydown", (event) => {
+        if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLAnchorElement) return;
+        const { prIndex } = selection();
+        if (event.key === "ArrowLeft" && prIndex > 0) go(prIndex - 1);
+        if (event.key === "ArrowRight" && prIndex < pullRequests.length - 1) go(prIndex + 1);
+      });
+      render();
+    </script>
+  </body>
+</html>
