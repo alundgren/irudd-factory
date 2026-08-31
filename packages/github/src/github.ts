@@ -202,7 +202,12 @@ function splitRepository(repository: string): readonly [string, string] {
     });
   }
   const [owner, name] = repository.split("/");
-  if (!owner || !name) throw new Error("validated repository did not split");
+  if (!owner || !name) {
+    throw new FactoryError({
+      code: "repository_invalid",
+      message: `Invalid GitHub repository name: ${repository}`,
+    });
+  }
   return [owner, name];
 }
 
