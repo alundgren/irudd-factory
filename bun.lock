@@ -30,6 +30,14 @@
         "effect": "3.22.1",
       },
     },
+    "packages/state-sqlite": {
+      "name": "@irudd-factory/state-sqlite",
+      "dependencies": {
+        "@irudd-factory/application": "workspace:*",
+        "@irudd-factory/contracts": "workspace:*",
+        "effect": "3.22.1",
+      },
+    },
   },
   "packages": {
     "@effect/cluster": ["@effect/cluster@0.60.2", "", { "dependencies": { "kubernetes-types": "^1.30.0" }, "peerDependencies": { "@effect/platform": "^0.97.1", "@effect/rpc": "^0.76.2", "@effect/sql": "^0.52.1", "@effect/workflow": "^0.19.1", "effect": "^3.22.1" } }, "sha512-GEODN5kvFJ0L0XSkANcS8s6lfhjrrA8x/ezYUV/lXerqCHf5xo3ZTPUanGMHu5Byvikng0mZDcyNvke2sGjfSQ=="],
@@ -51,6 +59,8 @@
     "@irudd-factory/application": ["@irudd-factory/application@workspace:packages/application"],
 
     "@irudd-factory/contracts": ["@irudd-factory/contracts@workspace:packages/contracts"],
+
+    "@irudd-factory/state-sqlite": ["@irudd-factory/state-sqlite@workspace:packages/state-sqlite"],
 
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ=="],
 
