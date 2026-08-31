@@ -210,6 +210,53 @@ describe("Codex provider", () => {
     expect(failures[0]?.finalResponse).toBe("Pull request opened.");
   });
 
+  test("stops before persistence when an RPC response is followed by a terminal event", async () => {
+    const { provider, assignment, workspace } = await fixture(
+      "response-then-error",
+    );
+    const events: string[] = [];
+    const outcome = await Effect.runPromise(
+      Effect.either(
+        provider.run(
+          { assignment, workspace, prompt: "Implement it." },
+          (event) => Effect.sync(() => events.push(event.type)),
+        ),
+      ),
+    );
+    expect(Either.isLeft(outcome)).toBe(true);
+    if (Either.isLeft(outcome)) {
+      expect(outcome.left.code).toBe("provider_error_notification");
+    }
+    expect(events).toEqual(["provider.process.started", "provider.failed"]);
+  });
+
+  for (const [mode, code] of [
+    ["post-completion-error", "provider_error_notification"],
+    ["post-completion-malformed", "provider_protocol_error"],
+    ["post-completion-exit", "provider_exited"],
+  ] as const) {
+    test(`retains ${mode} during final persistence`, async () => {
+      const { provider, assignment, workspace } = await fixture(mode);
+      let settingsEvents = 0;
+      const outcome = await Effect.runPromise(
+        Effect.either(
+          provider.run(
+            { assignment, workspace, prompt: "Implement it." },
+            (event) =>
+              Effect.promise(async () => {
+                if (event.type === "provider.settings.observed") {
+                  settingsEvents += 1;
+                  if (settingsEvents === 2) await Bun.sleep(75);
+                }
+              }),
+          ),
+        ),
+      );
+      expect(Either.isLeft(outcome)).toBe(true);
+      if (Either.isLeft(outcome)) expect(outcome.left.code).toBe(code);
+    });
+  }
+
   test("does not retain command stderr in normalized failures", async () => {
     for (const mode of ["version-failure", "schema-failure"]) {
       const { provider, assignment, workspace } = await fixture(mode);
@@ -256,18 +303,67 @@ describe("Codex provider", () => {
         };
       },
     });
-    const outcome = await Effect.runPromise(
-      Effect.either(
-        provider.run(
-          { assignment, workspace, prompt: "Implement it." },
-          () => Effect.void,
+    try {
+      const outcome = await Effect.runPromise(
+        Effect.either(
+          provider.run(
+            { assignment, workspace, prompt: "Implement it." },
+            () => Effect.void,
+          ),
         ),
-      ),
-    );
-    const afterFailureMs = performance.now() - terminationReturnedAt;
-    if (captured) await terminateOwnedGroup(captured, 500);
-    expect(Either.isLeft(outcome)).toBe(true);
-    expect(afterFailureMs).toBeLessThan(75);
-    expect(captured).toBeDefined();
+      );
+      const afterFailureMs = performance.now() - terminationReturnedAt;
+      expect(Either.isLeft(outcome)).toBe(true);
+      expect(afterFailureMs).toBeLessThan(75);
+      expect(captured).toBeDefined();
+    } finally {
+      if (captured) await terminateOwnedGroup(captured, 500);
+    }
+  });
+
+  test("does not reset the shutdown deadline after termination rejects", async () => {
+    const { assignment, workspace } = await fixture();
+    let captured: ManagedProcess | undefined;
+    const budgets: number[] = [];
+    const provider = makeCodexProvider({
+      commandPrefix: [process.execPath, fakeServer, "success"],
+      runtimeRoot: join(dirname(workspace.worktreePath), "rejection-runtime"),
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      timeouts: {
+        childStartupMs: 500,
+        initializationMs: 500,
+        modelSchemaMs: 500,
+        turnMs: 500,
+        shutdownMs: 200,
+      },
+      terminateProcessGroup: async (child, shutdownMs) => {
+        captured = child;
+        budgets.push(shutdownMs);
+        if (budgets.length === 1) {
+          await Bun.sleep(120);
+          throw new Error("termination failed");
+        }
+        return terminateOwnedGroup(child, shutdownMs);
+      },
+    });
+    try {
+      const outcome = await Effect.runPromise(
+        Effect.either(
+          provider.run(
+            { assignment, workspace, prompt: "Implement it." },
+            () => Effect.void,
+          ),
+        ),
+      );
+      expect(Either.isLeft(outcome)).toBe(true);
+      if (Either.isLeft(outcome)) {
+        expect(outcome.left.code).toBe("provider_failed");
+      }
+      expect(budgets).toHaveLength(2);
+      expect(budgets[1]).toBeLessThan(150);
+    } finally {
+      if (captured) await terminateOwnedGroup(captured, 500);
+    }
   });
 });

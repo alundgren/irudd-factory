@@ -88,6 +88,9 @@ async function handle(line: string): Promise<void> {
             reasoningEffort: mode === "effort-mismatch" ? "high" : "low",
           }),
     });
+    if (mode === "response-then-error") {
+      send({ method: "error", params: { message: "thread failed" } });
+    }
     return;
   }
   if (message.method === "turn/start" && message.id !== undefined) {
@@ -165,6 +168,16 @@ async function handle(line: string): Promise<void> {
       method: "turn/completed",
       params: { turn: { id: "turn-1", status: "completed" } },
     });
+    if (mode.startsWith("post-completion-")) {
+      await Bun.sleep(25);
+      if (mode === "post-completion-error") {
+        send({ method: "error", params: { message: "late provider failure" } });
+      }
+      if (mode === "post-completion-malformed") {
+        process.stdout.write("not-json\n");
+      }
+      if (mode === "post-completion-exit") process.exit(2);
+    }
     return;
   }
   if (message.method === "turn/interrupt" && message.id !== undefined) {
