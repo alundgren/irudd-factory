@@ -235,19 +235,24 @@ function makeService(runner: CommandRunner): GitHubService {
       }),
     claimIssue: (issue) =>
       Effect.promise(async (): Promise<ClaimOutcome> => {
-        const mutation = await runner.run(
-          [
-            "gh",
-            "api",
-            "--method",
-            "POST",
-            `repos/${issue.repository}/issues/${issue.number}/labels`,
-            "--input",
-            "-",
-          ],
-          JSON.stringify({ labels: ["claimed"] }),
-        );
-        if (mutation.exitCode === 0) {
+        let mutation: Awaited<ReturnType<CommandRunner["run"]>> | null = null;
+        try {
+          mutation = await runner.run(
+            [
+              "gh",
+              "api",
+              "--method",
+              "POST",
+              `repos/${issue.repository}/issues/${issue.number}/labels`,
+              "--input",
+              "-",
+            ],
+            JSON.stringify({ labels: ["claimed"] }),
+          );
+        } catch {
+          // A launch or transport failure follows the same one-read reconciliation.
+        }
+        if (mutation?.exitCode === 0) {
           try {
             const labels = decodeJson(LabelsResponse, mutation.stdout);
             if (labels.some(({ name }) => name === "claimed")) {

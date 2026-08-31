@@ -16,6 +16,30 @@
         "typescript": "5.9.2",
       },
     },
+    "apps/cli": {
+      "name": "@irudd-factory/cli",
+      "dependencies": {
+        "@effect/platform": "0.97.1",
+        "@effect/rpc": "0.76.2",
+        "@irudd-factory/contracts": "workspace:*",
+        "effect": "3.22.1",
+      },
+    },
+    "apps/service": {
+      "name": "@irudd-factory/service",
+      "dependencies": {
+        "@effect/platform": "0.97.1",
+        "@effect/platform-bun": "0.91.2",
+        "@effect/rpc": "0.76.2",
+        "@irudd-factory/application": "workspace:*",
+        "@irudd-factory/codex": "workspace:*",
+        "@irudd-factory/contracts": "workspace:*",
+        "@irudd-factory/github": "workspace:*",
+        "@irudd-factory/state-sqlite": "workspace:*",
+        "@irudd-factory/workspaces": "workspace:*",
+        "effect": "3.22.1",
+      },
+    },
     "packages/application": {
       "name": "@irudd-factory/application",
       "dependencies": {
@@ -81,11 +105,15 @@
 
     "@irudd-factory/application": ["@irudd-factory/application@workspace:packages/application"],
 
+    "@irudd-factory/cli": ["@irudd-factory/cli@workspace:apps/cli"],
+
     "@irudd-factory/codex": ["@irudd-factory/codex@workspace:packages/codex"],
 
     "@irudd-factory/contracts": ["@irudd-factory/contracts@workspace:packages/contracts"],
 
     "@irudd-factory/github": ["@irudd-factory/github@workspace:packages/github"],
+
+    "@irudd-factory/service": ["@irudd-factory/service@workspace:apps/service"],
 
     "@irudd-factory/state-sqlite": ["@irudd-factory/state-sqlite@workspace:packages/state-sqlite"],
 
