@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, realpath } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { WorkspaceService } from "@irudd-factory/application";
 import {
@@ -25,7 +26,7 @@ export interface GitRunner {
   ) => Promise<GitResult>;
 }
 
-export const bunGitRunner: GitRunner = {
+export const nodeGitRunner: GitRunner = {
   run: async (args, cwd) => {
     if (args.length === 0 || args.some((part) => part.includes("\0"))) {
       throw new FactoryError({
@@ -33,20 +34,46 @@ export const bunGitRunner: GitRunner = {
         message: "Git command must be a nonempty argument array",
       });
     }
-    const child = Bun.spawn([...args], {
+    const [executable, ...commandArgs] = args;
+    if (!executable) {
+      throw new FactoryError({
+        code: "git_command_invalid",
+        message: "Git command must be a nonempty argument array",
+      });
+    }
+    const child = spawn(executable, commandArgs, {
       ...(cwd ? { cwd } : {}),
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
+      stdio: ["ignore", "pipe", "pipe"],
     });
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
+      readStream(child.stdout),
+      readStream(child.stderr),
+      exitCodeFor(child),
     ]);
     return { stdout, stderr, exitCode };
   },
 };
+
+async function readStream(stream: NodeJS.ReadableStream): Promise<string> {
+  let output = "";
+  stream.setEncoding("utf8");
+  for await (const chunk of stream) output += String(chunk);
+  return output;
+}
+
+function exitCodeFor(child: ReturnType<typeof spawn>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    child.once("error", (error) =>
+      reject(
+        new FactoryError({
+          code: "git_command_failed",
+          message: `Git command failed to start: ${error.message}`,
+        }),
+      ),
+    );
+    child.once("close", (code) => resolve(code ?? 1));
+  });
+}
 
 export function assertPathWithin(
   root: string,
@@ -91,7 +118,7 @@ export interface WorkspaceOptions {
 export function makeWorkspaceService(
   options: WorkspaceOptions,
 ): WorkspaceService {
-  const runner = options.runner ?? bunGitRunner;
+  const runner = options.runner ?? nodeGitRunner;
   const root = resolve(options.root);
   const clonesRoot = join(root, "clones");
   const worktreesRoot = join(root, "worktrees");

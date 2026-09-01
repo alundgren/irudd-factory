@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
 import { SCENARIOS, SCENARIO_NAMES } from "../src/index.ts";
 
 describe("deterministic application scenarios", () => {

@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "bun ../../scripts/test-suite.ts packages/contracts"
+    "test": "vp -C ../.. test packages/contracts"
   },
   "dependencies": {
     "@effect/rpc": "0.76.2",

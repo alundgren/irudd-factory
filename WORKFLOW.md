@@ -1,8 +1,8 @@
 ---
 required_labels: [ready-for-agent]
 forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
-runtime: bun
-test: bun run test
+runtime: node
+test: vp run test
 ---
 
 Implement the selected issue at the pinned default-branch commit. Preserve the

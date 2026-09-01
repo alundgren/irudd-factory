@@ -7,7 +7,7 @@ export default defineConfig({
   fmt: {
     printWidth: 80,
     ignorePatterns: [
-      "bun.lock",
+      "package-lock.json",
       "dist/**",
       "node_modules/**",
       "prototypes/codex-app-server-probe/fixture/acceptance/**",
@@ -18,5 +18,9 @@ export default defineConfig({
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
+  },
+  test: {
+    include: ["{apps,packages}/**/test/**/*.test.ts"],
+    fileParallelism: false,
   },
 });

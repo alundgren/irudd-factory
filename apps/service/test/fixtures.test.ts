@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vite-plus/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -32,11 +32,13 @@ describe("fixture composition inputs", () => {
       await Effect.runPromise(seed);
       const second = await Effect.runPromise(opened.service.getSnapshot());
       expect(second).toEqual(first);
-      const active = opened.database
-        .query<{ count: number }, []>(
-          "SELECT count(*) AS count FROM assignments WHERE state IN ('reserved', 'starting', 'running')",
-        )
-        .get()?.count;
+      const active = (
+        opened.database
+          .prepare(
+            "SELECT count(*) AS count FROM assignments WHERE state IN ('reserved', 'starting', 'running')",
+          )
+          .get() as { count: number } | undefined
+      )?.count;
       expect(active === 0 || active === 1).toBe(true);
       opened.close();
     }

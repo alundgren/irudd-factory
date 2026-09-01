@@ -4,13 +4,13 @@ These are the implemented decisions for the manual single-repository milestone.
 
 ## Runtime
 
-Bun 1.3.14 and TypeScript 5.9.2 are pinned. TypeScript runs in strict mode with
+Node.js 24 and TypeScript 5.9.2 are pinned. TypeScript runs in strict mode with
 `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. Effect and the
 Effect platform and RPC packages are pinned to tested releases.
 
 ## State
 
-SQLite uses Bun's SQLite support with WAL, foreign keys, a five-second busy
+SQLite uses Node's built-in SQLite support with WAL, foreign keys, a five-second busy
 timeout, and hand-written forward migrations.
 
 Everything durable goes in the database: assignments, provider state, thread
@@ -92,8 +92,8 @@ The current front matter is:
 ```yaml
 required_labels: [ready-for-agent]
 forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
-runtime: bun
-test: bun test
+runtime: node
+test: vp run test
 ```
 
 ## Prior art

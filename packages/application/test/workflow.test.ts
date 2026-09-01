@@ -1,11 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
+import { readFile } from "node:fs/promises";
 import { buildAssignmentPrompt, parseWorkflow } from "../src/index.ts";
 
 const source = `---
 required_labels: [ready-for-agent]
 forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
-runtime: bun
-test: bun test
+runtime: node
+test: vp run test
 ---
 Follow the repository guidance.`;
 
@@ -24,7 +25,7 @@ describe("workflow policy", () => {
   });
 
   test("accepts the checked-in repository policy", async () => {
-    const parsed = parseWorkflow(await Bun.file("WORKFLOW.md").text());
+    const parsed = parseWorkflow(await readFile("WORKFLOW.md", "utf8"));
     expect(parsed.policy.requiredLabels).toEqual(["ready-for-agent"]);
     expect(parsed.policy.forbiddenLabels).toEqual([
       "claimed",
@@ -53,7 +54,7 @@ describe("workflow policy", () => {
 
   test("rejects unsupported and ineffective policy", () => {
     expect(() =>
-      parseWorkflow(source.replace("runtime: bun", "poll_interval: 5m")),
+      parseWorkflow(source.replace("runtime: node", "poll_interval: 5m")),
     ).toThrow("unsupported policy key poll_interval");
     expect(() =>
       parseWorkflow(

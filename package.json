@@ -11,40 +11,39 @@
     "build": "vp run typecheck && vp run build:console",
     "build:console": "vp -C apps/console build",
     "check": "vp check && tsc --noEmit",
-    "fixture": "vp run build:console && bun run apps/service/src/fixture-main.ts",
+    "fixture": "vp run build:console && node apps/service/src/fixture-main.ts",
     "format": "vp fmt --check",
     "format:write": "vp fmt --write",
-    "test": "bun scripts/test-suite.ts all",
-    "test:application": "bun scripts/test-suite.ts packages/application",
-    "test:codex": "bun scripts/test-suite.ts packages/codex",
-    "test:contracts": "bun scripts/test-suite.ts packages/contracts",
-    "test:github": "bun scripts/test-suite.ts packages/github",
-    "test:state-sqlite": "bun scripts/test-suite.ts packages/state-sqlite",
-    "test:workspaces": "bun scripts/test-suite.ts packages/workspaces",
-    "test:service": "bun scripts/test-suite.ts apps/service",
-    "test:cli": "bun scripts/test-suite.ts apps/cli",
-    "test:console": "bun scripts/test-suite.ts apps/console",
+    "test": "vp test",
+    "test:application": "vp test packages/application",
+    "test:codex": "vp test packages/codex",
+    "test:contracts": "vp test packages/contracts",
+    "test:github": "vp test packages/github",
+    "test:state-sqlite": "vp test packages/state-sqlite",
+    "test:workspaces": "vp test packages/workspaces",
+    "test:service": "vp test apps/service",
+    "test:cli": "vp test apps/cli",
+    "test:console": "vp test apps/console",
     "typecheck": "tsc --noEmit",
     "prepare": "vp config"
   },
   "dependencies": {
     "@effect/platform": "0.97.1",
-    "@effect/platform-bun": "0.91.2",
+    "@effect/platform-node": "0.108.1",
     "@effect/rpc": "0.76.2",
     "effect": "3.22.1"
   },
   "devDependencies": {
-    "@types/bun": "1.3.14",
+    "@types/node": "24.13.3",
     "typescript": "5.9.2",
-    "vite": "catalog:",
-    "vite-plus": "catalog:"
-  },
-  "overrides": {
-    "vite": "catalog:"
-  },
-  "packageManager": "bun@1.3.14",
-  "catalog": {
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
     "vite-plus": "0.3.0"
-  }
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "packageManager": "npm@12.0.2"
 }

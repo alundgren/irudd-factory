@@ -61,7 +61,7 @@ const service = await startFactoryService(
 );
 console.log(`Factory fixture ${scenarioName} listening at ${service.url}`);
 console.log(
-  `Second RPC client: bun run apps/cli/src/main.ts run-next --command-id second-${scenarioName} --url ${service.url}/rpc`,
+  `Second RPC client: node apps/cli/src/main.ts run-next --command-id second-${scenarioName} --url ${service.url}/rpc`,
 );
 
 await new Promise<void>((resolve) => {

@@ -56,6 +56,9 @@ interface Waiter {
 }
 
 export class AppServerRpc {
+  private readonly child: ManagedProcess;
+  private readonly onApproval: (message: RpcMessage) => void;
+  private readonly onFailure: (error: FactoryError) => void;
   private nextId = 1;
   private readonly pending = new Map<number | string, Pending>();
   private readonly waiters = new Set<Waiter>();
@@ -66,16 +69,18 @@ export class AppServerRpc {
   private stopped = false;
 
   constructor(
-    private readonly child: ManagedProcess,
-    private readonly onApproval: (message: RpcMessage) => void,
-    private readonly onFailure: (error: FactoryError) => void,
-  ) {}
+    child: ManagedProcess,
+    onApproval: (message: RpcMessage) => void,
+    onFailure: (error: FactoryError) => void,
+  ) {
+    this.child = child;
+    this.onApproval = onApproval;
+    this.onFailure = onFailure;
+  }
 
   start(): void {
     const stdout = this.readStdout();
-    const stderr = new Response(this.child.process.stderr)
-      .text()
-      .then(() => {});
+    const stderr = drainStream(this.child.process.stderr);
     this.outputDrained = Promise.all([stdout, stderr]).then(() => {});
     void this.child.exited.then((code) => {
       if (!this.stopped && !this.processExitExpected) {
@@ -197,19 +202,14 @@ export class AppServerRpc {
   private send(message: RpcMessage): void {
     if (this.stopped) return;
     this.child.process.stdin.write(`${JSON.stringify(message)}\n`);
-    this.child.process.stdin.flush();
   }
 
   private async readStdout(): Promise<void> {
-    const reader = this.child.process.stdout
-      .pipeThrough(new TextDecoderStream())
-      .getReader();
+    this.child.process.stdout.setEncoding("utf8");
     let buffered = "";
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffered += value;
+      for await (const chunk of this.child.process.stdout) {
+        buffered += String(chunk);
         let newline = buffered.indexOf("\n");
         while (newline >= 0) {
           const line = buffered.slice(0, newline).trim();
@@ -295,5 +295,11 @@ export class AppServerRpc {
       waiter.reject(error);
     }
     this.waiters.clear();
+  }
+}
+
+async function drainStream(stream: NodeJS.ReadableStream): Promise<void> {
+  for await (const _chunk of stream) {
+    // Reading stderr prevents the child process from blocking on a full pipe.
   }
 }

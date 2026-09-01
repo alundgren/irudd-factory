@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vite-plus/test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   SCENARIOS,
   seedScenario,
@@ -59,7 +60,7 @@ async function waitForRpc(url: string): Promise<void> {
       await getFactorySnapshot(url);
       return;
     } catch {
-      await Bun.sleep(20);
+      await delay(20);
     }
   }
   throw new Error("RPC service did not start");
@@ -80,7 +81,7 @@ async function waitForAssignmentState(
   const deadline = Date.now() + 3_000;
   let snapshot = await getFactorySnapshot(url);
   while (snapshot.assignment?.state !== state && Date.now() < deadline) {
-    await Bun.sleep(20);
+    await delay(20);
     snapshot = await getFactorySnapshot(url);
   }
   expect(snapshot.assignment?.state).toBe(state);

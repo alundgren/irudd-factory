@@ -15,7 +15,7 @@ import {
 } from "@irudd-factory/application";
 import type { PullRequest } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
-import { bunCommandRunner, type CommandRunner } from "./runner.ts";
+import { nodeCommandRunner, type CommandRunner } from "./runner.ts";
 
 /** The GitHub CLI Factory shells out to for every API call. */
 const GH_CLI = "gh";
@@ -571,8 +571,8 @@ function makeService(runner: CommandRunner): GitHubService {
 }
 
 export const makeGitHubService = (
-  runner: CommandRunner = bunCommandRunner,
+  runner: CommandRunner = nodeCommandRunner,
 ): GitHubService => makeService(runner);
 
-export const layerGitHub = (runner: CommandRunner = bunCommandRunner) =>
+export const layerGitHub = (runner: CommandRunner = nodeCommandRunner) =>
   Layer.succeed(GitHub, makeService(runner));

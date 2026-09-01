@@ -1,20 +1,17 @@
 # Agent test rules
 
-Never run `vp test` or `bun test` directly. `vp test` invokes Vitest, which
-cannot run this project's `bun:test` suites. Direct `bun test` scans
-`prototypes/` as well and prints a line per passing test. Use the package
-scripts through `vp run` instead.
+Run active tests through the package scripts with `vp run`. The scripts invoke
+Vite+/Vitest with the root test configuration and exclude the isolated
+prototype suites.
 
-Use the focused component suite while changing a component. Pass a test name
-after the script name to run one test, for example:
+Use the focused component suite while changing a component. Pass Vitest's `-t`
+option to run one test, for example:
 
 ```sh
-vp run test:application "builds the narrow preclaimed prompt"
+vp run test:application -t "builds the narrow preclaimed prompt"
 ```
 
 Run `vp run check` and `vp run test` after the implementation is complete.
-Successful test runs print one summary line. Failed runs print the captured Bun
-diagnostics.
 
 Tests never depend on a build artifact. Serve static fixtures the test itself
 writes, so `vp run test` stays independent of `vp run build:console`.

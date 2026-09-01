@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
 import { Effect } from "effect";
 import {
   makeGitHubService,
@@ -9,14 +9,18 @@ import {
 const workflow = `---
 required_labels: [ready-for-agent]
 forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
-runtime: bun
-test: bun test
+runtime: node
+test: vp run test
 ---
 Implement the issue.`;
 
 class FakeRunner implements CommandRunner {
   readonly calls: Array<{ args: ReadonlyArray<string>; input?: string }> = [];
-  constructor(private readonly responses: CommandResult[]) {}
+  private readonly responses: CommandResult[];
+
+  constructor(responses: CommandResult[]) {
+    this.responses = responses;
+  }
 
   async run(args: ReadonlyArray<string>, input?: string) {
     this.calls.push({ args, ...(input === undefined ? {} : { input }) });

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import {
   ACTIVE_ASSIGNMENT_STATES,
   ASSIGNMENT_STATES,
@@ -62,30 +62,33 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   },
 ];
 
-export function migrate(database: Database): void {
+export function migrate(database: DatabaseSync): void {
   database.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL
   ) STRICT`);
-  const applied = new Set(
-    database
-      .query<{ version: number }, []>(
-        "SELECT version FROM schema_migrations ORDER BY version",
-      )
-      .all()
-      .map(({ version }) => version),
-  );
+  const rows = database
+    .prepare("SELECT version FROM schema_migrations ORDER BY version")
+    .all() as unknown as ReadonlyArray<{ version: number }>;
+  const applied = new Set(rows.map(({ version }) => version));
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
-    database
-      .transaction(() => {
-        for (const statement of migration.statements) database.exec(statement);
-        database
-          .query(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-          )
-          .run(migration.version, new Date().toISOString());
-      })
-      .immediate();
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const statement of migration.statements) database.exec(statement);
+      database
+        .prepare(
+          `INSERT INTO schema_migrations(version, applied_at)
+           VALUES ($version, $appliedAt)`,
+        )
+        .run({
+          version: migration.version,
+          appliedAt: new Date().toISOString(),
+        });
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
   }
 }

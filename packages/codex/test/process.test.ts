@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
 import { spawnManaged, terminateOwnedGroup } from "../src/index.ts";
 
 describe("owned provider processes", () => {

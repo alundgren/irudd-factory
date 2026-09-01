@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
 import { Schema } from "effect";
 import { Assignment, CommandReceipt, isProviderBusy } from "../src/index.ts";
 
