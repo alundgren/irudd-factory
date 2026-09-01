@@ -47,13 +47,16 @@ CLI from one terminal:
 
 ```sh
 vp run build:console
-vp node apps/service/src/main.ts --config factory.json &
+service_log="$(mktemp "${TMPDIR:-/tmp}/irudd-factory.XXXXXX")"
+vp node apps/service/src/main.ts --config factory.json \
+  </dev/null >"$service_log" 2>&1 &
 service_pid=$!
 
 cleanup() {
   trap - 0 INT TERM
   kill "$service_pid" 2>/dev/null || true
   wait "$service_pid" 2>/dev/null || true
+  rm -f "$service_log"
 }
 trap cleanup 0 INT TERM
 
@@ -68,6 +71,7 @@ while [ "$attempt" -lt 100 ]; do
 done
 if [ "$attempt" -eq 100 ]; then
   echo "Factory service did not become ready" >&2
+  cat "$service_log" >&2
   exit 1
 fi
 
@@ -76,8 +80,10 @@ vp node apps/cli/src/main.ts run-next --command-id "$(uuidgen | tr '[:upper:]' '
 wait "$service_pid"
 ```
 
-The service runs in the background while the CLI commands execute. The cleanup
-trap stops it when you press Ctrl-C or leave the shell.
+The service runs in the background while the CLI commands execute. Its output
+goes to a temporary log so shells with background terminal output disabled do
+not suspend it. If startup fails, the command prints that log. The cleanup trap
+stops the service and removes the log when you press Ctrl-C or leave the shell.
 
 The service exposes the console at `http://127.0.0.1:4317/` and Effect RPC at
 `http://127.0.0.1:4317/rpc`. See the [operator guide](docs/operator.md) for the
