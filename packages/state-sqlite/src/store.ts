@@ -9,8 +9,7 @@ import { FactoryError, StateStore } from "@irudd-factory/application";
 import {
   type Assignment,
   AssignmentState,
-  type AssignmentEvent,
-  AssignmentEventDetail,
+  AssignmentEvent,
   ASSIGNMENT_EVENTS,
   type CommandReceipt,
   CommandResult,
@@ -72,11 +71,6 @@ function storageError(error: unknown): FactoryError {
       });
 }
 
-/**
- * Only the JSON columns and the `state` enum carry values SQLite cannot
- * constrain to the domain type. Everything else is already the right shape in
- * the row, so it is assigned rather than revalidated on every read.
- */
 function decodeJson<A, I>(schema: Schema.Schema<A, I>, source: string): A {
   return Schema.decodeUnknownSync(schema)(JSON.parse(source) as unknown);
 }
@@ -128,7 +122,7 @@ function decodeEvent(row: EventRow): AssignmentEvent {
     assignmentId: row.assignment_id,
     type: row.type,
     timestamp: row.timestamp,
-    detail: decodeJson(AssignmentEventDetail, row.detail_json),
+    detail: decodeJson(AssignmentEvent.fields.detail, row.detail_json),
   };
 }
 

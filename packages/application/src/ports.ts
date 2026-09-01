@@ -1,6 +1,7 @@
 import type {
   Assignment,
   AssignmentEvent,
+  AssignmentEventType,
   CommandReceipt,
   FactorySnapshot,
   IssueRef,
@@ -105,7 +106,7 @@ export class Workspaces extends Context.Tag(
 )<Workspaces, WorkspaceService>() {}
 
 export interface ProviderEvent {
-  readonly type: string;
+  readonly type: AssignmentEventType;
   readonly timestamp: string;
   readonly detail: Readonly<Record<string, unknown>>;
   readonly patch?: AssignmentPatch;

@@ -72,18 +72,12 @@ export const Assignment = Schema.Struct({
 });
 export type Assignment = typeof Assignment.Type;
 
-export const AssignmentEventDetail = Schema.Record({
-  key: Schema.String,
-  value: Schema.Unknown,
-});
-export type AssignmentEventDetail = typeof AssignmentEventDetail.Type;
-
 export const AssignmentEvent = Schema.Struct({
   sequence: Schema.Number,
   assignmentId: Schema.String,
   type: Schema.String,
   timestamp: Schema.String,
-  detail: AssignmentEventDetail,
+  detail: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
 });
 export type AssignmentEvent = typeof AssignmentEvent.Type;
 
