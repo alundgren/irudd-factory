@@ -1,11 +1,5 @@
 import { Data } from "effect";
 
-/**
- * Every code a `FactoryError` may carry. The console and the CLI render the
- * code back to an operator, so the set is a contract rather than a local
- * detail, and typing `code` against it means a typo fails to compile instead
- * of inventing a new one.
- */
 export const FACTORY_ERROR_CODES = [
   "admission_invariant_failed",
   "approval_requested",
