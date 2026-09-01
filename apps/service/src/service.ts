@@ -6,6 +6,7 @@ import { BunHttpServer } from "@effect/platform-bun";
 import { RpcSerialization, RpcServer } from "@effect/rpc";
 import {
   Clock,
+  CODEX_PROVIDER,
   GitHub,
   IdGenerator,
   makeApplication,
@@ -14,7 +15,7 @@ import {
   Workspaces,
 } from "@irudd-factory/application";
 import { layerCodexProvider } from "@irudd-factory/codex";
-import { FactoryRpcs } from "@irudd-factory/contracts";
+import { FactoryRpcs, RPC_PATH } from "@irudd-factory/contracts";
 import { layerGitHub } from "@irudd-factory/github";
 import { layerStateStore } from "@irudd-factory/state-sqlite";
 import { layerWorkspaces } from "@irudd-factory/workspaces";
@@ -50,7 +51,7 @@ function handlerLayer(
 ) {
   const application = makeApplication({
     repository: config.repository,
-    provider: "codex",
+    provider: CODEX_PROVIDER,
     model: config.codex.model,
     reasoningEffort: config.codex.reasoningEffort,
   });
@@ -87,7 +88,7 @@ export async function startFactoryService(
   const RpcLive = RpcServer.layer(FactoryRpcs).pipe(
     Layer.provide(handlerLayer(config, dependencies)),
   );
-  const ProtocolLive = RpcServer.layerProtocolHttp({ path: "/rpc" }).pipe(
+  const ProtocolLive = RpcServer.layerProtocolHttp({ path: RPC_PATH }).pipe(
     Layer.provide(RpcSerialization.layerJson),
   );
   const StaticLive = existsSync(join(consoleDistPath, "index.html"))

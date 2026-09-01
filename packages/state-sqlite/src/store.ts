@@ -7,6 +7,7 @@ import type {
 } from "@irudd-factory/application";
 import { FactoryError, StateStore } from "@irudd-factory/application";
 import {
+  ACTIVE_ASSIGNMENT_STATES,
   type Assignment,
   AssignmentState,
   AssignmentEvent,
@@ -19,6 +20,7 @@ import {
 } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { migrate } from "./migrations.ts";
+import { sqlStateList } from "./sql.ts";
 
 interface AssignmentRow {
   readonly id: string;
@@ -265,7 +267,7 @@ export function openStateStore(path: string): OpenStateStore {
           .query<AssignmentRow, [{ provider: string }]>(
             `SELECT * FROM assignments
              WHERE provider = $provider
-               AND state IN ('reserved', 'starting', 'running')
+               AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
              LIMIT 1`,
           )
           .get({ provider: input.provider });

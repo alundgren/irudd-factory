@@ -1,10 +1,10 @@
 import { FetchHttpClient } from "@effect/platform";
 import { RpcClient, RpcSerialization } from "@effect/rpc";
 import type { CommandReceipt, FactorySnapshot } from "@irudd-factory/contracts";
-import { FactoryRpcs } from "@irudd-factory/contracts";
+import { FactoryRpcs, RPC_PATH } from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
 
-const Protocol = RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(
+const Protocol = RpcClient.layerProtocolHttp({ url: RPC_PATH }).pipe(
   Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]),
 );
 

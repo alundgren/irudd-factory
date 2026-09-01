@@ -1,4 +1,9 @@
 import type { Database } from "bun:sqlite";
+import {
+  ACTIVE_ASSIGNMENT_STATES,
+  ASSIGNMENT_STATES,
+} from "@irudd-factory/contracts";
+import { sqlStateList } from "./sql.ts";
 
 interface Migration {
   readonly version: number;
@@ -22,7 +27,7 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
         issue_number INTEGER NOT NULL,
         issue_url TEXT NOT NULL,
         issue_title TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (state IN ('reserved', 'starting', 'running', 'completed', 'failed')),
+        state TEXT NOT NULL CHECK (state IN (${sqlStateList(ASSIGNMENT_STATES)})),
         starting_commit TEXT NOT NULL,
         workflow_blob_id TEXT NOT NULL,
         workflow_digest TEXT NOT NULL,
@@ -43,7 +48,7 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       ) STRICT`,
       `CREATE UNIQUE INDEX assignments_one_nonterminal_provider
        ON assignments(provider)
-       WHERE state IN ('reserved', 'starting', 'running')`,
+       WHERE state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})`,
       `CREATE TABLE assignment_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,

@@ -5,16 +5,27 @@ import type {
   GitHubService,
 } from "@irudd-factory/application";
 import {
+  CLAIM_LABEL,
   FactoryError,
   GitHub,
   parseWorkflow,
+  REPOSITORY_NAME_PATTERN,
   REQUIRED_ISSUE_LABELS,
+  WORKFLOW_FILE,
 } from "@irudd-factory/application";
 import type { PullRequest } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { bunCommandRunner, type CommandRunner } from "./runner.ts";
 
-const RepositoryName = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/** The GitHub CLI Factory shells out to for every API call. */
+const GH_CLI = "gh";
+
+/** A blocking issue only stops discovery while it is still open. */
+const CLOSED_BLOCKER_STATE = "CLOSED";
+
+/** Repository permissions that let an author's issue be picked up. */
+const AUTHOR_WRITE_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+
 const PageInfo = Schema.Struct({
   hasNextPage: Schema.Boolean,
   endCursor: Schema.NullOr(Schema.String),
@@ -195,7 +206,7 @@ const CLOSING_ISSUES_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
 }`;
 
 function splitRepository(repository: string): readonly [string, string] {
-  if (!RepositoryName.test(repository)) {
+  if (!REPOSITORY_NAME_PATTERN.test(repository)) {
     throw new FactoryError({
       code: "repository_invalid",
       message: `Invalid GitHub repository name: ${repository}`,
@@ -244,7 +255,7 @@ async function graphql(
   query: string,
   variables: Readonly<Record<string, string>>,
 ): Promise<string> {
-  const args = ["gh", "api", "graphql", "-f", `query=${query}`];
+  const args = [GH_CLI, "api", "graphql", "-f", `query=${query}`];
   for (const [name, value] of Object.entries(variables)) {
     args.push("-F", `${name}=${value}`);
   }
@@ -399,11 +410,11 @@ function makeService(runner: CommandRunner): GitHubService {
           const workflowPayload = decodeJson(
             WorkflowResponse,
             await checked(runner, [
-              "gh",
+              GH_CLI,
               "api",
               "--method",
               "GET",
-              `repos/${repository}/contents/WORKFLOW.md`,
+              `repos/${repository}/contents/${WORKFLOW_FILE}`,
               "-f",
               `ref=${commit}`,
             ]),
@@ -425,21 +436,19 @@ function makeService(runner: CommandRunner): GitHubService {
             if ([...forbiddenLabels].some((label) => labels.has(label)))
               continue;
             const blockerStates = await allBlockerStates(runner, issue);
-            if (blockerStates.some((state) => state !== "CLOSED")) {
+            if (blockerStates.some((state) => state !== CLOSED_BLOCKER_STATE)) {
               continue;
             }
             if (!issue.author) continue;
             const permission = decodeJson(
               PermissionResponse,
               await checked(runner, [
-                "gh",
+                GH_CLI,
                 "api",
                 `repos/${repository}/collaborators/${issue.author.login}/permission`,
               ]),
             ).permission.toLowerCase();
-            if (!new Set(["admin", "maintain", "write"]).has(permission)) {
-              continue;
-            }
+            if (!AUTHOR_WRITE_PERMISSIONS.has(permission)) continue;
             candidates.push({
               issue: {
                 nodeId: issue.id,
@@ -472,7 +481,7 @@ function makeService(runner: CommandRunner): GitHubService {
         try {
           mutation = await runner.run(
             [
-              "gh",
+              GH_CLI,
               "api",
               "--method",
               "POST",
@@ -480,7 +489,7 @@ function makeService(runner: CommandRunner): GitHubService {
               "--input",
               "-",
             ],
-            JSON.stringify({ labels: ["claimed"] }),
+            JSON.stringify({ labels: [CLAIM_LABEL] }),
           );
         } catch {
           // A launch or transport failure follows the same one-read reconciliation.
@@ -488,7 +497,7 @@ function makeService(runner: CommandRunner): GitHubService {
         if (mutation?.exitCode === 0) {
           try {
             const labels = decodeJson(LabelsResponse, mutation.stdout);
-            if (labels.some(({ name }) => name === "claimed")) {
+            if (labels.some(({ name }) => name === CLAIM_LABEL)) {
               return "confirmed";
             }
           } catch {
@@ -498,13 +507,13 @@ function makeService(runner: CommandRunner): GitHubService {
 
         try {
           const read = await runner.run([
-            "gh",
+            GH_CLI,
             "api",
             `repos/${issue.repository}/issues/${issue.number}`,
           ]);
           if (read.exitCode === 0) {
             const current = decodeJson(IssueLabelsResponse, read.stdout);
-            return current.labels.some(({ name }) => name === "claimed")
+            return current.labels.some(({ name }) => name === CLAIM_LABEL)
               ? "confirmed"
               : "unclaimed";
           }

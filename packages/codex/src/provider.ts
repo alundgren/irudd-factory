@@ -17,7 +17,12 @@ import {
   type ManagedProcess,
   type ProcessExit,
 } from "./process.ts";
-import { AppServerRpc, type RpcMessage } from "./rpc.ts";
+import {
+  APP_SERVER_CLIENT_NAME,
+  APP_SERVER_METHODS,
+  AppServerRpc,
+  type RpcMessage,
+} from "./rpc.ts";
 
 export interface ProviderTimeouts {
   readonly childStartupMs: number;
@@ -38,6 +43,9 @@ export interface CodexProviderOptions {
     shutdownMs: number,
   ) => Promise<ProcessExit>;
 }
+
+/** The Codex executable Factory launches when no prefix is configured. */
+const CODEX_COMMAND = "codex";
 
 const RequiredSchemaMarkers = [
   "InitializeParams",
@@ -129,7 +137,10 @@ function normalizedItem(
 ): Readonly<Record<string, unknown>> {
   const item = message.params?.item as Record<string, unknown> | undefined;
   return {
-    phase: message.method === "item/started" ? "started" : "completed",
+    phase:
+      message.method === APP_SERVER_METHODS.itemStarted
+        ? "started"
+        : "completed",
     ...(typeof item?.id === "string" ? { id: item.id } : {}),
     ...(typeof item?.type === "string" ? { type: item.type } : {}),
     ...(typeof item?.status === "string" ? { status: item.status } : {}),
@@ -217,7 +228,7 @@ export function makeCodexProvider(
   options: CodexProviderOptions,
 ): ProviderService {
   validateTimeouts(options.timeouts);
-  const prefix = options.commandPrefix ?? ["codex"];
+  const prefix = options.commandPrefix ?? [CODEX_COMMAND];
   const terminateProcessGroup =
     options.terminateProcessGroup ?? terminateOwnedGroup;
   if (prefix.length === 0) {
@@ -318,7 +329,7 @@ export function makeCodexProvider(
               if (message.id !== undefined) {
                 rpc.respond(
                   message.id,
-                  message.method === "item/permissions/requestApproval"
+                  message.method === APP_SERVER_METHODS.itemRequestApproval
                     ? { permissions: {} }
                     : { decision: "cancel" },
                 );
@@ -333,7 +344,7 @@ export function makeCodexProvider(
             recordTerminal,
           );
           const unsubscribe = rpc.onMessage((message) => {
-            if (message.method === "model/rerouted") {
+            if (message.method === APP_SERVER_METHODS.modelRerouted) {
               reroutes.push({
                 ...(stringAt(message.params, "fromModel")
                   ? { fromModel: stringAt(message.params, "fromModel") }
@@ -352,7 +363,7 @@ export function makeCodexProvider(
                 }),
               );
             }
-            if (message.method === "error") {
+            if (message.method === APP_SERVER_METHODS.error) {
               recordTerminal(
                 new FactoryError({
                   code: "provider_error_notification",
@@ -360,7 +371,7 @@ export function makeCodexProvider(
                 }),
               );
             }
-            if (message.method === "thread/settings/updated") {
+            if (message.method === APP_SERVER_METHODS.threadSettingsUpdated) {
               observedModel =
                 stringAt(message.params, "threadSettings", "model") ??
                 observedModel;
@@ -369,12 +380,12 @@ export function makeCodexProvider(
                 observedEffort;
             }
             if (
-              message.method === "item/started" ||
-              message.method === "item/completed"
+              message.method === APP_SERVER_METHODS.itemStarted ||
+              message.method === APP_SERVER_METHODS.itemCompleted
             ) {
               itemSummaries.push(normalizedItem(message));
             }
-            if (message.method === "item/completed") {
+            if (message.method === APP_SERVER_METHODS.itemCompleted) {
               const item = message.params?.item as
                 | Record<string, unknown>
                 | undefined;
@@ -385,7 +396,7 @@ export function makeCodexProvider(
                 finalResponse = item.text;
               }
             }
-            if (message.method === "thread/tokenUsage/updated") {
+            if (message.method === APP_SERVER_METHODS.threadTokenUsageUpdated) {
               tokenUsage = normalizeTokenUsage(message.params?.tokenUsage);
             }
           });
@@ -405,10 +416,10 @@ export function makeCodexProvider(
             );
             await raceTerminal(() =>
               rpc.request(
-                "initialize",
+                APP_SERVER_METHODS.initialize,
                 {
                   clientInfo: {
-                    name: "irudd_factory",
+                    name: APP_SERVER_CLIENT_NAME,
                     title: "Irudd Factory",
                     version: "0.1.0",
                   },
@@ -418,12 +429,14 @@ export function makeCodexProvider(
                 "child_startup_timeout",
               ),
             );
-            await guardTerminal(async () => rpc.notify("initialized", {}));
+            await guardTerminal(async () =>
+              rpc.notify(APP_SERVER_METHODS.initialized, {}),
+            );
             let models: unknown;
             try {
               models = await raceTerminal(() =>
                 rpc.request(
-                  "model/list",
+                  APP_SERVER_METHODS.modelList,
                   { limit: 100, includeHidden: true },
                   options.timeouts.modelSchemaMs,
                   "model_schema_timeout",
@@ -451,13 +464,13 @@ export function makeCodexProvider(
             }
             const thread = await raceTerminal(() =>
               rpc.request(
-                "thread/start",
+                APP_SERVER_METHODS.threadStart,
                 {
                   model: options.model,
                   cwd: input.workspace.worktreePath,
                   approvalPolicy: "never",
                   sandbox: "workspace-write",
-                  serviceName: "irudd_factory",
+                  serviceName: APP_SERVER_CLIENT_NAME,
                 },
                 options.timeouts.initializationMs,
                 "initialization_timeout",
@@ -526,7 +539,8 @@ export function makeCodexProvider(
             );
             const completion = raceTerminal(() =>
               rpc.waitFor(
-                (message) => message.method === "turn/completed",
+                (message) =>
+                  message.method === APP_SERVER_METHODS.turnCompleted,
                 options.timeouts.turnMs,
                 "turn_completion_timeout",
               ),
@@ -534,7 +548,7 @@ export function makeCodexProvider(
             void completion.catch(() => {});
             const turn = await raceTerminal(() =>
               rpc.request(
-                "turn/start",
+                APP_SERVER_METHODS.turnStart,
                 {
                   threadId: activeThreadId,
                   input: [{ type: "text", text: input.prompt }],
@@ -578,7 +592,7 @@ export function makeCodexProvider(
             );
             const completed = await completion;
             throwIfTerminal();
-            if (completed.method === "model/rerouted") {
+            if (completed.method === APP_SERVER_METHODS.modelRerouted) {
               throw new FactoryError({
                 code: "model_rerouted",
                 message: "Codex rerouted the requested model",
@@ -679,7 +693,7 @@ export function makeCodexProvider(
               if (interruptMs > 0) {
                 try {
                   await rpc.request(
-                    "turn/interrupt",
+                    APP_SERVER_METHODS.turnInterrupt,
                     { threadId, turnId },
                     interruptMs,
                     "interrupt_timeout",

@@ -4,7 +4,9 @@ import type {
   CommandResult,
   IssueRef,
 } from "@irudd-factory/contracts";
+import { isProviderBusy } from "@irudd-factory/contracts";
 import { Effect } from "effect";
+import { CODEX_PROVIDER } from "./policy.ts";
 import { StateStore } from "./ports.ts";
 
 export const SCENARIO_NAMES = [
@@ -30,6 +32,10 @@ export interface ScenarioDefinition {
 }
 
 const now = "2026-01-15T12:00:00.000Z";
+
+/** The model and effort every scenario is seeded with. */
+export const SCENARIO_MODEL = "gpt-5.6-luna";
+export const SCENARIO_EFFORT = "low";
 const workflow = {
   startingCommit: "a".repeat(40),
   blobId: "b".repeat(40),
@@ -54,7 +60,7 @@ function assignment(
   const terminal = state === "completed" || state === "failed";
   return {
     id: `assignment-${state}`,
-    provider: "codex",
+    provider: CODEX_PROVIDER,
     issue: issue(20),
     state,
     workflow,
@@ -67,10 +73,10 @@ function assignment(
           branch: `factory/assignment-${state}`,
         }
       : null,
-    requestedModel: "gpt-5.6-luna",
-    requestedEffort: "low",
-    observedModel: terminal ? "gpt-5.6-luna" : null,
-    observedEffort: terminal ? "low" : null,
+    requestedModel: SCENARIO_MODEL,
+    requestedEffort: SCENARIO_EFFORT,
+    observedModel: terminal ? SCENARIO_MODEL : null,
+    observedEffort: terminal ? SCENARIO_EFFORT : null,
     codexVersion: terminal ? "codex-cli 0.147.0" : null,
     threadId: terminal ? "thread-fixture" : null,
     turnId: terminal ? "turn-fixture" : null,
@@ -109,10 +115,7 @@ function seeded(
   return {
     name,
     now,
-    candidates:
-      state === "reserved" || state === "starting" || state === "running"
-        ? [issue(21)]
-        : [],
+    candidates: isProviderBusy(state) ? [issue(21)] : [],
     assignment: value,
     events: [
       {

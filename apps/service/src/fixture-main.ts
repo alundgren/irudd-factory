@@ -1,6 +1,8 @@
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  SCENARIO_EFFORT,
+  SCENARIO_MODEL,
   SCENARIOS,
   SCENARIO_NAMES,
   seedScenario,
@@ -35,7 +37,7 @@ const config: FactoryConfig = {
   workspaceRoot: resolve(root, "workspaces"),
   bindHost: "127.0.0.1",
   port: Number(process.env.FACTORY_FIXTURE_PORT ?? "4317"),
-  codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+  codex: { model: SCENARIO_MODEL, reasoningEffort: SCENARIO_EFFORT },
   timeouts: {
     childStartupMs: 1_000,
     initializationMs: 1_000,

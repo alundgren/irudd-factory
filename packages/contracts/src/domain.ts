@@ -1,13 +1,26 @@
 import { Schema } from "effect";
 
-export const AssignmentState = Schema.Literal(
+export const ASSIGNMENT_STATES = [
   "reserved",
   "starting",
   "running",
   "completed",
   "failed",
-);
+] as const;
+
+export const AssignmentState = Schema.Literal(...ASSIGNMENT_STATES);
 export type AssignmentState = typeof AssignmentState.Type;
+
+/**
+ * The states that hold a provider. The SQLite schema enforces one assignment
+ * per provider across exactly this set, so the list drives both that SQL and
+ * the projection the console reads.
+ */
+export const ACTIVE_ASSIGNMENT_STATES = [
+  "reserved",
+  "starting",
+  "running",
+] as const satisfies ReadonlyArray<AssignmentState>;
 
 export const IssueRef = Schema.Struct({
   nodeId: Schema.String,
@@ -115,5 +128,5 @@ export const FactorySnapshot = Schema.Struct({
 export type FactorySnapshot = typeof FactorySnapshot.Type;
 
 export function isProviderBusy(state: AssignmentState): boolean {
-  return state === "reserved" || state === "starting" || state === "running";
+  return ACTIVE_ASSIGNMENT_STATES.some((active) => active === state);
 }

@@ -1,8 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { FactoryError } from "@irudd-factory/application";
+import {
+  FactoryError,
+  REPOSITORY_NAME_PATTERN,
+} from "@irudd-factory/application";
 import type { ProviderTimeouts } from "@irudd-factory/codex";
 import { Schema } from "effect";
+
+/** The configuration file Factory reads, and the flag that overrides it. */
+export const CONFIG_FILE_NAME = "factory.json";
+const CONFIG_FLAG = "--config";
 
 const RawConfig = Schema.Struct({
   repository: Schema.String,
@@ -46,7 +53,7 @@ export function validateConfig(
   } catch (error) {
     throw new FactoryError({
       code: "config_invalid",
-      message: "factory.json does not match the required structure",
+      message: `${CONFIG_FILE_NAME} does not match the required structure`,
       detail: String(error),
     });
   }
@@ -68,7 +75,7 @@ export function validateConfig(
       message: "port must be an integer from 1 through 65535",
     });
   }
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(raw.repository)) {
+  if (!REPOSITORY_NAME_PATTERN.test(raw.repository)) {
     throw new FactoryError({
       code: "config_invalid",
       message: "repository must use owner/name form",
@@ -95,7 +102,7 @@ export function validateConfig(
   };
 }
 
-export async function loadConfig(path = resolve("factory.json")) {
+export async function loadConfig(path = resolve(CONFIG_FILE_NAME)) {
   let source: unknown;
   try {
     source = JSON.parse(await readFile(path, "utf8")) as unknown;
@@ -113,15 +120,15 @@ export function configPathFromArgs(
   args: ReadonlyArray<string>,
   workingDirectory = process.cwd(),
 ): string {
-  if (args.length === 0) return resolve(workingDirectory, "factory.json");
-  if (args.length === 1 && args[0] && args[0] !== "--config") {
+  if (args.length === 0) return resolve(workingDirectory, CONFIG_FILE_NAME);
+  if (args.length === 1 && args[0] && args[0] !== CONFIG_FLAG) {
     return resolve(workingDirectory, args[0]);
   }
-  if (args.length === 2 && args[0] === "--config" && args[1]) {
+  if (args.length === 2 && args[0] === CONFIG_FLAG && args[1]) {
     return resolve(workingDirectory, args[1]);
   }
   throw new FactoryError({
     code: "config_arguments_invalid",
-    message: "usage: factory-service [--config path|path]",
+    message: `usage: factory-service [${CONFIG_FLAG} path|path]`,
   });
 }

@@ -1,4 +1,7 @@
-import { FactoryError } from "@irudd-factory/application";
+import {
+  FactoryError,
+  type FactoryErrorCode,
+} from "@irudd-factory/application";
 
 export interface ManagedProcess {
   readonly process: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -109,7 +112,7 @@ export async function runManagedCommand(options: {
   readonly command: ReadonlyArray<string>;
   readonly cwd: string;
   readonly timeoutMs: number;
-  readonly timeoutCode: string;
+  readonly timeoutCode: FactoryErrorCode;
 }): Promise<{ stdout: string; stderr: string; code: number }> {
   const child = spawnManaged(options.command, options.cwd);
   const stdoutPromise = new Response(child.process.stdout).text();

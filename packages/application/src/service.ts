@@ -6,7 +6,11 @@ import type {
 } from "@irudd-factory/contracts";
 import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
 import { Effect } from "effect";
-import { asFactoryError, FactoryError } from "./errors.ts";
+import {
+  asFactoryError,
+  FactoryError,
+  type FactoryErrorCode,
+} from "./errors.ts";
 import {
   Clock,
   GitHub,
@@ -24,7 +28,7 @@ export interface ApplicationOptions {
   readonly reasoningEffort: string;
 }
 
-function failure(code: string, error: unknown): NormalizedError {
+function failure(code: FactoryErrorCode, error: unknown): NormalizedError {
   const normalized = asFactoryError(error, code);
   return {
     code: normalized.code,
@@ -44,7 +48,7 @@ export function makeApplication(options: ApplicationOptions) {
 
       const claim = yield* github.claimIssue(initial.issue);
       if (claim !== "confirmed") {
-        const code =
+        const code: FactoryErrorCode =
           claim === "unclaimed" ? "claim_unconfirmed" : "claim_unknown";
         yield* state.appendEvent(
           initial.id,

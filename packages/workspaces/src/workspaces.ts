@@ -2,8 +2,15 @@ import { existsSync } from "node:fs";
 import { mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { WorkspaceService } from "@irudd-factory/application";
-import { FactoryError, Workspaces } from "@irudd-factory/application";
+import {
+  FactoryError,
+  REPOSITORY_NAME_PATTERN,
+  Workspaces,
+} from "@irudd-factory/application";
 import { Effect, Layer } from "effect";
+
+/** The Git executable every workspace command runs through. */
+const GIT_CLI = "git";
 
 export interface GitResult {
   readonly stdout: string;
@@ -93,7 +100,7 @@ export function makeWorkspaceService(
     create: (input) =>
       Effect.tryPromise({
         try: async () => {
-          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repository)) {
+          if (!REPOSITORY_NAME_PATTERN.test(input.repository)) {
             throw new FactoryError({
               code: "repository_invalid",
               message: `Invalid repository name: ${input.repository}`,
@@ -126,7 +133,7 @@ export function makeWorkspaceService(
           const remote = `https://github.com/${input.repository}.git`;
           if (!existsSync(plannedClone)) {
             await checked(runner, [
-              "git",
+              GIT_CLI,
               "clone",
               "--no-checkout",
               remote,
@@ -135,7 +142,7 @@ export function makeWorkspaceService(
           } else {
             const configuredRemote = await checked(
               runner,
-              ["git", "remote", "get-url", "origin"],
+              [GIT_CLI, "remote", "get-url", "origin"],
               plannedClone,
             );
             if (configuredRemote !== remote) {
@@ -149,12 +156,12 @@ export function makeWorkspaceService(
           assertPathWithin(canonicalRoot, clonePath, "Canonical clone path");
           await checked(
             runner,
-            ["git", "fetch", "--prune", "origin"],
+            [GIT_CLI, "fetch", "--prune", "origin"],
             clonePath,
           );
           await checked(
             runner,
-            ["git", "cat-file", "-e", `${input.startingCommit}^{commit}`],
+            [GIT_CLI, "cat-file", "-e", `${input.startingCommit}^{commit}`],
             clonePath,
           );
           if (existsSync(plannedWorktree)) {
@@ -167,7 +174,7 @@ export function makeWorkspaceService(
           await checked(
             runner,
             [
-              "git",
+              GIT_CLI,
               "worktree",
               "add",
               "-b",
@@ -187,7 +194,7 @@ export function makeWorkspaceService(
             await checked(
               runner,
               [
-                "git",
+                GIT_CLI,
                 "rev-parse",
                 "--path-format=absolute",
                 "--absolute-git-dir",
@@ -199,7 +206,7 @@ export function makeWorkspaceService(
             await checked(
               runner,
               [
-                "git",
+                GIT_CLI,
                 "rev-parse",
                 "--path-format=absolute",
                 "--git-common-dir",
