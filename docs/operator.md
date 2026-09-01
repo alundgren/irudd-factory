@@ -20,7 +20,7 @@ address must be an IPv4 or IPv6 loopback address.
 
 ```sh
 vp run build:console
-node apps/service/src/main.ts --config factory.json &
+vp node apps/service/src/main.ts --config factory.json &
 service_pid=$!
 
 cleanup() {
@@ -33,7 +33,7 @@ trap cleanup 0 INT TERM
 snapshot_output=
 attempt=0
 while [ "$attempt" -lt 100 ]; do
-  if snapshot_output="$(node apps/cli/src/main.ts snapshot 2>/dev/null)"; then
+  if snapshot_output="$(vp node apps/cli/src/main.ts snapshot 2>/dev/null)"; then
     break
   fi
   attempt=$((attempt + 1))
@@ -59,7 +59,7 @@ temporarily unavailable or the candidate set has changed.
 The CLI requires the caller to provide the command ID:
 
 ```sh
-node apps/cli/src/main.ts run-next --command-id 40b8af63-b7cc-4bc7-96d6-43d9aa42fc91
+vp node apps/cli/src/main.ts run-next --command-id 40b8af63-b7cc-4bc7-96d6-43d9aa42fc91
 wait "$service_pid"
 ```
 
