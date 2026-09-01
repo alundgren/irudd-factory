@@ -51,8 +51,6 @@ fi
 
 printf '%s\n' "$snapshot_output"
 bun run apps/cli/src/main.ts run-next --command-id "$(uuidgen | tr '[:upper:]' '[:lower:]')"
-
-# Keep this terminal attached to Factory. Press Ctrl-C when finished.
 wait "$service_pid"
 ```
 
