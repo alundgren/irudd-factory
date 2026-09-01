@@ -33,10 +33,9 @@ describe("fixture composition inputs", () => {
       const second = await Effect.runPromise(opened.service.getSnapshot());
       expect(second).toEqual(first);
       const active = opened.database
-        .query<
-          { count: number },
-          []
-        >("SELECT count(*) AS count FROM assignments WHERE state IN ('reserved', 'starting', 'running')")
+        .query<{ count: number }, []>(
+          "SELECT count(*) AS count FROM assignments WHERE state IN ('reserved', 'starting', 'running')",
+        )
         .get()?.count;
       expect(active === 0 || active === 1).toBe(true);
       opened.close();

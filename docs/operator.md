@@ -11,7 +11,7 @@ a manual local service, not a scheduler.
 - a target repository with a valid `WORKFLOW.md` on its default branch
 - an issue author with `WRITE`, `MAINTAIN`, or `ADMIN` permission
 
-Install dependencies with `bun install --frozen-lockfile`. Copy
+Install dependencies with `vp install --frozen-lockfile`. Copy
 `factory.example.json` to `factory.json` and set the repository, database
 path, workspace root, Codex model, reasoning effort, and timeouts. The bind
 address must be an IPv4 or IPv6 loopback address.
@@ -19,7 +19,7 @@ address must be an IPv4 or IPv6 loopback address.
 ## Start and inspect Factory
 
 ```sh
-bun run build:console
+vp run build:console
 bun run apps/service/src/main.ts --config factory.json &
 service_pid=$!
 
@@ -93,7 +93,7 @@ needed for diagnosis. The current release has no cleanup command.
 Build and start any seeded scenario with:
 
 ```sh
-bun run fixture -- runnable
+vp run fixture runnable
 ```
 
 Available scenarios are `empty`, `ambiguous`, `busy-reserved`,

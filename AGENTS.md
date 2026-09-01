@@ -1,23 +1,26 @@
 # Agent test rules
 
-Never run `bun test` directly. It scans `prototypes/` as well, and prints a line
-per passing test. Use the component scripts instead.
+Never run `vp test` or `bun test` directly. `vp test` invokes Vitest, which
+cannot run this project's `bun:test` suites. Direct `bun test` scans
+`prototypes/` as well and prints a line per passing test. Use the package
+scripts through `vp run` instead.
 
 Use the focused component suite while changing a component. Pass a test name
-after `--` to run one test, for example:
+after the script name to run one test, for example:
 
 ```sh
-bun run test:application -- "builds the narrow preclaimed prompt"
+vp run test:application "builds the narrow preclaimed prompt"
 ```
 
-Run `bun run test` after the implementation is complete. Successful test runs
-print one summary line. Failed runs print the captured Bun diagnostics.
+Run `vp run check` and `vp run test` after the implementation is complete.
+Successful test runs print one summary line. Failed runs print the captured Bun
+diagnostics.
 
 Tests never depend on a build artifact. Serve static fixtures the test itself
-writes, so `bun run test` stays independent of `bun run build:console`.
+writes, so `vp run test` stays independent of `vp run build:console`.
 
 Console changes require a live fixture check. Start one named fixture with
-`bun run fixture -- <scenario>`, open the printed URL with the available
+`vp run fixture <scenario>`, open the printed URL with the available
 browser-control tool, and inspect the relevant states at desktop and narrow
 viewports. Automated UI assertions do not replace this check.
 

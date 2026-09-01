@@ -126,7 +126,9 @@ async function prepareWorkspace(
     });
     await command(
       ["git", "config", "user.email", "codex-probe@example.invalid"],
-      { cwd: workspace },
+      {
+        cwd: workspace,
+      },
     );
     await command(["git", "add", "."], { cwd: workspace });
     const committed = await command(
@@ -207,12 +209,12 @@ function modelSupportsLow(result: any): boolean {
   );
   return Boolean(
     model &&
-      Array.isArray(model.supportedReasoningEfforts) &&
-      model.supportedReasoningEfforts.some(
-        (effort: any) =>
-          effort === EXPECTED_EFFORT ||
-          effort?.reasoningEffort === EXPECTED_EFFORT,
-      ),
+    Array.isArray(model.supportedReasoningEfforts) &&
+    model.supportedReasoningEfforts.some(
+      (effort: any) =>
+        effort === EXPECTED_EFFORT ||
+        effort?.reasoningEffort === EXPECTED_EFFORT,
+    ),
   );
 }
 
@@ -485,7 +487,10 @@ async function assertionsFor(
     prEnvironment && defaultBranch
       ? await command(
           ["git", "ls-remote", "origin", `refs/heads/${defaultBranch}`],
-          { cwd: workspace, env: prEnvironment },
+          {
+            cwd: workspace,
+            env: prEnvironment,
+          },
         )
       : { code: 1, stdout: "", stderr: "PR environment unavailable" };
   const remoteBaseOid =
@@ -643,7 +648,10 @@ async function readPrBaseline(
   }
   const oidResult = await command(
     ["git", "ls-remote", "origin", `refs/heads/${defaultBranch}`],
-    { cwd: workspace, env: environment },
+    {
+      cwd: workspace,
+      env: environment,
+    },
   );
   const oid = oidResult.stdout.trim().split(/\s+/)[0] ?? "";
   if (oidResult.code !== 0 || !oid) {

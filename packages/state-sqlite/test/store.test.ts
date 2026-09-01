@@ -107,10 +107,9 @@ describe("SQLite state store", () => {
     expect(ambiguous.receipt.result._tag).toBe("selection_ambiguous");
     expect(
       opened.database
-        .query<
-          { count: number },
-          []
-        >("SELECT count(*) AS count FROM assignments")
+        .query<{ count: number }, []>(
+          "SELECT count(*) AS count FROM assignments",
+        )
         .get()?.count,
     ).toBe(0);
     opened.close();
@@ -169,10 +168,9 @@ describe("SQLite state store", () => {
     ]);
     expect(
       first.database
-        .query<
-          { count: number },
-          []
-        >("SELECT count(*) AS count FROM assignments")
+        .query<{ count: number }, []>(
+          "SELECT count(*) AS count FROM assignments",
+        )
         .get()?.count,
     ).toBe(1);
     first.close();

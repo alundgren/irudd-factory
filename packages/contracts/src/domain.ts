@@ -100,7 +100,9 @@ export const StartedResult = Schema.TaggedStruct("started", {
 export const NoCandidateResult = Schema.TaggedStruct("no_candidate", {});
 export const SelectionAmbiguousResult = Schema.TaggedStruct(
   "selection_ambiguous",
-  { issueLinks: Schema.Array(Schema.String) },
+  {
+    issueLinks: Schema.Array(Schema.String),
+  },
 );
 export const ProviderBusyResult = Schema.TaggedStruct("provider_busy", {
   assignment: Assignment,

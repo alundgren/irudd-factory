@@ -17,7 +17,7 @@ import type { FactoryConfig } from "./config.ts";
 
 const requested = process.argv[2];
 if (!SCENARIO_NAMES.includes(requested as ScenarioName)) {
-  console.error(`usage: bun run fixture -- ${SCENARIO_NAMES.join("|")}`);
+  console.error(`usage: vp run fixture ${SCENARIO_NAMES.join("|")}`);
   process.exit(2);
 }
 const scenarioName = requested as ScenarioName;
