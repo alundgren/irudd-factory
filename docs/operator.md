@@ -20,9 +20,36 @@ address must be an IPv4 or IPv6 loopback address.
 
 ```sh
 bun run build:console
-bun run apps/service/src/main.ts --config factory.json
-bun run apps/cli/src/main.ts snapshot
+bun run apps/service/src/main.ts --config factory.json &
+service_pid=$!
+
+cleanup() {
+  trap - 0 INT TERM
+  kill "$service_pid" 2>/dev/null || true
+  wait "$service_pid" 2>/dev/null || true
+}
+trap cleanup 0 INT TERM
+
+snapshot_output=
+attempt=0
+while [ "$attempt" -lt 100 ]; do
+  if snapshot_output="$(bun run apps/cli/src/main.ts snapshot 2>/dev/null)"; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.1
+done
+if [ "$attempt" -eq 100 ]; then
+  echo "Factory service did not become ready" >&2
+  exit 1
+fi
+
+printf '%s\n' "$snapshot_output"
 ```
+
+The service runs in the background while the CLI commands execute. The cleanup
+trap stops it when you press Ctrl-C or leave the shell. Keep this terminal
+attached while using the console or running `run-next`.
 
 Open the configured local URL to use the console. The displayed command ID is
 created before submission. On a transport error, retry that same ID. Factory
@@ -33,6 +60,9 @@ The CLI requires the caller to provide the command ID:
 
 ```sh
 bun run apps/cli/src/main.ts run-next --command-id 40b8af63-b7cc-4bc7-96d6-43d9aa42fc91
+
+# Keep this terminal attached to Factory. Press Ctrl-C when finished.
+wait "$service_pid"
 ```
 
 Factory accepts the command only when exactly one issue is eligible. A second
