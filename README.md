@@ -12,7 +12,7 @@ through App Server, and verifies the resulting pull request.
 
 ## Development
 
-Install Vite+ and the pinned Bun release, then run:
+Install Vite+, then run:
 
 ```sh
 vp install --frozen-lockfile
@@ -21,16 +21,15 @@ vp run test
 vp run build
 ```
 
-The test script launches Vite+/Vitest through Bun because Factory exercises
-`Bun.spawn` and `bun:sqlite` directly. Use `vp run test` so the suite keeps that
-runtime while using Vite+'s test API and configuration.
+Vite+ manages the pinned Node.js runtime and npm release, and runs the active
+test suite through its built-in Vitest command.
 
 Copy [`factory.example.json`](factory.example.json) to `factory.json` and adjust
 the repository and paths. Start the service and use the CLI from one terminal:
 
 ```sh
 vp run build:console
-bun run apps/service/src/main.ts --config factory.json &
+node apps/service/src/main.ts --config factory.json &
 service_pid=$!
 
 cleanup() {
@@ -43,7 +42,7 @@ trap cleanup 0 INT TERM
 snapshot_output=
 attempt=0
 while [ "$attempt" -lt 100 ]; do
-  if snapshot_output="$(bun run apps/cli/src/main.ts snapshot 2>/dev/null)"; then
+  if snapshot_output="$(node apps/cli/src/main.ts snapshot 2>/dev/null)"; then
     break
   fi
   attempt=$((attempt + 1))
@@ -55,7 +54,7 @@ if [ "$attempt" -eq 100 ]; then
 fi
 
 printf '%s\n' "$snapshot_output"
-bun run apps/cli/src/main.ts run-next --command-id "$(uuidgen | tr '[:upper:]' '[:lower:]')"
+node apps/cli/src/main.ts run-next --command-id "$(uuidgen | tr '[:upper:]' '[:lower:]')"
 wait "$service_pid"
 ```
 

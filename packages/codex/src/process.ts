@@ -2,11 +2,13 @@ import {
   FactoryError,
   type FactoryErrorCode,
 } from "@irudd-factory/application";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 
 export interface ManagedProcess {
-  readonly process: Bun.Subprocess<"pipe", "pipe", "pipe">;
+  readonly process: ChildProcessWithoutNullStreams;
   readonly pid: number;
-  readonly exited: Promise<number>;
+  readonly exited: Promise<number | null>;
   hasExited: boolean;
 }
 
@@ -26,29 +28,46 @@ export function spawnManaged(
       message: "Provider command must be a nonempty argument array",
     });
   }
-  const process = Bun.spawn([...command], {
+  const [executable, ...args] = command;
+  if (!executable) {
+    throw new FactoryError({
+      code: "provider_command_invalid",
+      message: "Provider command must be a nonempty argument array",
+    });
+  }
+  const childProcess = spawn(executable, args, {
     cwd,
     env: processEnv(),
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["pipe", "pipe", "pipe"],
     detached: true,
   });
-  if (!process.pid || process.pid <= 1) {
+  if (!childProcess.pid || childProcess.pid <= 1) {
+    childProcess.once("error", () => {});
     throw new FactoryError({
       code: "child_startup_failed",
       message: "Codex did not return a valid process ID",
     });
   }
   const managed: ManagedProcess = {
-    process,
-    pid: process.pid,
+    process: childProcess,
+    pid: childProcess.pid,
     exited: Promise.resolve(-1),
     hasExited: false,
   };
-  const exited = process.exited.then((code) => {
-    managed.hasExited = true;
-    return code;
+  const exited = new Promise<number | null>((resolve, reject) => {
+    childProcess.once("error", (error) => {
+      managed.hasExited = true;
+      reject(
+        new FactoryError({
+          code: "child_startup_failed",
+          message: `Codex process failed to start: ${error.message}`,
+        }),
+      );
+    });
+    childProcess.once("close", (code) => {
+      managed.hasExited = true;
+      resolve(code);
+    });
   });
   Object.defineProperty(managed, "exited", { value: exited });
   return managed;
@@ -80,10 +99,13 @@ function signalGroup(child: ManagedProcess, signal: NodeJS.Signals): void {
 async function waitUntil(
   child: ManagedProcess,
   milliseconds: number,
-): Promise<number | null> {
+): Promise<number | null | undefined> {
   if (child.hasExited) return child.exited;
-  if (milliseconds <= 0) return null;
-  return Promise.race([child.exited, Bun.sleep(milliseconds).then(() => null)]);
+  if (milliseconds <= 0) return undefined;
+  return Promise.race([
+    child.exited,
+    delay(milliseconds).then(() => undefined),
+  ]);
 }
 
 export async function terminateOwnedGroup(
@@ -98,12 +120,12 @@ export async function terminateOwnedGroup(
   signal(child, "SIGTERM");
   const termWait = Math.min(250, Math.max(0, Math.floor(shutdownMs / 2)));
   const graceful = await waitUntil(child, termWait);
-  if (graceful !== null) {
+  if (graceful !== undefined) {
     return { code: graceful, signal: "SIGTERM", cleanupTimedOut: false };
   }
   signal(child, "SIGKILL");
   const forced = await waitUntil(child, Math.max(0, deadline - Date.now()));
-  return forced === null
+  return forced === undefined
     ? { code: null, signal: "SIGKILL", cleanupTimedOut: true }
     : { code: forced, signal: "SIGKILL", cleanupTimedOut: false };
 }
@@ -115,11 +137,11 @@ export async function runManagedCommand(options: {
   readonly timeoutCode: FactoryErrorCode;
 }): Promise<{ stdout: string; stderr: string; code: number }> {
   const child = spawnManaged(options.command, options.cwd);
-  const stdoutPromise = new Response(child.process.stdout).text();
-  const stderrPromise = new Response(child.process.stderr).text();
+  const stdoutPromise = readStream(child.process.stdout);
+  const stderrPromise = readStream(child.process.stderr);
   const result = await Promise.race([
     child.exited.then((code) => ({ _tag: "exit" as const, code })),
-    Bun.sleep(options.timeoutMs).then(() => ({ _tag: "timeout" as const })),
+    delay(options.timeoutMs).then(() => ({ _tag: "timeout" as const })),
   ]);
   if (result._tag === "timeout") {
     await terminateOwnedGroup(child, Math.min(options.timeoutMs, 1_000));
@@ -129,5 +151,18 @@ export async function runManagedCommand(options: {
     });
   }
   const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  if (result.code === null) {
+    throw new FactoryError({
+      code: options.timeoutCode,
+      message: "Provider command exited after receiving a signal",
+    });
+  }
   return { stdout, stderr, code: result.code };
+}
+
+async function readStream(stream: NodeJS.ReadableStream): Promise<string> {
+  let output = "";
+  stream.setEncoding("utf8");
+  for await (const chunk of stream) output += String(chunk);
+  return output;
 }

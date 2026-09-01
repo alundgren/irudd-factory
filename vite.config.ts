@@ -7,7 +7,7 @@ export default defineConfig({
   fmt: {
     printWidth: 80,
     ignorePatterns: [
-      "bun.lock",
+      "package-lock.json",
       "dist/**",
       "node_modules/**",
       "prototypes/codex-app-server-probe/fixture/acceptance/**",
@@ -22,9 +22,5 @@ export default defineConfig({
   test: {
     include: ["{apps,packages}/**/test/**/*.test.ts"],
     fileParallelism: false,
-    experimental: {
-      nodeLoader: false,
-      viteModuleRunner: false,
-    },
   },
 });

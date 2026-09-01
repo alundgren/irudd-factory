@@ -1,9 +1,8 @@
 # Agent test rules
 
-Never run `vp test` or `bun test` directly. A direct `vp test` uses Node.js,
-which cannot load `bun:sqlite` or call `Bun.spawn`. Direct `bun test` scans
-`prototypes/` as well. Use the package scripts through `vp run`; they launch
-Vite+/Vitest through Bun with the root test configuration.
+Run active tests through the package scripts with `vp run`. The scripts invoke
+Vite+/Vitest with the root test configuration and exclude the isolated
+prototype suites.
 
 Use the focused component suite while changing a component. Pass Vitest's `-t`
 option to run one test, for example:

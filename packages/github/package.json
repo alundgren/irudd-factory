@@ -7,11 +7,11 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "bun --bun vp -C ../.. test packages/github"
+    "test": "vp -C ../.. test packages/github"
   },
   "dependencies": {
-    "@irudd-factory/application": "workspace:*",
-    "@irudd-factory/contracts": "workspace:*",
+    "@irudd-factory/application": "*",
+    "@irudd-factory/contracts": "*",
     "effect": "3.22.1"
   }
 }

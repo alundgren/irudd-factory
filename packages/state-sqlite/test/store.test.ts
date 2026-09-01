@@ -56,19 +56,21 @@ function admission(
 describe("SQLite state store", () => {
   test("applies required SQLite settings and forward migration", async () => {
     const opened = openStateStore(await databasePath());
-    expect(opened.database.query("PRAGMA journal_mode").get()).toEqual({
+    expect(opened.database.prepare("PRAGMA journal_mode").get()).toEqual({
       journal_mode: "wal",
     });
-    expect(opened.database.query("PRAGMA foreign_keys").get()).toEqual({
+    expect(opened.database.prepare("PRAGMA foreign_keys").get()).toEqual({
       foreign_keys: 1,
     });
-    expect(opened.database.query("PRAGMA busy_timeout").get()).toEqual({
+    expect(opened.database.prepare("PRAGMA busy_timeout").get()).toEqual({
       timeout: 5000,
     });
     expect(
-      opened.database
-        .query<{ version: number }, []>("SELECT version FROM schema_migrations")
-        .get()?.version,
+      (
+        opened.database
+          .prepare("SELECT version FROM schema_migrations")
+          .get() as { version: number } | undefined
+      )?.version,
     ).toBe(1);
     opened.close();
   });
@@ -106,11 +108,11 @@ describe("SQLite state store", () => {
     expect(empty.receipt.result._tag).toBe("no_candidate");
     expect(ambiguous.receipt.result._tag).toBe("selection_ambiguous");
     expect(
-      opened.database
-        .query<{ count: number }, []>(
-          "SELECT count(*) AS count FROM assignments",
-        )
-        .get()?.count,
+      (
+        opened.database
+          .prepare("SELECT count(*) AS count FROM assignments")
+          .get() as { count: number } | undefined
+      )?.count,
     ).toBe(0);
     opened.close();
   });
@@ -167,11 +169,11 @@ describe("SQLite state store", () => {
       "started",
     ]);
     expect(
-      first.database
-        .query<{ count: number }, []>(
-          "SELECT count(*) AS count FROM assignments",
-        )
-        .get()?.count,
+      (
+        first.database
+          .prepare("SELECT count(*) AS count FROM assignments")
+          .get() as { count: number } | undefined
+      )?.count,
     ).toBe(1);
     first.close();
     second.close();

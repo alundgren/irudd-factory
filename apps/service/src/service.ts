@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { createServer } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { HttpRouter, HttpServerResponse } from "@effect/platform";
-import { BunHttpServer } from "@effect/platform-bun";
+import { NodeHttpServer } from "@effect/platform-node";
 import { RpcSerialization, RpcServer } from "@effect/rpc";
 import {
   Clock,
@@ -123,8 +124,8 @@ export async function startFactoryService(
     Layer.provide(ProtocolLive),
     Layer.provide(StaticLive),
     Layer.provide(
-      BunHttpServer.layer({
-        hostname: config.bindHost,
+      NodeHttpServer.layer(() => createServer(), {
+        host: config.bindHost,
         port: config.port,
       }),
     ),

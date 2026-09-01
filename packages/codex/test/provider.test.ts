@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "vite-plus/test";
+import { setTimeout as delay } from "node:timers/promises";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -263,7 +264,7 @@ describe("Codex provider", () => {
               Effect.promise(async () => {
                 if (event.type === "provider.settings.observed") {
                   settingsEvents += 1;
-                  if (settingsEvents === 2) await Bun.sleep(75);
+                  if (settingsEvents === 2) await delay(75);
                 }
               }),
           ),
@@ -311,7 +312,7 @@ describe("Codex provider", () => {
       },
       terminateProcessGroup: async (child, shutdownMs) => {
         captured = child;
-        await Bun.sleep(shutdownMs);
+        await delay(shutdownMs);
         terminationReturnedAt = performance.now();
         return {
           code: null,
@@ -358,7 +359,7 @@ describe("Codex provider", () => {
         captured = child;
         budgets.push(shutdownMs);
         if (budgets.length === 1) {
-          await Bun.sleep(120);
+          await delay(120);
           throw new Error("termination failed");
         }
         return terminateOwnedGroup(child, shutdownMs);

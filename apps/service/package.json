@@ -4,20 +4,20 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit",
-    "start": "bun src/main.ts",
-    "fixture": "bun src/fixture-main.ts",
-    "test": "bun --bun vp -C ../.. test apps/service"
+    "start": "node src/main.ts",
+    "fixture": "node src/fixture-main.ts",
+    "test": "vp -C ../.. test apps/service"
   },
   "dependencies": {
     "@effect/platform": "0.97.1",
-    "@effect/platform-bun": "0.91.2",
+    "@effect/platform-node": "0.108.1",
     "@effect/rpc": "0.76.2",
-    "@irudd-factory/application": "workspace:*",
-    "@irudd-factory/codex": "workspace:*",
-    "@irudd-factory/contracts": "workspace:*",
-    "@irudd-factory/github": "workspace:*",
-    "@irudd-factory/state-sqlite": "workspace:*",
-    "@irudd-factory/workspaces": "workspace:*",
+    "@irudd-factory/application": "*",
+    "@irudd-factory/codex": "*",
+    "@irudd-factory/contracts": "*",
+    "@irudd-factory/github": "*",
+    "@irudd-factory/state-sqlite": "*",
+    "@irudd-factory/workspaces": "*",
     "effect": "3.22.1"
   }
 }

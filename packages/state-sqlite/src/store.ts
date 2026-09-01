@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type {
   AdmissionInput,
   AssignmentPatch,
@@ -137,27 +137,27 @@ function decodeReceipt(row: ReceiptRow): CommandReceipt {
 }
 
 export interface OpenStateStore {
-  readonly database: Database;
+  readonly database: DatabaseSync;
   readonly service: StateStoreService;
   readonly close: () => void;
 }
 
 export function openStateStore(path: string): OpenStateStore {
-  const database = new Database(path, { create: true, strict: true });
+  const database = new DatabaseSync(path, { timeout: 5_000 });
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA busy_timeout = 5000");
   migrate(database);
 
-  const receiptQuery = database.query<ReceiptRow, [{ commandId: string }]>(
+  const receiptQuery = database.prepare(
     "SELECT command_id, result_json, created_at FROM command_receipts WHERE command_id = $commandId",
   );
-  const assignmentQuery = database.query<AssignmentRow, [{ id: string }]>(
+  const assignmentQuery = database.prepare(
     "SELECT * FROM assignments WHERE id = $id",
   );
 
   function getReceiptSync(commandId: string) {
-    const row = receiptQuery.get({ commandId });
+    const row = receiptQuery.get({ commandId }) as ReceiptRow | undefined;
     return row ? decodeReceipt(row) : null;
   }
 
@@ -167,7 +167,7 @@ export function openStateStore(path: string): OpenStateStore {
     timestamp: string,
   ): CommandReceipt {
     database
-      .query(
+      .prepare(
         `INSERT INTO command_receipts(command_id, result_json, created_at)
          VALUES ($commandId, $resultJson, $createdAt)`,
       )
@@ -181,7 +181,7 @@ export function openStateStore(path: string): OpenStateStore {
 
   function insertAssignment(value: Assignment): void {
     database
-      .query(
+      .prepare(
         `INSERT INTO assignments(
           id, provider, issue_node_id, issue_repository, issue_number,
           issue_url, issue_title, state, starting_commit, workflow_blob_id,
@@ -236,7 +236,7 @@ export function openStateStore(path: string): OpenStateStore {
     detail: unknown,
   ): number {
     const result = database
-      .query(
+      .prepare(
         `INSERT INTO assignment_events(assignment_id, type, timestamp, detail_json)
          VALUES ($assignmentId, $type, $timestamp, $detailJson)`,
       )
@@ -251,120 +251,115 @@ export function openStateStore(path: string): OpenStateStore {
 
   function setLastEventSequence(assignmentId: string, sequence: number): void {
     database
-      .query(
+      .prepare(
         "UPDATE assignments SET last_event_sequence = $sequence WHERE id = $id",
       )
       .run({ sequence, id: assignmentId });
   }
 
   function admitSync(input: AdmissionInput): AdmissionResult {
-    return database
-      .transaction(() => {
-        const existing = getReceiptSync(input.commandId);
-        if (existing) return { receipt: existing, created: false };
+    return immediateTransaction(database, () => {
+      const existing = getReceiptSync(input.commandId);
+      if (existing) return { receipt: existing, created: false };
 
-        const activeRow = database
-          .query<AssignmentRow, [{ provider: string }]>(
-            `SELECT * FROM assignments
+      const activeRow = database
+        .prepare(
+          `SELECT * FROM assignments
              WHERE provider = $provider
                AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
              LIMIT 1`,
-          )
-          .get({ provider: input.provider });
-        if (activeRow) {
-          return {
-            receipt: insertReceipt(
-              input.commandId,
-              {
-                _tag: "provider_busy",
-                assignment: decodeAssignment(activeRow),
-              },
-              input.timestamp,
-            ),
-            created: true,
-          };
-        }
-
-        const seenIssueQuery = database.query<
-          { present: number },
-          [{ issueNodeId: string }]
-        >(
-          "SELECT 1 AS present FROM assignments WHERE issue_node_id = $issueNodeId LIMIT 1",
-        );
-        const unseen = input.candidates.filter(
-          (candidate) =>
-            !seenIssueQuery.get({ issueNodeId: candidate.issue.nodeId }),
-        );
-        if (unseen.length === 0) {
-          return {
-            receipt: insertReceipt(
-              input.commandId,
-              { _tag: "no_candidate" },
-              input.timestamp,
-            ),
-            created: true,
-          };
-        }
-        if (unseen.length > 1) {
-          return {
-            receipt: insertReceipt(
-              input.commandId,
-              {
-                _tag: "selection_ambiguous",
-                issueLinks: unseen.map(({ issue }) => issue.url),
-              },
-              input.timestamp,
-            ),
-            created: true,
-          };
-        }
-
-        const candidate = unseen[0];
-        if (!candidate) {
-          throw new FactoryError({
-            code: "admission_invariant_failed",
-            message: "Admission selected no candidate",
-          });
-        }
-        const value: Assignment = {
-          id: input.assignmentId,
-          provider: input.provider,
-          issue: candidate.issue,
-          state: "reserved",
-          workflow: candidate.workflow,
-          workspace: null,
-          requestedModel: input.requestedModel,
-          requestedEffort: input.requestedEffort,
-          observedModel: null,
-          observedEffort: null,
-          codexVersion: null,
-          threadId: null,
-          turnId: null,
-          pullRequest: null,
-          error: null,
-          createdAt: input.timestamp,
-          updatedAt: input.timestamp,
-          lastEventSequence: 0,
-        };
-        insertAssignment(value);
-        const sequence = insertEvent(
-          value.id,
-          ASSIGNMENT_EVENTS.reserved,
-          input.timestamp,
-          {},
-        );
-        setLastEventSequence(value.id, sequence);
-        const assignment = { ...value, lastEventSequence: sequence };
+        )
+        .get({ provider: input.provider }) as AssignmentRow | undefined;
+      if (activeRow) {
         return {
           receipt: insertReceipt(
             input.commandId,
-            { _tag: "started", assignment },
+            {
+              _tag: "provider_busy",
+              assignment: decodeAssignment(activeRow),
+            },
             input.timestamp,
           ),
           created: true,
         };
-      })
-      .immediate();
+      }
+
+      const seenIssueQuery = database.prepare(
+        "SELECT 1 AS present FROM assignments WHERE issue_node_id = $issueNodeId LIMIT 1",
+      );
+      const unseen = input.candidates.filter(
+        (candidate) =>
+          !seenIssueQuery.get({ issueNodeId: candidate.issue.nodeId }),
+      );
+      if (unseen.length === 0) {
+        return {
+          receipt: insertReceipt(
+            input.commandId,
+            { _tag: "no_candidate" },
+            input.timestamp,
+          ),
+          created: true,
+        };
+      }
+      if (unseen.length > 1) {
+        return {
+          receipt: insertReceipt(
+            input.commandId,
+            {
+              _tag: "selection_ambiguous",
+              issueLinks: unseen.map(({ issue }) => issue.url),
+            },
+            input.timestamp,
+          ),
+          created: true,
+        };
+      }
+
+      const candidate = unseen[0];
+      if (!candidate) {
+        throw new FactoryError({
+          code: "admission_invariant_failed",
+          message: "Admission selected no candidate",
+        });
+      }
+      const value: Assignment = {
+        id: input.assignmentId,
+        provider: input.provider,
+        issue: candidate.issue,
+        state: "reserved",
+        workflow: candidate.workflow,
+        workspace: null,
+        requestedModel: input.requestedModel,
+        requestedEffort: input.requestedEffort,
+        observedModel: null,
+        observedEffort: null,
+        codexVersion: null,
+        threadId: null,
+        turnId: null,
+        pullRequest: null,
+        error: null,
+        createdAt: input.timestamp,
+        updatedAt: input.timestamp,
+        lastEventSequence: 0,
+      };
+      insertAssignment(value);
+      const sequence = insertEvent(
+        value.id,
+        ASSIGNMENT_EVENTS.reserved,
+        input.timestamp,
+        {},
+      );
+      setLastEventSequence(value.id, sequence);
+      const assignment = { ...value, lastEventSequence: sequence };
+      return {
+        receipt: insertReceipt(
+          input.commandId,
+          { _tag: "started", assignment },
+          input.timestamp,
+        ),
+        created: true,
+      };
+    });
   }
 
   function appendEventSync(
@@ -372,30 +367,31 @@ export function openStateStore(path: string): OpenStateStore {
     event: Omit<AssignmentEvent, "sequence" | "assignmentId">,
     patch: AssignmentPatch = {},
   ): Assignment {
-    return database
-      .transaction(() => {
-        const currentRow = assignmentQuery.get({ id: assignmentId });
-        if (!currentRow) {
-          throw new FactoryError({
-            code: "assignment_not_found",
-            message: `Assignment ${assignmentId} was not found`,
-          });
-        }
-        const current = decodeAssignment(currentRow);
-        const next: Assignment = {
-          ...current,
-          ...patch,
-          updatedAt: event.timestamp,
-        };
-        const sequence = insertEvent(
-          assignmentId,
-          event.type,
-          event.timestamp,
-          event.detail,
-        );
-        database
-          .query(
-            `UPDATE assignments SET
+    return immediateTransaction(database, () => {
+      const currentRow = assignmentQuery.get({ id: assignmentId }) as
+        | AssignmentRow
+        | undefined;
+      if (!currentRow) {
+        throw new FactoryError({
+          code: "assignment_not_found",
+          message: `Assignment ${assignmentId} was not found`,
+        });
+      }
+      const current = decodeAssignment(currentRow);
+      const next: Assignment = {
+        ...current,
+        ...patch,
+        updatedAt: event.timestamp,
+      };
+      const sequence = insertEvent(
+        assignmentId,
+        event.type,
+        event.timestamp,
+        event.detail,
+      );
+      database
+        .prepare(
+          `UPDATE assignments SET
                state = $state,
                workspace_json = $workspaceJson,
                observed_model = $observedModel,
@@ -408,28 +404,25 @@ export function openStateStore(path: string): OpenStateStore {
                updated_at = $updatedAt,
                last_event_sequence = $lastEventSequence
              WHERE id = $id`,
-          )
-          .run({
-            state: next.state,
-            workspaceJson: next.workspace
-              ? JSON.stringify(next.workspace)
-              : null,
-            observedModel: next.observedModel,
-            observedEffort: next.observedEffort,
-            codexVersion: next.codexVersion,
-            threadId: next.threadId,
-            turnId: next.turnId,
-            pullRequestJson: next.pullRequest
-              ? JSON.stringify(next.pullRequest)
-              : null,
-            errorJson: next.error ? JSON.stringify(next.error) : null,
-            updatedAt: next.updatedAt,
-            lastEventSequence: sequence,
-            id: assignmentId,
-          });
-        return { ...next, lastEventSequence: sequence };
-      })
-      .immediate();
+        )
+        .run({
+          state: next.state,
+          workspaceJson: next.workspace ? JSON.stringify(next.workspace) : null,
+          observedModel: next.observedModel,
+          observedEffort: next.observedEffort,
+          codexVersion: next.codexVersion,
+          threadId: next.threadId,
+          turnId: next.turnId,
+          pullRequestJson: next.pullRequest
+            ? JSON.stringify(next.pullRequest)
+            : null,
+          errorJson: next.error ? JSON.stringify(next.error) : null,
+          updatedAt: next.updatedAt,
+          lastEventSequence: sequence,
+          id: assignmentId,
+        });
+      return { ...next, lastEventSequence: sequence };
+    });
   }
 
   const service: StateStoreService = {
@@ -448,7 +441,9 @@ export function openStateStore(path: string): OpenStateStore {
     getAssignment: (assignmentId) =>
       Effect.try({
         try: () => {
-          const row = assignmentQuery.get({ id: assignmentId });
+          const row = assignmentQuery.get({ id: assignmentId }) as
+            | AssignmentRow
+            | undefined;
           return row ? decodeAssignment(row) : null;
         },
         catch: storageError,
@@ -457,25 +452,26 @@ export function openStateStore(path: string): OpenStateStore {
       Effect.try({
         try: () => {
           const receiptRow = database
-            .query<ReceiptRow, []>(
+            .prepare(
               "SELECT command_id, result_json, created_at FROM command_receipts ORDER BY rowid DESC LIMIT 1",
             )
-            .get();
+            .get() as ReceiptRow | undefined;
           const assignmentRow = database
-            .query<AssignmentRow, []>(
-              "SELECT * FROM assignments ORDER BY rowid DESC LIMIT 1",
-            )
-            .get();
+            .prepare("SELECT * FROM assignments ORDER BY rowid DESC LIMIT 1")
+            .get() as AssignmentRow | undefined;
           const current = assignmentRow
             ? decodeAssignment(assignmentRow)
             : null;
           const events = current
-            ? database
-                .query<EventRow, [{ assignmentId: string }]>(
-                  "SELECT sequence, assignment_id, type, timestamp, detail_json FROM assignment_events WHERE assignment_id = $assignmentId ORDER BY sequence",
-                )
-                .all({ assignmentId: current.id })
-                .map(decodeEvent)
+            ? (
+                database
+                  .prepare(
+                    "SELECT sequence, assignment_id, type, timestamp, detail_json FROM assignment_events WHERE assignment_id = $assignmentId ORDER BY sequence",
+                  )
+                  .all({
+                    assignmentId: current.id,
+                  }) as unknown as ReadonlyArray<EventRow>
+              ).map(decodeEvent)
             : [];
           return {
             receipt: receiptRow ? decodeReceipt(receiptRow) : null,
@@ -488,43 +484,54 @@ export function openStateStore(path: string): OpenStateStore {
     reset: () =>
       Effect.try({
         try: () => {
-          database
-            .transaction(() => {
-              database.exec("DELETE FROM assignment_events");
-              database.exec("DELETE FROM assignments");
-              database.exec("DELETE FROM command_receipts");
-              database.exec(
-                "DELETE FROM sqlite_sequence WHERE name = 'assignment_events'",
-              );
-            })
-            .immediate();
+          immediateTransaction(database, () => {
+            database.exec("DELETE FROM assignment_events");
+            database.exec("DELETE FROM assignments");
+            database.exec("DELETE FROM command_receipts");
+            database.exec(
+              "DELETE FROM sqlite_sequence WHERE name = 'assignment_events'",
+            );
+          });
         },
         catch: storageError,
       }),
     seedAssignment: (assignment, events) =>
       Effect.try({
         try: () => {
-          database
-            .transaction(() => {
-              insertAssignment({ ...assignment, lastEventSequence: 0 });
-              let lastSequence = 0;
-              for (const event of events) {
-                lastSequence = insertEvent(
-                  event.assignmentId,
-                  event.type,
-                  event.timestamp,
-                  event.detail,
-                );
-              }
-              setLastEventSequence(assignment.id, lastSequence);
-            })
-            .immediate();
+          immediateTransaction(database, () => {
+            insertAssignment({ ...assignment, lastEventSequence: 0 });
+            let lastSequence = 0;
+            for (const event of events) {
+              lastSequence = insertEvent(
+                event.assignmentId,
+                event.type,
+                event.timestamp,
+                event.detail,
+              );
+            }
+            setLastEventSequence(assignment.id, lastSequence);
+          });
         },
         catch: storageError,
       }),
   };
 
-  return { database, service, close: () => database.close(false) };
+  return { database, service, close: () => database.close() };
+}
+
+function immediateTransaction<A>(
+  database: DatabaseSync,
+  operation: () => A,
+): A {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export const layerStateStore = (path: string) =>

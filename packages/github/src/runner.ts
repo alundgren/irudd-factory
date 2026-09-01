@@ -1,4 +1,5 @@
 import { FactoryError } from "@irudd-factory/application";
+import { spawn } from "node:child_process";
 
 export interface CommandResult {
   readonly stdout: string;
@@ -13,7 +14,7 @@ export interface CommandRunner {
   ) => Promise<CommandResult>;
 }
 
-export const bunCommandRunner: CommandRunner = {
+export const nodeCommandRunner: CommandRunner = {
   run: async (args, input) => {
     if (args.length === 0 || args.some((part) => part.includes("\0"))) {
       throw new FactoryError({
@@ -21,20 +22,46 @@ export const bunCommandRunner: CommandRunner = {
         message: "GitHub command must be a nonempty argument array",
       });
     }
-    const child = Bun.spawn([...args], {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
+    const [executable, ...commandArgs] = args;
+    if (!executable) {
+      throw new FactoryError({
+        code: "github_command_invalid",
+        message: "GitHub command must be a nonempty argument array",
+      });
+    }
+    const child = spawn(executable, commandArgs, {
+      stdio: ["pipe", "pipe", "pipe"],
     });
     if (input !== undefined) {
       child.stdin.write(input);
     }
     child.stdin.end();
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
+      readStream(child.stdout),
+      readStream(child.stderr),
+      exitCodeFor(child),
     ]);
     return { stdout, stderr, exitCode };
   },
 };
+
+async function readStream(stream: NodeJS.ReadableStream): Promise<string> {
+  let output = "";
+  stream.setEncoding("utf8");
+  for await (const chunk of stream) output += String(chunk);
+  return output;
+}
+
+function exitCodeFor(child: ReturnType<typeof spawn>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    child.once("error", (error) =>
+      reject(
+        new FactoryError({
+          code: "github_command_failed",
+          message: `GitHub command failed to start: ${error.message}`,
+        }),
+      ),
+    );
+    child.once("close", (code) => resolve(code ?? 1));
+  });
+}

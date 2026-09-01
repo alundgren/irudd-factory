@@ -7,10 +7,10 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "bun --bun vp -C ../.. test packages/workspaces"
+    "test": "vp -C ../.. test packages/workspaces"
   },
   "dependencies": {
-    "@irudd-factory/application": "workspace:*",
+    "@irudd-factory/application": "*",
     "effect": "3.22.1"
   }
 }

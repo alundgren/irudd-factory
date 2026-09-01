@@ -89,20 +89,28 @@ async function handle(line: string): Promise<void> {
   }
   if (message.method === "thread/start" && message.id !== undefined) {
     if (mode === "thread-timeout") return;
-    respond(message.id, {
-      thread: { id: "thread-1" },
-      model: mode === "model-mismatch" ? "another-model" : "gpt-5.6-luna",
-      ...(mode === "effort-missing"
-        ? {}
-        : {
-            reasoningEffort:
-              mode === "effort-mismatch"
-                ? CONFIGURED_EFFORT
-                : requestedEffort(message.params),
-          }),
-    });
+    const response = {
+      id: message.id,
+      result: {
+        thread: { id: "thread-1" },
+        model: mode === "model-mismatch" ? "another-model" : "gpt-5.6-luna",
+        ...(mode === "effort-missing"
+          ? {}
+          : {
+              reasoningEffort:
+                mode === "effort-mismatch"
+                  ? CONFIGURED_EFFORT
+                  : requestedEffort(message.params),
+            }),
+      },
+    };
     if (mode === "response-then-error") {
-      send({ method: "error", params: { message: "thread failed" } });
+      const error = { method: "error", params: { message: "thread failed" } };
+      process.stdout.write(
+        `${JSON.stringify(response)}\n${JSON.stringify(error)}\n`,
+      );
+    } else {
+      send(response);
     }
     return;
   }
@@ -184,7 +192,7 @@ async function handle(line: string): Promise<void> {
       params: { turn: { id: "turn-1", status: "completed" } },
     });
     if (mode.startsWith("post-completion-")) {
-      await Bun.sleep(25);
+      await delay(25);
       if (mode === "post-completion-error") {
         send({ method: "error", params: { message: "late provider failure" } });
       }
@@ -200,20 +208,9 @@ async function handle(line: string): Promise<void> {
   }
 }
 
-const reader = Bun.stdin
-  .stream()
-  .pipeThrough(new TextDecoderStream())
-  .getReader();
-let buffered = "";
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  buffered += value;
-  let newline = buffered.indexOf("\n");
-  while (newline >= 0) {
-    const line = buffered.slice(0, newline).trim();
-    buffered = buffered.slice(newline + 1);
-    if (line) await handle(line);
-    newline = buffered.indexOf("\n");
-  }
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  if (line.trim()) await handle(line.trim());
 }
+import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
