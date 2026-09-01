@@ -32,6 +32,13 @@ const STOPPED_MESSAGE = "Codex App Server client stopped";
 /** How Factory identifies itself to the App Server. */
 export const APP_SERVER_CLIENT_NAME = "irudd_factory";
 
+/**
+ * `thread/start` takes no reasoning effort parameter, so the thread would
+ * otherwise inherit the operator's configured default. This config override key
+ * pins the requested effort from the first thread settings Codex reports.
+ */
+export const REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort";
+
 export interface RpcMessage {
   readonly id?: number | string;
   readonly method?: string;
