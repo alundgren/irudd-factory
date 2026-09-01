@@ -46,10 +46,7 @@ function respond(id: number | string, result: unknown): void {
   send({ id, result });
 }
 
-/**
- * What this fake reports when the client pins no reasoning effort, mirroring an
- * operator config that defaults to high.
- */
+// Ambient default if no effort is requested
 const CONFIGURED_EFFORT = "high";
 
 function requestedEffort(params: Record<string, unknown> | undefined): string {
