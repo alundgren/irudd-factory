@@ -21,8 +21,9 @@ vp run test
 vp run build
 ```
 
-Use `vp run test`, not the built-in `vp test`. Factory and its tests use Bun
-APIs, while the Vite+ built-in runs Vitest under Node.js.
+The test script launches Vite+/Vitest through Bun because Factory exercises
+`Bun.spawn` and `bun:sqlite` directly. Use `vp run test` so the suite keeps that
+runtime while using Vite+'s test API and configuration.
 
 Copy [`factory.example.json`](factory.example.json) to `factory.json` and adjust
 the repository and paths. Start the service and use the CLI from one terminal:

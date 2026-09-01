@@ -93,7 +93,7 @@ The current front matter is:
 required_labels: [ready-for-agent]
 forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
 runtime: bun
-test: bun test
+test: bun run test
 ```
 
 ## Prior art

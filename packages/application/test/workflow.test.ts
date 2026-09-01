@@ -1,11 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
 import { buildAssignmentPrompt, parseWorkflow } from "../src/index.ts";
 
 const source = `---
 required_labels: [ready-for-agent]
 forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
 runtime: bun
-test: bun test
+test: bun run test
 ---
 Follow the repository guidance.`;
 

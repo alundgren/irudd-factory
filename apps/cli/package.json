@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "start": "bun src/main.ts",
-    "test": "bun ../../scripts/test-suite.ts apps/cli"
+    "test": "bun --bun vp -C ../.. test apps/cli"
   },
   "dependencies": {
     "@effect/platform": "0.97.1",

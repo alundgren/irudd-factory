@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vp build",
     "dev": "vp dev",
-    "test": "bun ../../scripts/test-suite.ts apps/console"
+    "test": "bun --bun vp -C ../.. test apps/console"
   },
   "dependencies": {
     "@effect/platform": "0.97.1",

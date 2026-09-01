@@ -6,7 +6,7 @@
     "build": "tsc --noEmit",
     "start": "bun src/main.ts",
     "fixture": "bun src/fixture-main.ts",
-    "test": "bun ../../scripts/test-suite.ts apps/service"
+    "test": "bun --bun vp -C ../.. test apps/service"
   },
   "dependencies": {
     "@effect/platform": "0.97.1",

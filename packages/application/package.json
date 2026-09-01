@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "bun ../../scripts/test-suite.ts packages/application"
+    "test": "bun --bun vp -C ../.. test packages/application"
   },
   "dependencies": {
     "@irudd-factory/contracts": "workspace:*",

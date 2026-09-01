@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
 import { Effect } from "effect";
 import {
   makeGitHubService,
@@ -10,7 +10,7 @@ const workflow = `---
 required_labels: [ready-for-agent]
 forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
 runtime: bun
-test: bun test
+test: bun run test
 ---
 Implement the issue.`;
 
