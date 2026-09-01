@@ -1,11 +1,3 @@
-/**
- * The durable assignment event vocabulary.
- *
- * These names are written to `assignment_events.type` and read back by the
- * console and the CLI, so they are part of the stored contract. Emitters
- * reference them from here rather than repeating the literal, which is what
- * keeps a typo from creating a silently new event type.
- */
 export const ASSIGNMENT_EVENTS = {
   reserved: "assignment.reserved",
   completed: "assignment.completed",
