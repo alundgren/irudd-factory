@@ -60,8 +60,6 @@ The CLI requires the caller to provide the command ID:
 
 ```sh
 bun run apps/cli/src/main.ts run-next --command-id 40b8af63-b7cc-4bc7-96d6-43d9aa42fc91
-
-# Keep this terminal attached to Factory. Press Ctrl-C when finished.
 wait "$service_pid"
 ```
 
