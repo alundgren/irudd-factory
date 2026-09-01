@@ -12,12 +12,12 @@
     "@effect/platform": "0.97.1",
     "@effect/platform-node": "0.108.1",
     "@effect/rpc": "0.76.2",
-    "@irudd-factory/application": "*",
-    "@irudd-factory/codex": "*",
-    "@irudd-factory/contracts": "*",
-    "@irudd-factory/github": "*",
-    "@irudd-factory/state-sqlite": "*",
-    "@irudd-factory/workspaces": "*",
+    "@irudd-factory/application": "workspace:*",
+    "@irudd-factory/codex": "workspace:*",
+    "@irudd-factory/contracts": "workspace:*",
+    "@irudd-factory/github": "workspace:*",
+    "@irudd-factory/state-sqlite": "workspace:*",
+    "@irudd-factory/workspaces": "workspace:*",
     "effect": "3.22.1"
   }
 }

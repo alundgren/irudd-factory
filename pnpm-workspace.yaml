@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+allowBuilds:
+  "@parcel/watcher": true
+  msgpackr-extract: true
+
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.0

@@ -7,7 +7,7 @@ export default defineConfig({
   fmt: {
     printWidth: 80,
     ignorePatterns: [
-      "package-lock.json",
+      "pnpm-lock.yaml",
       "dist/**",
       "node_modules/**",
       "prototypes/codex-app-server-probe/fixture/acceptance/**",

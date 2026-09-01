@@ -13,7 +13,7 @@
   "dependencies": {
     "@effect/platform": "0.97.1",
     "@effect/rpc": "0.76.2",
-    "@irudd-factory/contracts": "*",
+    "@irudd-factory/contracts": "workspace:*",
     "effect": "3.22.1"
   }
 }
