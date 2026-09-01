@@ -49,10 +49,58 @@ function respond(id: number | string, result: unknown): void {
 // Ambient default if no effort is requested
 const CONFIGURED_EFFORT = "high";
 
+const ASSIGNMENT_THREAD_ID = "thread-1";
+const ASSIGNMENT_TURN_ID = "turn-1";
+// A subagent the assignment thread spawns reports over the same connection.
+const SUBAGENT_THREAD_ID = "thread-2";
+const SUBAGENT_TURN_ID = "turn-2";
+
 function requestedEffort(params: Record<string, unknown> | undefined): string {
   const config = params?.config as Record<string, unknown> | undefined;
   const effort = config?.model_reasoning_effort;
   return typeof effort === "string" ? effort : CONFIGURED_EFFORT;
+}
+
+/**
+ * Everything a subagent thread reports before the assignment thread finishes:
+ * its own settings, its own final message, and its own completed turn.
+ */
+function sendSubagentTurn(): void {
+  send({
+    method: "thread/settings/updated",
+    params: {
+      threadId: SUBAGENT_THREAD_ID,
+      threadSettings: { model: "gpt-5.6-sol", effort: "high" },
+    },
+  });
+  send({
+    method: "item/started",
+    params: {
+      threadId: SUBAGENT_THREAD_ID,
+      turnId: SUBAGENT_TURN_ID,
+      item: { id: "item-sub", type: "agentMessage" },
+    },
+  });
+  send({
+    method: "item/completed",
+    params: {
+      threadId: SUBAGENT_THREAD_ID,
+      turnId: SUBAGENT_TURN_ID,
+      item: {
+        id: "item-sub",
+        type: "agentMessage",
+        status: "completed",
+        text: "Review: Plan - Pass",
+      },
+    },
+  });
+  send({
+    method: "turn/completed",
+    params: {
+      threadId: SUBAGENT_THREAD_ID,
+      turn: { id: SUBAGENT_TURN_ID, status: "completed" },
+    },
+  });
 }
 
 async function handle(line: string): Promise<void> {
@@ -92,7 +140,7 @@ async function handle(line: string): Promise<void> {
     const response = {
       id: message.id,
       result: {
-        thread: { id: "thread-1" },
+        thread: { id: ASSIGNMENT_THREAD_ID },
         model: mode === "model-mismatch" ? "another-model" : "gpt-5.6-luna",
         ...(mode === "effort-missing"
           ? {}
@@ -115,10 +163,11 @@ async function handle(line: string): Promise<void> {
     return;
   }
   if (message.method === "turn/start" && message.id !== undefined) {
-    respond(message.id, { turn: { id: "turn-1" } });
+    respond(message.id, { turn: { id: ASSIGNMENT_TURN_ID } });
     send({
       method: "thread/settings/updated",
       params: {
+        threadId: ASSIGNMENT_THREAD_ID,
         threadSettings: {
           model: "gpt-5.6-luna",
           ...(mode === "effort-missing"
@@ -148,13 +197,30 @@ async function handle(line: string): Promise<void> {
       return;
     }
     if (mode === "provider-exit") process.exit(2);
+    if (mode === "subagent-noise") sendSubagentTurn();
+    if (mode === "subagent-early-completion") {
+      send({
+        method: "turn/completed",
+        params: {
+          threadId: SUBAGENT_THREAD_ID,
+          turn: { id: SUBAGENT_TURN_ID, status: "completed" },
+        },
+      });
+      await delay(25);
+    }
     send({
       method: "item/started",
-      params: { item: { id: "item-1", type: "agentMessage" } },
+      params: {
+        threadId: ASSIGNMENT_THREAD_ID,
+        turnId: ASSIGNMENT_TURN_ID,
+        item: { id: "item-1", type: "agentMessage" },
+      },
     });
     send({
       method: "item/completed",
       params: {
+        threadId: ASSIGNMENT_THREAD_ID,
+        turnId: ASSIGNMENT_TURN_ID,
         item: {
           id: "item-1",
           type: "agentMessage",
@@ -166,8 +232,8 @@ async function handle(line: string): Promise<void> {
     send({
       method: "thread/tokenUsage/updated",
       params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        threadId: ASSIGNMENT_THREAD_ID,
+        turnId: ASSIGNMENT_TURN_ID,
         tokenUsage: {
           total: {
             inputTokens: 12,
@@ -189,7 +255,10 @@ async function handle(line: string): Promise<void> {
     });
     send({
       method: "turn/completed",
-      params: { turn: { id: "turn-1", status: "completed" } },
+      params: {
+        threadId: ASSIGNMENT_THREAD_ID,
+        turn: { id: ASSIGNMENT_TURN_ID, status: "completed" },
+      },
     });
     if (mode.startsWith("post-completion-")) {
       await delay(25);
