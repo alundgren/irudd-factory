@@ -1,14 +1,76 @@
 import { Data } from "effect";
 
+export const FACTORY_ERROR_CODES = [
+  "admission_invariant_failed",
+  "approval_requested",
+  "assignment_failed",
+  "assignment_id_invalid",
+  "assignment_not_found",
+  "child_startup_failed",
+  "child_startup_timeout",
+  "claim_unconfirmed",
+  "claim_unknown",
+  "cleanup_timeout",
+  "clone_remote_mismatch",
+  "codex_version_failed",
+  "command_id_required",
+  "config_arguments_invalid",
+  "config_invalid",
+  "config_read_failed",
+  "git_command_failed",
+  "git_command_invalid",
+  "github_command_failed",
+  "github_command_invalid",
+  "github_discovery_failed",
+  "github_response_invalid",
+  "initialization_timeout",
+  "interrupt_timeout",
+  "model_or_effort_unavailable",
+  "model_rerouted",
+  "model_schema_timeout",
+  "model_unavailable",
+  "non_loopback_bind_rejected",
+  "observed_effort_mismatch",
+  "observed_effort_missing",
+  "observed_model_mismatch",
+  "process_identity_changed",
+  "provider_command_invalid",
+  "provider_error_notification",
+  "provider_exited",
+  "provider_failed",
+  "provider_protocol_error",
+  "provider_rpc_error",
+  "provider_schema_incompatible",
+  "provider_stopped",
+  "provider_timeout_invalid",
+  "pull_request_unverified",
+  "pull_request_verification_failed",
+  "repository_invalid",
+  "schema_generation_failed",
+  "starting_commit_invalid",
+  "state_store_failed",
+  "thread_id_missing",
+  "token_usage_missing",
+  "turn_completion_timeout",
+  "turn_id_missing",
+  "turn_not_completed",
+  "unexpected_error",
+  "workflow_invalid",
+  "workspace_create_failed",
+  "workspace_path_escape",
+  "worktree_exists",
+] as const;
+export type FactoryErrorCode = (typeof FACTORY_ERROR_CODES)[number];
+
 export class FactoryError extends Data.TaggedError("FactoryError")<{
-  readonly code: string;
+  readonly code: FactoryErrorCode;
   readonly message: string;
   readonly detail?: string;
 }> {}
 
 export function asFactoryError(
   error: unknown,
-  code = "unexpected_error",
+  code: FactoryErrorCode = "unexpected_error",
 ): FactoryError {
   if (error instanceof FactoryError) return error;
   return new FactoryError({ code, message: String(error) });

@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import { FactoryError } from "./errors.ts";
+import {
+  FORBIDDEN_ISSUE_LABELS,
+  REQUIRED_ISSUE_LABELS,
+  WORKFLOW_FILE,
+  WORKFLOW_POLICY_KEYS,
+} from "./policy.ts";
 
 export interface WorkflowPolicy {
   readonly requiredLabels: ReadonlyArray<string>;
@@ -7,14 +13,6 @@ export interface WorkflowPolicy {
   readonly runtime: string;
   readonly test: string;
 }
-
-export const REQUIRED_ISSUE_LABELS = ["ready-for-agent"] as const;
-export const FORBIDDEN_ISSUE_LABELS = [
-  "claimed",
-  "ready-for-human",
-  "epic",
-  "needs-refinement",
-] as const;
 
 export interface ParsedWorkflow {
   readonly policy: WorkflowPolicy;
@@ -30,7 +28,7 @@ function requiredValue(
   if (!value) {
     throw new FactoryError({
       code: "workflow_invalid",
-      message: `WORKFLOW.md is missing ${key}`,
+      message: `${WORKFLOW_FILE} is missing ${key}`,
     });
   }
   return value;
@@ -49,7 +47,7 @@ function labelList(
   if (!labels || labels.length === 0) {
     throw new FactoryError({
       code: "workflow_invalid",
-      message: `WORKFLOW.md ${key} must contain at least one label`,
+      message: `${WORKFLOW_FILE} ${key} must contain at least one label`,
     });
   }
   return labels;
@@ -67,7 +65,7 @@ function requireExactLabels(
   ) {
     throw new FactoryError({
       code: "workflow_invalid",
-      message: `WORKFLOW.md ${key} must be [${expected.join(", ")}]`,
+      message: `${WORKFLOW_FILE} ${key} must be [${expected.join(", ")}]`,
     });
   }
 }
@@ -77,7 +75,7 @@ export function parseWorkflow(source: string): ParsedWorkflow {
   if (!match) {
     throw new FactoryError({
       code: "workflow_invalid",
-      message: "WORKFLOW.md needs YAML front matter and a prompt body",
+      message: `${WORKFLOW_FILE} needs YAML front matter and a prompt body`,
     });
   }
   const frontMatter = match[1] ?? "";
@@ -85,7 +83,7 @@ export function parseWorkflow(source: string): ParsedWorkflow {
   if (!body) {
     throw new FactoryError({
       code: "workflow_invalid",
-      message: "WORKFLOW.md prompt body is empty",
+      message: `${WORKFLOW_FILE} prompt body is empty`,
     });
   }
 
@@ -96,35 +94,40 @@ export function parseWorkflow(source: string): ParsedWorkflow {
     entries.set(line.slice(0, separator).trim(), line.slice(separator + 1));
   }
 
-  const allowedKeys = new Set([
-    "required_labels",
-    "forbidden_labels",
-    "runtime",
-    "test",
-  ]);
+  const allowedKeys = new Set<string>(Object.values(WORKFLOW_POLICY_KEYS));
   const unknownKey = [...entries.keys()].find((key) => !allowedKeys.has(key));
   if (unknownKey) {
     throw new FactoryError({
       code: "workflow_invalid",
-      message: `WORKFLOW.md contains unsupported policy key ${unknownKey}`,
+      message: `${WORKFLOW_FILE} contains unsupported policy key ${unknownKey}`,
     });
   }
 
-  const requiredLabels = labelList(entries, "required_labels");
-  const forbiddenLabels = labelList(entries, "forbidden_labels");
-  requireExactLabels(requiredLabels, REQUIRED_ISSUE_LABELS, "required_labels");
+  const requiredLabels = labelList(
+    entries,
+    WORKFLOW_POLICY_KEYS.requiredLabels,
+  );
+  const forbiddenLabels = labelList(
+    entries,
+    WORKFLOW_POLICY_KEYS.forbiddenLabels,
+  );
+  requireExactLabels(
+    requiredLabels,
+    REQUIRED_ISSUE_LABELS,
+    WORKFLOW_POLICY_KEYS.requiredLabels,
+  );
   requireExactLabels(
     forbiddenLabels,
     FORBIDDEN_ISSUE_LABELS,
-    "forbidden_labels",
+    WORKFLOW_POLICY_KEYS.forbiddenLabels,
   );
 
   return {
     policy: {
       requiredLabels,
       forbiddenLabels,
-      runtime: requiredValue(entries, "runtime"),
-      test: requiredValue(entries, "test"),
+      runtime: requiredValue(entries, WORKFLOW_POLICY_KEYS.runtime),
+      test: requiredValue(entries, WORKFLOW_POLICY_KEYS.test),
     },
     body,
     digest: createHash("sha256").update(source).digest("hex"),

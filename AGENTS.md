@@ -23,3 +23,14 @@ viewports. Automated UI assertions do not replace this check.
 
 Do not use a real GitHub repository, Git worktree, or Codex process in automated
 tests. Use the application-owned deterministic scenarios and adapter fakes.
+
+# Code rules
+
+Bind SQLite parameters by name.
+
+Throw `FactoryError` with a code, never a bare `Error`.
+
+Decode only what the type system cannot already guarantee: JSON columns, enums,
+and network payloads.
+
+Extract magic strings into common constants.

@@ -4,8 +4,13 @@ import type {
   FactorySnapshot,
   NormalizedError,
 } from "@irudd-factory/contracts";
+import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
 import { Effect } from "effect";
-import { asFactoryError, FactoryError } from "./errors.ts";
+import {
+  asFactoryError,
+  FactoryError,
+  type FactoryErrorCode,
+} from "./errors.ts";
 import {
   Clock,
   GitHub,
@@ -23,7 +28,7 @@ export interface ApplicationOptions {
   readonly reasoningEffort: string;
 }
 
-function failure(code: string, error: unknown): NormalizedError {
+function failure(code: FactoryErrorCode, error: unknown): NormalizedError {
   const normalized = asFactoryError(error, code);
   return {
     code: normalized.code,
@@ -43,12 +48,12 @@ export function makeApplication(options: ApplicationOptions) {
 
       const claim = yield* github.claimIssue(initial.issue);
       if (claim !== "confirmed") {
-        const code =
+        const code: FactoryErrorCode =
           claim === "unclaimed" ? "claim_unconfirmed" : "claim_unknown";
         yield* state.appendEvent(
           initial.id,
           {
-            type: "assignment.failed",
+            type: ASSIGNMENT_EVENTS.failed,
             timestamp: clock.now(),
             detail: { code },
           },
@@ -69,7 +74,7 @@ export function makeApplication(options: ApplicationOptions) {
       const starting = yield* state.appendEvent(
         initial.id,
         {
-          type: "provider.start.requested",
+          type: ASSIGNMENT_EVENTS.providerStartRequested,
           timestamp: clock.now(),
           detail: {},
         },
@@ -83,7 +88,7 @@ export function makeApplication(options: ApplicationOptions) {
       const withWorkspace = yield* state.appendEvent(
         starting.id,
         {
-          type: "workspace.created",
+          type: ASSIGNMENT_EVENTS.workspaceCreated,
           timestamp: clock.now(),
           detail: { branch: workspace.branch },
         },
@@ -113,7 +118,7 @@ export function makeApplication(options: ApplicationOptions) {
       yield* state.appendEvent(
         withWorkspace.id,
         {
-          type: "provider.turn.finished",
+          type: ASSIGNMENT_EVENTS.providerTurnFinished,
           timestamp: clock.now(),
           detail: {
             finalResponse: result.finalResponse,
@@ -139,7 +144,7 @@ export function makeApplication(options: ApplicationOptions) {
       yield* state.appendEvent(
         withWorkspace.id,
         {
-          type: "assignment.completed",
+          type: ASSIGNMENT_EVENTS.completed,
           timestamp: clock.now(),
           detail: { pullRequestUrl: pullRequest.url, draft: pullRequest.draft },
         },
@@ -154,7 +159,7 @@ export function makeApplication(options: ApplicationOptions) {
           yield* state.appendEvent(
             initial.id,
             {
-              type: "assignment.failed",
+              type: ASSIGNMENT_EVENTS.failed,
               timestamp: clock.now(),
               detail: { code: normalized.code, message: normalized.message },
             },

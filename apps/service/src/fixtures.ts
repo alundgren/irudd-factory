@@ -14,6 +14,7 @@ import {
   type ScenarioName,
   Workspaces,
 } from "@irudd-factory/application";
+import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
 import { Layer } from "effect";
 import { Effect } from "effect";
 import { layerStateStore } from "@irudd-factory/state-sqlite";
@@ -82,7 +83,7 @@ export function fixtureDependencies(
         if (controls.failAfterObservation) {
           const observed = controls.failAfterObservation;
           yield* emit({
-            type: "provider.settings.observed",
+            type: ASSIGNMENT_EVENTS.providerSettingsObserved,
             timestamp: scenario.now,
             detail: {
               ...(observed.model ? { observedModel: observed.model } : {}),
@@ -104,7 +105,7 @@ export function fixtureDependencies(
           ? Effect.promise(controls.beforeRunning)
           : Effect.sleep("300 millis");
         yield* emit({
-          type: "provider.thread.started",
+          type: ASSIGNMENT_EVENTS.providerThreadStarted,
           timestamp: scenario.now,
           detail: { threadId: "thread-runnable" },
           patch: {

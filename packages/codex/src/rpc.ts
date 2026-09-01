@@ -1,5 +1,36 @@
-import { FactoryError } from "@irudd-factory/application";
+import {
+  FactoryError,
+  type FactoryErrorCode,
+} from "@irudd-factory/application";
 import type { ManagedProcess } from "./process.ts";
+
+/**
+ * The Codex App Server methods Factory sends or listens for. Requests and the
+ * notification handlers that react to them have to name the same method, so
+ * the wire vocabulary is written once here.
+ */
+export const APP_SERVER_METHODS = {
+  initialize: "initialize",
+  initialized: "initialized",
+  modelList: "model/list",
+  modelRerouted: "model/rerouted",
+  threadStart: "thread/start",
+  threadSettingsUpdated: "thread/settings/updated",
+  threadTokenUsageUpdated: "thread/tokenUsage/updated",
+  turnStart: "turn/start",
+  turnInterrupt: "turn/interrupt",
+  turnCompleted: "turn/completed",
+  itemStarted: "item/started",
+  itemCompleted: "item/completed",
+  itemRequestApproval: "item/permissions/requestApproval",
+  error: "error",
+} as const;
+
+/** Reported whenever a call outlives the client. */
+const STOPPED_MESSAGE = "Codex App Server client stopped";
+
+/** How Factory identifies itself to the App Server. */
+export const APP_SERVER_CLIENT_NAME = "irudd_factory";
 
 export interface RpcMessage {
   readonly id?: number | string;
@@ -82,14 +113,14 @@ export class AppServerRpc {
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
-    timeoutCode: string,
+    timeoutCode: FactoryErrorCode,
   ): Promise<any> {
     if (this.failure) return Promise.reject(this.failure);
     if (this.stopped) {
       return Promise.reject(
         new FactoryError({
           code: "provider_stopped",
-          message: "Codex App Server client stopped",
+          message: STOPPED_MESSAGE,
         }),
       );
     }
@@ -121,14 +152,14 @@ export class AppServerRpc {
   waitFor(
     predicate: (message: RpcMessage) => boolean,
     timeoutMs: number,
-    timeoutCode: string,
+    timeoutCode: FactoryErrorCode,
   ): Promise<RpcMessage> {
     if (this.failure) return Promise.reject(this.failure);
     if (this.stopped) {
       return Promise.reject(
         new FactoryError({
           code: "provider_stopped",
-          message: "Codex App Server client stopped",
+          message: STOPPED_MESSAGE,
         }),
       );
     }
@@ -156,7 +187,7 @@ export class AppServerRpc {
     this.rejectActive(
       new FactoryError({
         code: "provider_stopped",
-        message: "Codex App Server client stopped",
+        message: STOPPED_MESSAGE,
       }),
     );
   }

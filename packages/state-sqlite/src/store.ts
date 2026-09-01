@@ -7,13 +7,20 @@ import type {
 } from "@irudd-factory/application";
 import { FactoryError, StateStore } from "@irudd-factory/application";
 import {
-  Assignment,
+  ACTIVE_ASSIGNMENT_STATES,
+  type Assignment,
+  AssignmentState,
   AssignmentEvent,
-  CommandReceipt,
-  type CommandResult,
+  ASSIGNMENT_EVENTS,
+  type CommandReceipt,
+  CommandResult,
+  NormalizedError,
+  PullRequest,
+  WorkspacePaths,
 } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { migrate } from "./migrations.ts";
+import { sqlStateList } from "./sql.ts";
 
 interface AssignmentRow {
   readonly id: string;
@@ -66,12 +73,19 @@ function storageError(error: unknown): FactoryError {
       });
 }
 
-function parseJson(value: string): unknown {
-  return JSON.parse(value) as unknown;
+function decodeJson<A, I>(schema: Schema.Schema<A, I>, source: string): A {
+  return Schema.decodeUnknownSync(schema)(JSON.parse(source) as unknown);
+}
+
+function decodeJsonOrNull<A, I>(
+  schema: Schema.Schema<A, I>,
+  source: string | null,
+): A | null {
+  return source === null ? null : decodeJson(schema, source);
 }
 
 function decodeAssignment(row: AssignmentRow): Assignment {
-  return Schema.decodeUnknownSync(Assignment)({
+  return {
     id: row.id,
     provider: row.provider,
     issue: {
@@ -81,14 +95,14 @@ function decodeAssignment(row: AssignmentRow): Assignment {
       url: row.issue_url,
       title: row.issue_title,
     },
-    state: row.state,
+    state: Schema.decodeUnknownSync(AssignmentState)(row.state),
     workflow: {
       startingCommit: row.starting_commit,
       blobId: row.workflow_blob_id,
       digest: row.workflow_digest,
       body: row.workflow_body,
     },
-    workspace: row.workspace_json ? parseJson(row.workspace_json) : null,
+    workspace: decodeJsonOrNull(WorkspacePaths, row.workspace_json),
     requestedModel: row.requested_model,
     requestedEffort: row.requested_effort,
     observedModel: row.observed_model,
@@ -96,32 +110,30 @@ function decodeAssignment(row: AssignmentRow): Assignment {
     codexVersion: row.codex_version,
     threadId: row.thread_id,
     turnId: row.turn_id,
-    pullRequest: row.pull_request_json
-      ? parseJson(row.pull_request_json)
-      : null,
-    error: row.error_json ? parseJson(row.error_json) : null,
+    pullRequest: decodeJsonOrNull(PullRequest, row.pull_request_json),
+    error: decodeJsonOrNull(NormalizedError, row.error_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastEventSequence: row.last_event_sequence,
-  });
+  };
 }
 
 function decodeEvent(row: EventRow): AssignmentEvent {
-  return Schema.decodeUnknownSync(AssignmentEvent)({
+  return {
     sequence: row.sequence,
     assignmentId: row.assignment_id,
     type: row.type,
     timestamp: row.timestamp,
-    detail: parseJson(row.detail_json),
-  });
+    detail: decodeJson(AssignmentEvent.fields.detail, row.detail_json),
+  };
 }
 
 function decodeReceipt(row: ReceiptRow): CommandReceipt {
-  return Schema.decodeUnknownSync(CommandReceipt)({
+  return {
     commandId: row.command_id,
-    result: parseJson(row.result_json),
+    result: decodeJson(CommandResult, row.result_json),
     createdAt: row.created_at,
-  });
+  };
 }
 
 export interface OpenStateStore {
@@ -137,15 +149,15 @@ export function openStateStore(path: string): OpenStateStore {
   database.exec("PRAGMA busy_timeout = 5000");
   migrate(database);
 
-  const receiptQuery = database.query<ReceiptRow, [string]>(
-    "SELECT command_id, result_json, created_at FROM command_receipts WHERE command_id = ?",
+  const receiptQuery = database.query<ReceiptRow, [{ commandId: string }]>(
+    "SELECT command_id, result_json, created_at FROM command_receipts WHERE command_id = $commandId",
   );
-  const assignmentQuery = database.query<AssignmentRow, [string]>(
-    "SELECT * FROM assignments WHERE id = ?",
+  const assignmentQuery = database.query<AssignmentRow, [{ id: string }]>(
+    "SELECT * FROM assignments WHERE id = $id",
   );
 
   function getReceiptSync(commandId: string) {
-    const row = receiptQuery.get(commandId);
+    const row = receiptQuery.get({ commandId });
     return row ? decodeReceipt(row) : null;
   }
 
@@ -156,14 +168,15 @@ export function openStateStore(path: string): OpenStateStore {
   ): CommandReceipt {
     database
       .query(
-        "INSERT INTO command_receipts(command_id, result_json, created_at) VALUES (?, ?, ?)",
+        `INSERT INTO command_receipts(command_id, result_json, created_at)
+         VALUES ($commandId, $resultJson, $createdAt)`,
       )
-      .run(commandId, JSON.stringify(result), timestamp);
-    return Schema.decodeUnknownSync(CommandReceipt)({
-      commandId,
-      result,
-      createdAt: timestamp,
-    });
+      .run({
+        commandId,
+        resultJson: JSON.stringify(result),
+        createdAt: timestamp,
+      });
+    return { commandId, result, createdAt: timestamp };
   }
 
   function insertAssignment(value: Assignment): void {
@@ -177,36 +190,71 @@ export function openStateStore(path: string): OpenStateStore {
           thread_id, turn_id, pull_request_json, error_json, created_at,
           updated_at, last_event_sequence
         ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          $id, $provider, $issueNodeId, $issueRepository, $issueNumber,
+          $issueUrl, $issueTitle, $state, $startingCommit, $workflowBlobId,
+          $workflowDigest, $workflowBody, $workspaceJson, $requestedModel,
+          $requestedEffort, $observedModel, $observedEffort, $codexVersion,
+          $threadId, $turnId, $pullRequestJson, $errorJson, $createdAt,
+          $updatedAt, $lastEventSequence
         )`,
       )
-      .run(
-        value.id,
-        value.provider,
-        value.issue.nodeId,
-        value.issue.repository,
-        value.issue.number,
-        value.issue.url,
-        value.issue.title,
-        value.state,
-        value.workflow.startingCommit,
-        value.workflow.blobId,
-        value.workflow.digest,
-        value.workflow.body,
-        value.workspace ? JSON.stringify(value.workspace) : null,
-        value.requestedModel,
-        value.requestedEffort,
-        value.observedModel,
-        value.observedEffort,
-        value.codexVersion,
-        value.threadId,
-        value.turnId,
-        value.pullRequest ? JSON.stringify(value.pullRequest) : null,
-        value.error ? JSON.stringify(value.error) : null,
-        value.createdAt,
-        value.updatedAt,
-        value.lastEventSequence,
-      );
+      .run({
+        id: value.id,
+        provider: value.provider,
+        issueNodeId: value.issue.nodeId,
+        issueRepository: value.issue.repository,
+        issueNumber: value.issue.number,
+        issueUrl: value.issue.url,
+        issueTitle: value.issue.title,
+        state: value.state,
+        startingCommit: value.workflow.startingCommit,
+        workflowBlobId: value.workflow.blobId,
+        workflowDigest: value.workflow.digest,
+        workflowBody: value.workflow.body,
+        workspaceJson: value.workspace ? JSON.stringify(value.workspace) : null,
+        requestedModel: value.requestedModel,
+        requestedEffort: value.requestedEffort,
+        observedModel: value.observedModel,
+        observedEffort: value.observedEffort,
+        codexVersion: value.codexVersion,
+        threadId: value.threadId,
+        turnId: value.turnId,
+        pullRequestJson: value.pullRequest
+          ? JSON.stringify(value.pullRequest)
+          : null,
+        errorJson: value.error ? JSON.stringify(value.error) : null,
+        createdAt: value.createdAt,
+        updatedAt: value.updatedAt,
+        lastEventSequence: value.lastEventSequence,
+      });
+  }
+
+  function insertEvent(
+    assignmentId: string,
+    type: string,
+    timestamp: string,
+    detail: unknown,
+  ): number {
+    const result = database
+      .query(
+        `INSERT INTO assignment_events(assignment_id, type, timestamp, detail_json)
+         VALUES ($assignmentId, $type, $timestamp, $detailJson)`,
+      )
+      .run({
+        assignmentId,
+        type,
+        timestamp,
+        detailJson: JSON.stringify(detail),
+      });
+    return Number(result.lastInsertRowid);
+  }
+
+  function setLastEventSequence(assignmentId: string, sequence: number): void {
+    database
+      .query(
+        "UPDATE assignments SET last_event_sequence = $sequence WHERE id = $id",
+      )
+      .run({ sequence, id: assignmentId });
   }
 
   function admitSync(input: AdmissionInput): AdmissionResult {
@@ -216,12 +264,13 @@ export function openStateStore(path: string): OpenStateStore {
         if (existing) return { receipt: existing, created: false };
 
         const activeRow = database
-          .query<AssignmentRow, [string]>(
+          .query<AssignmentRow, [{ provider: string }]>(
             `SELECT * FROM assignments
-           WHERE provider = ? AND state IN ('reserved', 'starting', 'running')
-           LIMIT 1`,
+             WHERE provider = $provider
+               AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
+             LIMIT 1`,
           )
-          .get(input.provider);
+          .get({ provider: input.provider });
         if (activeRow) {
           return {
             receipt: insertReceipt(
@@ -236,15 +285,16 @@ export function openStateStore(path: string): OpenStateStore {
           };
         }
 
-        const unseen = input.candidates.filter((candidate) => {
-          const found = database
-            .query<
-              { present: number },
-              [string]
-            >("SELECT 1 AS present FROM assignments WHERE issue_node_id = ? LIMIT 1")
-            .get(candidate.issue.nodeId);
-          return !found;
-        });
+        const seenIssueQuery = database.query<
+          { present: number },
+          [{ issueNodeId: string }]
+        >(
+          "SELECT 1 AS present FROM assignments WHERE issue_node_id = $issueNodeId LIMIT 1",
+        );
+        const unseen = input.candidates.filter(
+          (candidate) =>
+            !seenIssueQuery.get({ issueNodeId: candidate.issue.nodeId }),
+        );
         if (unseen.length === 0) {
           return {
             receipt: insertReceipt(
@@ -276,7 +326,7 @@ export function openStateStore(path: string): OpenStateStore {
             message: "Admission selected no candidate",
           });
         }
-        const value = Schema.decodeUnknownSync(Assignment)({
+        const value: Assignment = {
           id: input.assignmentId,
           provider: input.provider,
           issue: candidate.issue,
@@ -295,17 +345,15 @@ export function openStateStore(path: string): OpenStateStore {
           createdAt: input.timestamp,
           updatedAt: input.timestamp,
           lastEventSequence: 0,
-        });
+        };
         insertAssignment(value);
-        const eventResult = database
-          .query(
-            "INSERT INTO assignment_events(assignment_id, type, timestamp, detail_json) VALUES (?, ?, ?, ?)",
-          )
-          .run(value.id, "assignment.reserved", input.timestamp, "{}");
-        const sequence = Number(eventResult.lastInsertRowid);
-        database
-          .query("UPDATE assignments SET last_event_sequence = ? WHERE id = ?")
-          .run(sequence, value.id);
+        const sequence = insertEvent(
+          value.id,
+          ASSIGNMENT_EVENTS.reserved,
+          input.timestamp,
+          {},
+        );
+        setLastEventSequence(value.id, sequence);
         const assignment = { ...value, lastEventSequence: sequence };
         return {
           receipt: insertReceipt(
@@ -326,7 +374,7 @@ export function openStateStore(path: string): OpenStateStore {
   ): Assignment {
     return database
       .transaction(() => {
-        const currentRow = assignmentQuery.get(assignmentId);
+        const currentRow = assignmentQuery.get({ id: assignmentId });
         if (!currentRow) {
           throw new FactoryError({
             code: "assignment_not_found",
@@ -334,44 +382,51 @@ export function openStateStore(path: string): OpenStateStore {
           });
         }
         const current = decodeAssignment(currentRow);
-        const next = Schema.decodeUnknownSync(Assignment)({
+        const next: Assignment = {
           ...current,
           ...patch,
           updatedAt: event.timestamp,
-        });
-        const eventResult = database
-          .query(
-            "INSERT INTO assignment_events(assignment_id, type, timestamp, detail_json) VALUES (?, ?, ?, ?)",
-          )
-          .run(
-            assignmentId,
-            event.type,
-            event.timestamp,
-            JSON.stringify(event.detail),
-          );
-        const sequence = Number(eventResult.lastInsertRowid);
+        };
+        const sequence = insertEvent(
+          assignmentId,
+          event.type,
+          event.timestamp,
+          event.detail,
+        );
         database
           .query(
             `UPDATE assignments SET
-            state = ?, workspace_json = ?, observed_model = ?, observed_effort = ?,
-            codex_version = ?, thread_id = ?, turn_id = ?, pull_request_json = ?,
-            error_json = ?, updated_at = ?, last_event_sequence = ?
-           WHERE id = ?`,
+               state = $state,
+               workspace_json = $workspaceJson,
+               observed_model = $observedModel,
+               observed_effort = $observedEffort,
+               codex_version = $codexVersion,
+               thread_id = $threadId,
+               turn_id = $turnId,
+               pull_request_json = $pullRequestJson,
+               error_json = $errorJson,
+               updated_at = $updatedAt,
+               last_event_sequence = $lastEventSequence
+             WHERE id = $id`,
           )
-          .run(
-            next.state,
-            next.workspace ? JSON.stringify(next.workspace) : null,
-            next.observedModel,
-            next.observedEffort,
-            next.codexVersion,
-            next.threadId,
-            next.turnId,
-            next.pullRequest ? JSON.stringify(next.pullRequest) : null,
-            next.error ? JSON.stringify(next.error) : null,
-            next.updatedAt,
-            sequence,
-            assignmentId,
-          );
+          .run({
+            state: next.state,
+            workspaceJson: next.workspace
+              ? JSON.stringify(next.workspace)
+              : null,
+            observedModel: next.observedModel,
+            observedEffort: next.observedEffort,
+            codexVersion: next.codexVersion,
+            threadId: next.threadId,
+            turnId: next.turnId,
+            pullRequestJson: next.pullRequest
+              ? JSON.stringify(next.pullRequest)
+              : null,
+            errorJson: next.error ? JSON.stringify(next.error) : null,
+            updatedAt: next.updatedAt,
+            lastEventSequence: sequence,
+            id: assignmentId,
+          });
         return { ...next, lastEventSequence: sequence };
       })
       .immediate();
@@ -393,7 +448,7 @@ export function openStateStore(path: string): OpenStateStore {
     getAssignment: (assignmentId) =>
       Effect.try({
         try: () => {
-          const row = assignmentQuery.get(assignmentId);
+          const row = assignmentQuery.get({ id: assignmentId });
           return row ? decodeAssignment(row) : null;
         },
         catch: storageError,
@@ -420,9 +475,9 @@ export function openStateStore(path: string): OpenStateStore {
             ? database
                 .query<
                   EventRow,
-                  [string]
-                >("SELECT sequence, assignment_id, type, timestamp, detail_json FROM assignment_events WHERE assignment_id = ? ORDER BY sequence")
-                .all(current.id)
+                  [{ assignmentId: string }]
+                >("SELECT sequence, assignment_id, type, timestamp, detail_json FROM assignment_events WHERE assignment_id = $assignmentId ORDER BY sequence")
+                .all({ assignmentId: current.id })
                 .map(decodeEvent)
             : [];
           return {
@@ -457,23 +512,14 @@ export function openStateStore(path: string): OpenStateStore {
               insertAssignment({ ...assignment, lastEventSequence: 0 });
               let lastSequence = 0;
               for (const event of events) {
-                const result = database
-                  .query(
-                    "INSERT INTO assignment_events(assignment_id, type, timestamp, detail_json) VALUES (?, ?, ?, ?)",
-                  )
-                  .run(
-                    event.assignmentId,
-                    event.type,
-                    event.timestamp,
-                    JSON.stringify(event.detail),
-                  );
-                lastSequence = Number(result.lastInsertRowid);
+                lastSequence = insertEvent(
+                  event.assignmentId,
+                  event.type,
+                  event.timestamp,
+                  event.detail,
+                );
               }
-              database
-                .query(
-                  "UPDATE assignments SET last_event_sequence = ? WHERE id = ?",
-                )
-                .run(lastSequence, assignment.id);
+              setLastEventSequence(assignment.id, lastSequence);
             })
             .immediate();
         },
