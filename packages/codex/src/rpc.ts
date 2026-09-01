@@ -32,6 +32,8 @@ const STOPPED_MESSAGE = "Codex App Server client stopped";
 /** How Factory identifies itself to the App Server. */
 export const APP_SERVER_CLIENT_NAME = "irudd_factory";
 
+export const REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort";
+
 export interface RpcMessage {
   readonly id?: number | string;
   readonly method?: string;

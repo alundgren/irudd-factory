@@ -168,6 +168,23 @@ describe("Codex provider", () => {
     });
   }
 
+  test("pins the requested reasoning effort at thread start", async () => {
+    const { provider, assignment, workspace } = await fixture();
+    const patches: AssignmentPatch[] = [];
+    await Effect.runPromise(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        (event) =>
+          Effect.sync(() => {
+            if (event.type === "provider.settings.observed" && event.patch) {
+              patches.push(event.patch);
+            }
+          }),
+      ),
+    );
+    expect(patches[0]?.observedEffort).toBe("low");
+  });
+
   test("emits observed mismatch values before failing", async () => {
     for (const [mode, field, value] of [
       ["model-mismatch", "observedModel", "another-model"],

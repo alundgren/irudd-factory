@@ -21,6 +21,7 @@ import {
   APP_SERVER_CLIENT_NAME,
   APP_SERVER_METHODS,
   AppServerRpc,
+  REASONING_EFFORT_CONFIG_KEY,
   type RpcMessage,
 } from "./rpc.ts";
 
@@ -471,6 +472,9 @@ export function makeCodexProvider(
                   approvalPolicy: "never",
                   sandbox: "workspace-write",
                   serviceName: APP_SERVER_CLIENT_NAME,
+                  config: {
+                    [REASONING_EFFORT_CONFIG_KEY]: options.reasoningEffort,
+                  },
                 },
                 options.timeouts.initializationMs,
                 "initialization_timeout",

@@ -46,10 +46,20 @@ function respond(id: number | string, result: unknown): void {
   send({ id, result });
 }
 
+// Ambient default if no effort is requested
+const CONFIGURED_EFFORT = "high";
+
+function requestedEffort(params: Record<string, unknown> | undefined): string {
+  const config = params?.config as Record<string, unknown> | undefined;
+  const effort = config?.model_reasoning_effort;
+  return typeof effort === "string" ? effort : CONFIGURED_EFFORT;
+}
+
 async function handle(line: string): Promise<void> {
   const message = JSON.parse(line) as {
     id?: number | string;
     method?: string;
+    params?: Record<string, unknown>;
   };
   if (message.method === "initialize") {
     if (mode === "malformed") {
@@ -85,7 +95,10 @@ async function handle(line: string): Promise<void> {
       ...(mode === "effort-missing"
         ? {}
         : {
-            reasoningEffort: mode === "effort-mismatch" ? "high" : "low",
+            reasoningEffort:
+              mode === "effort-mismatch"
+                ? CONFIGURED_EFFORT
+                : requestedEffort(message.params),
           }),
     });
     if (mode === "response-then-error") {
@@ -100,7 +113,9 @@ async function handle(line: string): Promise<void> {
       params: {
         threadSettings: {
           model: "gpt-5.6-luna",
-          ...(mode === "effort-missing" ? {} : { effort: "low" }),
+          ...(mode === "effort-missing"
+            ? {}
+            : { effort: message.params?.effort }),
         },
       },
     });
