@@ -10,7 +10,7 @@
     "test": "vp -C ../.. test packages/application"
   },
   "dependencies": {
-    "@irudd-factory/contracts": "*",
+    "@irudd-factory/contracts": "workspace:*",
     "effect": "3.22.1"
   }
 }

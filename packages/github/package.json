@@ -10,8 +10,8 @@
     "test": "vp -C ../.. test packages/github"
   },
   "dependencies": {
-    "@irudd-factory/application": "*",
-    "@irudd-factory/contracts": "*",
+    "@irudd-factory/application": "workspace:*",
+    "@irudd-factory/contracts": "workspace:*",
     "effect": "3.22.1"
   }
 }

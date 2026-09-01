@@ -21,7 +21,7 @@ vp run test
 vp run build
 ```
 
-Vite+ manages the pinned Node.js runtime and npm release, and runs the active
+Vite+ manages the pinned Node.js runtime and pnpm release, and runs the active
 test suite through its built-in Vitest command.
 
 Copy [`factory.example.json`](factory.example.json) to `factory.json` and adjust
