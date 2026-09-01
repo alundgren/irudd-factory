@@ -137,6 +137,41 @@ describe("Codex provider", () => {
     expect(result.processExit).toMatchObject({ signal: "SIGTERM" });
   });
 
+  test("ignores everything a subagent thread reports", async () => {
+    const { provider, assignment, workspace } = await fixture("subagent-noise");
+    const result = await Effect.runPromise(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        () => Effect.void,
+      ),
+    );
+    expect(result).toMatchObject({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      observedModel: "gpt-5.6-luna",
+      observedEffort: "low",
+      finalResponse: "Pull request opened.",
+    });
+    expect(result.itemSummaries).toHaveLength(2);
+  });
+
+  test("keeps running after a subagent turn completes", async () => {
+    const { provider, assignment, workspace } = await fixture(
+      "subagent-early-completion",
+    );
+    const result = await Effect.runPromise(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        () => Effect.void,
+      ),
+    );
+    expect(result).toMatchObject({
+      turnId: "turn-1",
+      finalResponse: "Pull request opened.",
+    });
+    expect(result.tokenUsage.total.totalTokens).toBe(19);
+  });
+
   for (const [mode, code] of [
     ["approval", "approval_requested"],
     ["reroute", "model_rerouted"],

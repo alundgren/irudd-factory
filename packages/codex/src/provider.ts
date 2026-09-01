@@ -323,6 +323,20 @@ export function makeCodexProvider(
             throwIfTerminal();
             return result;
           };
+          /**
+           * Codex multiplexes every thread over the one App Server
+           * connection, so a subagent the assignment thread spawns reports its
+           * own items and turn completion here. Only the assignment thread
+           * describes the run Factory is observing.
+           */
+          const belongsToAssignmentThread = (message: RpcMessage): boolean => {
+            const messageThreadId = stringAt(message.params, "threadId");
+            return (
+              threadId === null ||
+              messageThreadId === null ||
+              messageThreadId === threadId
+            );
+          };
           const rpc = new AppServerRpc(
             child,
             (message) => {
@@ -345,6 +359,7 @@ export function makeCodexProvider(
             recordTerminal,
           );
           const unsubscribe = rpc.onMessage((message) => {
+            if (!belongsToAssignmentThread(message)) return;
             if (message.method === APP_SERVER_METHODS.modelRerouted) {
               reroutes.push({
                 ...(stringAt(message.params, "fromModel")
@@ -544,7 +559,8 @@ export function makeCodexProvider(
             const completion = raceTerminal(() =>
               rpc.waitFor(
                 (message) =>
-                  message.method === APP_SERVER_METHODS.turnCompleted,
+                  message.method === APP_SERVER_METHODS.turnCompleted &&
+                  belongsToAssignmentThread(message),
                 options.timeouts.turnMs,
                 "turn_completion_timeout",
               ),
