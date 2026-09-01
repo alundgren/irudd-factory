@@ -1,11 +1,11 @@
 {
   "name": "@irudd-factory/console",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite",
+    "build": "vp build",
+    "dev": "vp dev",
     "test": "bun ../../scripts/test-suite.ts apps/console"
   },
   "dependencies": {
@@ -24,6 +24,7 @@
     "@types/react-dom": "19.2.5",
     "@vitejs/plugin-react": "6.1.1",
     "tailwindcss": "4.3.3",
-    "vite": "8.2.2"
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
   }
 }

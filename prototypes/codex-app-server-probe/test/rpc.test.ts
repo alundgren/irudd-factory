@@ -110,7 +110,9 @@ describe("JSON-RPC process integration", () => {
     await setup.client.request("initialize", {}, 1_000);
     await expect(
       setup.client.request("model/list", {}, 1_000),
-    ).rejects.toMatchObject({ code: "rpc_error" });
+    ).rejects.toMatchObject({
+      code: "rpc_error",
+    });
   });
 
   test("interrupts only after the named command becomes active and rejects a duplicate", async () => {

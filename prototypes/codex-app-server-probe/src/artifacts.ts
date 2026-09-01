@@ -61,7 +61,9 @@ export class RunArtifacts {
     await writeFile(
       this.manifestPath,
       `${JSON.stringify(safeManifest, null, 2)}\n`,
-      { mode: 0o600 },
+      {
+        mode: 0o600,
+      },
     );
     const assertions = safeManifest.assertions
       .map(

@@ -12,19 +12,23 @@ through App Server, and verifies the resulting pull request.
 
 ## Development
 
-Install the pinned Bun release, then run:
+Install Vite+ and the pinned Bun release, then run:
 
 ```sh
-bun install --frozen-lockfile
-bun run test
-bun run build
+vp install --frozen-lockfile
+vp run check
+vp run test
+vp run build
 ```
+
+Use `vp run test`, not the built-in `vp test`. Factory and its tests use Bun
+APIs, while the Vite+ built-in runs Vitest under Node.js.
 
 Copy [`factory.example.json`](factory.example.json) to `factory.json` and adjust
 the repository and paths. Start the service and use the CLI from one terminal:
 
 ```sh
-bun run build:console
+vp run build:console
 bun run apps/service/src/main.ts --config factory.json &
 service_pid=$!
 

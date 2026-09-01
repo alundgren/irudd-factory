@@ -457,26 +457,23 @@ export function openStateStore(path: string): OpenStateStore {
       Effect.try({
         try: () => {
           const receiptRow = database
-            .query<
-              ReceiptRow,
-              []
-            >("SELECT command_id, result_json, created_at FROM command_receipts ORDER BY rowid DESC LIMIT 1")
+            .query<ReceiptRow, []>(
+              "SELECT command_id, result_json, created_at FROM command_receipts ORDER BY rowid DESC LIMIT 1",
+            )
             .get();
           const assignmentRow = database
-            .query<
-              AssignmentRow,
-              []
-            >("SELECT * FROM assignments ORDER BY rowid DESC LIMIT 1")
+            .query<AssignmentRow, []>(
+              "SELECT * FROM assignments ORDER BY rowid DESC LIMIT 1",
+            )
             .get();
           const current = assignmentRow
             ? decodeAssignment(assignmentRow)
             : null;
           const events = current
             ? database
-                .query<
-                  EventRow,
-                  [{ assignmentId: string }]
-                >("SELECT sequence, assignment_id, type, timestamp, detail_json FROM assignment_events WHERE assignment_id = $assignmentId ORDER BY sequence")
+                .query<EventRow, [{ assignmentId: string }]>(
+                  "SELECT sequence, assignment_id, type, timestamp, detail_json FROM assignment_events WHERE assignment_id = $assignmentId ORDER BY sequence",
+                )
                 .all({ assignmentId: current.id })
                 .map(decodeEvent)
             : [];
