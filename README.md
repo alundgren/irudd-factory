@@ -12,20 +12,38 @@ through App Server, and verifies the resulting pull request.
 
 ## Development
 
-Install Vite+, then run:
+Install Vite+ and the project dependencies:
 
 ```sh
+curl -fsSL https://vite.plus | bash
 vp install --frozen-lockfile
-vp run check
-vp run test
-vp run build
 ```
 
-Vite+ manages the pinned Node.js runtime and pnpm release, and runs the active
-test suite through its built-in Vitest command.
+Vite+ installs the required Node.js runtime and the pinned pnpm release. Open a
+new shell if the installer adds `vp` to your path but the current shell cannot
+find it.
+
+Lint, type-check, and run the active test suite:
+
+```sh
+vp lint
+vp run typecheck
+vp run test
+```
+
+Start a deterministic local instance with the runnable fixture:
+
+```sh
+vp run fixture runnable
+```
+
+The command prints the console URL and keeps the service running until you stop
+it with Ctrl-C. See the [operator guide](docs/operator.md#deterministic-fixtures)
+for the other fixture scenarios.
 
 Copy [`factory.example.json`](factory.example.json) to `factory.json` and adjust
-the repository and paths. Start the service and use the CLI from one terminal:
+the repository and paths to run against GitHub. Start the service and use the
+CLI from one terminal:
 
 ```sh
 vp run build:console
