@@ -5,7 +5,7 @@ import type {
   NormalizedError,
 } from "@irudd-factory/contracts";
 import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import {
   asFactoryError,
   FactoryError,
@@ -38,6 +38,8 @@ function failure(code: FactoryErrorCode, error: unknown): NormalizedError {
 }
 
 export function makeApplication(options: ApplicationOptions) {
+  const inFlight = new Set<Fiber.RuntimeFiber<void, never>>();
+
   const processAssignment = (initial: Assignment) =>
     Effect.gen(function* () {
       const state = yield* StateStore;
@@ -204,9 +206,11 @@ export function makeApplication(options: ApplicationOptions) {
       });
       const receipt = admission.receipt;
       if (admission.created && receipt.result._tag === "started") {
-        yield* processAssignment(receipt.result.assignment).pipe(
+        const fiber = yield* processAssignment(receipt.result.assignment).pipe(
           Effect.forkDaemon,
         );
+        inFlight.add(fiber);
+        fiber.addObserver(() => inFlight.delete(fiber));
       }
       return receipt;
     });
@@ -221,5 +225,13 @@ export function makeApplication(options: ApplicationOptions) {
       return yield* state.getSnapshot();
     });
 
-  return { runNextEligibleIssue, getSnapshot, processAssignment } as const;
+  const shutdown = (): Effect.Effect<void> =>
+    Fiber.interruptAll(Array.from(inFlight));
+
+  return {
+    runNextEligibleIssue,
+    getSnapshot,
+    processAssignment,
+    shutdown,
+  } as const;
 }

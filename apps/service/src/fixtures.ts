@@ -27,6 +27,7 @@ export interface FixtureControls {
   readonly onClaim?: () => void;
   readonly onWorkspace?: () => void;
   readonly onProviderRun?: () => void;
+  readonly onProviderInterrupted?: () => void;
   readonly failAfterObservation?: {
     readonly model?: string;
     readonly effort?: string;
@@ -147,7 +148,11 @@ export function fixtureDependencies(
           approvalCount: 0,
           processExit: { code: 0, signal: "SIGTERM" },
         };
-      }),
+      }).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => controls.onProviderInterrupted?.()),
+        ),
+      ),
   };
   return Layer.mergeAll(
     layerStateStore(config.databasePath),

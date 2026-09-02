@@ -47,15 +47,9 @@ export function productionDependencies(
 }
 
 function handlerLayer(
-  config: FactoryConfig,
   dependencies: FactoryDependencies,
+  application: ReturnType<typeof makeApplication>,
 ) {
-  const application = makeApplication({
-    repository: config.repository,
-    provider: CODEX_PROVIDER,
-    model: config.codex.model,
-    reasoningEffort: config.codex.reasoningEffort,
-  });
   return FactoryRpcs.toLayer(
     Effect.gen(function* () {
       const context = yield* Effect.context<
@@ -86,8 +80,14 @@ export async function startFactoryService(
     mkdir(dirname(config.databasePath), { recursive: true }),
     mkdir(config.workspaceRoot, { recursive: true }),
   ]);
+  const application = makeApplication({
+    repository: config.repository,
+    provider: CODEX_PROVIDER,
+    model: config.codex.model,
+    reasoningEffort: config.codex.reasoningEffort,
+  });
   const RpcLive = RpcServer.layer(FactoryRpcs).pipe(
-    Layer.provide(handlerLayer(config, dependencies)),
+    Layer.provide(handlerLayer(dependencies, application)),
   );
   const ProtocolLive = RpcServer.layerProtocolHttp({ path: RPC_PATH }).pipe(
     Layer.provide(RpcSerialization.layerJson),
@@ -133,6 +133,9 @@ export async function startFactoryService(
   const fiber = Effect.runFork(Layer.launch(Main));
   return {
     url: `http://${config.bindHost.includes(":") ? `[${config.bindHost}]` : config.bindHost}:${config.port}`,
-    stop: () => Effect.runPromise(Fiber.interrupt(fiber)).then(() => undefined),
+    stop: () =>
+      Effect.runPromise(
+        application.shutdown().pipe(Effect.zipRight(Fiber.interrupt(fiber))),
+      ).then(() => undefined),
   };
 }
