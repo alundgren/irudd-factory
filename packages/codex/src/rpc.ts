@@ -34,6 +34,15 @@ export const APP_SERVER_CLIENT_NAME = "irudd_factory";
 
 export const REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort";
 
+/**
+ * Codex installs a GitHub connector app by default, and its
+ * `create_pull_request` tool demands an approval an unattended run has nobody
+ * to answer. Factory disables every app at thread start so Codex opens the
+ * pull request with `gh` in the sandbox shell instead.
+ */
+export const APPS_CONFIG_KEY = "apps";
+export const APPS_DEFAULT_KEY = "_default";
+
 export interface RpcMessage {
   readonly id?: number | string;
   readonly method?: string;

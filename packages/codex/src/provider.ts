@@ -18,6 +18,8 @@ import {
   type ProcessExit,
 } from "./process.ts";
 import {
+  APPS_CONFIG_KEY,
+  APPS_DEFAULT_KEY,
   APP_SERVER_CLIENT_NAME,
   APP_SERVER_METHODS,
   AppServerRpc,
@@ -489,6 +491,9 @@ export function makeCodexProvider(
                   serviceName: APP_SERVER_CLIENT_NAME,
                   config: {
                     [REASONING_EFFORT_CONFIG_KEY]: options.reasoningEffort,
+                    [APPS_CONFIG_KEY]: {
+                      [APPS_DEFAULT_KEY]: { enabled: false },
+                    },
                   },
                 },
                 options.timeouts.initializationMs,
