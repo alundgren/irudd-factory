@@ -115,6 +115,10 @@ export interface WorkspaceOptions {
   readonly runner?: GitRunner;
 }
 
+export function githubHttpsRemote(repository: string): string {
+  return `https://github.com/${repository}.git`;
+}
+
 export function makeWorkspaceService(
   options: WorkspaceOptions,
 ): WorkspaceService {
@@ -157,7 +161,7 @@ export function makeWorkspaceService(
           assertPathWithin(root, plannedClone, "Clone path");
           assertPathWithin(root, plannedWorktree, "Worktree path");
 
-          const remote = `https://github.com/${input.repository}.git`;
+          const remote = githubHttpsRemote(input.repository);
           if (!existsSync(plannedClone)) {
             await checked(runner, [
               GIT_CLI,

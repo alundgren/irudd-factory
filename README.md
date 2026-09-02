@@ -42,53 +42,24 @@ it with Ctrl-C. See the [operator guide](docs/operator.md#deterministic-fixtures
 for the other fixture scenarios.
 
 Copy [`factory.example.json`](factory.example.json) to `factory.json` and adjust
-the repository and paths to run against GitHub. Start the service and use the
-CLI from one terminal:
+the repository and paths to run the normal service against GitHub.
+
+Run one deliberate live integration assignment with:
 
 ```sh
-vp run build:console
-service_log="$(mktemp "${TMPDIR:-/tmp}/irudd-factory.XXXXXX")"
-vp node apps/service/src/main.ts --config factory.json \
-  </dev/null >"$service_log" 2>&1 &
-service_pid=$!
-
-cleanup() {
-  trap - 0 INT TERM
-  kill "$service_pid" 2>/dev/null || true
-  wait "$service_pid" 2>/dev/null || true
-  rm -f "$service_log"
-}
-trap cleanup 0 INT TERM
-
-snapshot_output=
-attempt=0
-while [ "$attempt" -lt 100 ]; do
-  if snapshot_output="$(vp node apps/cli/src/main.ts snapshot 2>/dev/null)"; then
-    break
-  fi
-  attempt=$((attempt + 1))
-  sleep 0.1
-done
-if [ "$attempt" -eq 100 ]; then
-  echo "Factory service did not become ready" >&2
-  cat "$service_log" >&2
-  exit 1
-fi
-
-printf '%s\n' "$snapshot_output"
-vp node apps/cli/src/main.ts run-next --command-id "$(uuidgen | tr '[:upper:]' '[:lower:]')"
-wait "$service_pid"
+vp run test:integration
 ```
 
-The service runs in the background while the CLI commands execute. Its output
-goes to a temporary log so shells with background terminal output disabled do
-not suspend it. If startup fails, the command prints that log. The cleanup trap
-stops the service and removes the log when you press Ctrl-C or leave the shell.
+This command is opt-in. It creates a real issue and lets Factory run Codex in
+the dedicated testing repository. It prints the assigned console URL and keeps
+the service running for inspection until Ctrl-C. See the
+[live integration instructions](docs/operator.md#live-integration-command) for
+credentials, repository overrides, retained files, cancellation behavior, and
+the configuration fields this command reads.
 
-The service exposes the console at `http://127.0.0.1:4317/` and Effect RPC at
-`http://127.0.0.1:4317/rpc`. See the [operator guide](docs/operator.md) for the
-configuration contract, fixture scenarios, retained files, and current
-recovery limits.
+The normal service defaults to `http://127.0.0.1:4317/` when `port` is omitted.
+See the [operator guide](docs/operator.md) for normal startup, fixture scenarios,
+and current recovery limits.
 
 ## Project records
 

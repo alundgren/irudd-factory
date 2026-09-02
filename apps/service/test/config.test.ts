@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vite-plus/test";
-import { configPathFromArgs, validateConfig } from "../src/index.ts";
+import {
+  configPathFromArgs,
+  DEFAULT_PORT,
+  DEFAULT_PROVIDER_TIMEOUTS,
+  validateConfig,
+  validateIntegrationConfig,
+} from "../src/index.ts";
 
 const valid = {
   repository: "owner/repository",
@@ -55,5 +61,72 @@ describe("factory configuration", () => {
         timeouts: { ...valid.timeouts, turnMs: 0 },
       }),
     ).toThrow("turnMs must be a positive integer");
+  });
+
+  test("defaults the port and every provider timeout", () => {
+    const { port: _port, timeouts: _timeouts, ...source } = valid;
+    const config = validateConfig(source);
+    expect(config.port).toBe(DEFAULT_PORT);
+    expect(config.timeouts).toEqual(DEFAULT_PROVIDER_TIMEOUTS);
+  });
+
+  test("merges partial timeout overrides over the defaults", () => {
+    const config = validateConfig({
+      ...valid,
+      timeouts: { turnMs: 42_000, shutdownMs: 2_000 },
+    });
+    expect(config.timeouts).toEqual({
+      ...DEFAULT_PROVIDER_TIMEOUTS,
+      turnMs: 42_000,
+      shutdownMs: 2_000,
+    });
+  });
+
+  test.each([0, -1, 1.5, 65_536, Number.NaN])(
+    "rejects an invalid supplied port %s",
+    (port) => {
+      expect(() => validateConfig({ ...valid, port })).toThrow(
+        "port must be an integer from 1 through 65535",
+      );
+    },
+  );
+
+  test.each([0, -1, 1.5, Number.NaN])(
+    "rejects an invalid supplied timeout %s",
+    (turnMs) => {
+      expect(() => validateConfig({ ...valid, timeouts: { turnMs } })).toThrow(
+        "turnMs must be a positive integer",
+      );
+    },
+  );
+
+  test("uses a narrow integration projection", () => {
+    const integration = validateIntegrationConfig({
+      repository: 42,
+      databasePath: false,
+      workspaceRoot: null,
+      bindHost: ["not", "used"],
+      port: 0,
+      codex: valid.codex,
+      timeouts: { initializationMs: 321 },
+    });
+    expect(integration).toEqual({
+      codex: valid.codex,
+      timeouts: { ...DEFAULT_PROVIDER_TIMEOUTS, initializationMs: 321 },
+    });
+  });
+
+  test("validates integration Codex settings and supplied timeouts", () => {
+    expect(() =>
+      validateIntegrationConfig({
+        codex: { model: "", reasoningEffort: "low" },
+      }),
+    ).toThrow("Codex model and reasoning effort must be explicit");
+    expect(() =>
+      validateIntegrationConfig({
+        codex: valid.codex,
+        timeouts: { shutdownMs: 0 },
+      }),
+    ).toThrow("shutdownMs must be a positive integer");
   });
 });

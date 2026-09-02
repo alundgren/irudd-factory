@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -42,17 +43,6 @@ async function makeConsoleDist(root: string): Promise<string> {
   return dist;
 }
 
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("no TCP port");
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
-  return address.port;
-}
-
 async function waitForRpc(url: string): Promise<void> {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
@@ -89,6 +79,108 @@ async function waitForAssignmentState(
 }
 
 describe("Factory RPC service", () => {
+  test("returns an assigned port only after RPC is ready", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-ready-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repository: "factory/fixture",
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, "empty"),
+    );
+    expect(service.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(service.url.endsWith(":0")).toBe(false);
+    await expect(
+      getFactorySnapshot(`${service.url}/rpc`),
+    ).resolves.toMatchObject({ assignment: null });
+    const terminated = service.terminated;
+    await service.stop();
+    await expect(terminated).resolves.toBeUndefined();
+  });
+
+  test("reports listener startup failure", async () => {
+    const occupied = createNetServer();
+    await new Promise<void>((resolveListen) =>
+      occupied.listen(0, "127.0.0.1", resolveListen),
+    );
+    const address = occupied.address();
+    if (!address || typeof address === "string") throw new Error("no TCP port");
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-bind-failure-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repository: "factory/fixture",
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: address.port,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    try {
+      await expect(
+        startFactoryService(config, fixtureDependencies(config, "empty")),
+      ).rejects.toThrow("listener failed to start");
+    } finally {
+      await new Promise<void>((resolveClose, rejectClose) =>
+        occupied.close((error) =>
+          error ? rejectClose(error) : resolveClose(),
+        ),
+      );
+    }
+  });
+
+  test("exposes unexpected listener termination", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-termination-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repository: "factory/fixture",
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const listener = createHttpServer();
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, "empty"),
+      await makeConsoleDist(root),
+      listener,
+    );
+    const terminated = service.terminated;
+    await new Promise<void>((resolveClose, rejectClose) =>
+      listener.close((error) => (error ? rejectClose(error) : resolveClose())),
+    );
+    await expect(terminated).resolves.toBeUndefined();
+    await service.stop();
+  });
+
   test("takes one fake issue through a durable completed pull request", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-test-"));
     roots.push(root);
@@ -97,7 +189,7 @@ describe("Factory RPC service", () => {
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
-      port: await availablePort(),
+      port: 0,
       codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
       timeouts: {
         childStartupMs: 1_000,
@@ -162,7 +254,7 @@ describe("Factory RPC service", () => {
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
-      port: await availablePort(),
+      port: 0,
       codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
       timeouts: {
         childStartupMs: 1_000,
@@ -212,7 +304,7 @@ describe("Factory RPC service", () => {
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
-      port: await availablePort(),
+      port: 0,
       codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
       timeouts: {
         childStartupMs: 1_000,
@@ -252,7 +344,7 @@ describe("Factory RPC service", () => {
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
-      port: await availablePort(),
+      port: 0,
       codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
       timeouts: {
         childStartupMs: 1_000,
@@ -307,7 +399,7 @@ describe("Factory RPC service", () => {
         databasePath: join(root, "factory.db"),
         workspaceRoot: join(root, "workspaces"),
         bindHost: "127.0.0.1",
-        port: await availablePort(),
+        port: 0,
         codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
         timeouts: {
           childStartupMs: 1_000,

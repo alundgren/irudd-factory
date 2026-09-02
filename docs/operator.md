@@ -13,8 +13,28 @@ a manual local service, not a scheduler.
 
 Install dependencies with `vp install --frozen-lockfile`. Copy
 `factory.example.json` to `factory.json` and set the repository, database
-path, workspace root, Codex model, reasoning effort, and timeouts. The bind
-address must be an IPv4 or IPv6 loopback address.
+path, workspace root, Codex model, and reasoning effort. The bind address must
+be an IPv4 or IPv6 loopback address.
+
+`port` is optional and defaults to `4317`. `timeouts` is also optional. You may
+override any subset of these defaults:
+
+```json
+{
+  "port": 4317,
+  "timeouts": {
+    "childStartupMs": 10000,
+    "initializationMs": 10000,
+    "modelSchemaMs": 20000,
+    "turnMs": 600000,
+    "shutdownMs": 5000
+  }
+}
+```
+
+Every supplied port or timeout must be a positive integer. Ports must be at
+most `65535`. Normal startup still requires `repository`, `databasePath`,
+`workspaceRoot`, `bindHost`, `codex.model`, and `codex.reasoningEffort`.
 
 ## Start and inspect Factory
 
@@ -72,6 +92,59 @@ wait "$service_pid"
 Factory accepts the command only when exactly one issue is eligible. A second
 client receives `provider_busy` while the active assignment is reserved,
 starting, or running.
+
+## Live integration command
+
+Run the complete production composition deliberately with:
+
+```sh
+vp run test:integration
+```
+
+The command reads `factory.json` by default. For this command only, the file
+needs `codex.model` and `codex.reasoningEffort`. It may contain the normal
+service fields, but the integration run ignores them. Optional timeout
+overrides use the same defaults and validation as normal startup.
+
+Choose another config file or repository with:
+
+```sh
+vp run test:integration --config factory.local.json \
+  --repository https://github.com/owner/repository
+```
+
+The repository value may be an HTTPS GitHub URL or `owner/name`. The default is
+`https://github.com/alundgren/irudd-factory-agent-testing`.
+
+This is a live, destructive-by-design integration check. Before creating the
+issue, it builds the console and verifies `git`, `gh`, and `codex`; the ambient
+GitHub login and its repository permission; the default branch `WORKFLOW.md`;
+the `ready-for-agent` and `claimed` labels; workflow label policy; and read
+access through the exact HTTPS Git remote Factory will clone. Invalid Codex or
+timeout settings also fail before the issue write.
+
+Each run creates one unique `ready-for-agent` issue, then submits
+`RunNextEligibleIssue` over the existing RPC client. The integration service
+uses production SQLite, GitHub, workspace, and Codex dependencies. A private
+GitHub wrapper exposes only the issue created by this run to discovery, even if
+the repository contains other eligible issues. Claims and pull-request checks
+still use the production GitHub adapter.
+
+The command binds `127.0.0.1` on an operating-system-assigned port and prints
+the run ID, issue URL, console URL, and retained directory. It checks the
+terminal assignment, required event order, issue identity, and verified pull
+request. After a pass or failure, the console stays available until SIGINT or
+SIGTERM. The command returns its stored pass or failure status after the
+signal.
+
+A signal while the assignment is active cancels the run and returns nonzero.
+The assignment may remain `reserved`, `starting`, or `running` because Factory
+does not recover nonterminal work yet. On every exit after startup, the runner
+stops the application, Codex process group, and HTTP listener.
+
+Files remain under `.factory/integration/<run-id>`. The command does not delete
+the issue, label, branch, pull request, database, clone, worktree, or provider
+runtime. Keep or remove them manually after inspection.
 
 ## Eligibility and claim behavior
 

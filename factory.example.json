@@ -3,16 +3,8 @@
   "databasePath": ".factory/factory.db",
   "workspaceRoot": ".factory/workspaces",
   "bindHost": "127.0.0.1",
-  "port": 4317,
   "codex": {
     "model": "gpt-5.6-luna",
     "reasoningEffort": "low"
-  },
-  "timeouts": {
-    "childStartupMs": 10000,
-    "initializationMs": 10000,
-    "modelSchemaMs": 20000,
-    "turnMs": 600000,
-    "shutdownMs": 5000
   }
 }
