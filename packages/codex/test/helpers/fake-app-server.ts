@@ -61,6 +61,13 @@ function requestedEffort(params: Record<string, unknown> | undefined): string {
   return typeof effort === "string" ? effort : CONFIGURED_EFFORT;
 }
 
+function appsDisabled(params: Record<string, unknown> | undefined): boolean {
+  const config = params?.config as Record<string, unknown> | undefined;
+  const apps = config?.apps as Record<string, unknown> | undefined;
+  const defaults = apps?._default as Record<string, unknown> | undefined;
+  return defaults?.enabled === false;
+}
+
 /**
  * Everything a subagent thread reports before the assignment thread finishes:
  * its own settings, its own final message, and its own completed turn.
@@ -137,6 +144,13 @@ async function handle(line: string): Promise<void> {
   }
   if (message.method === "thread/start" && message.id !== undefined) {
     if (mode === "thread-timeout") return;
+    if (mode === "require-apps-disabled" && !appsDisabled(message.params)) {
+      send({
+        id: message.id,
+        error: { code: -32602, message: "Codex apps were not disabled" },
+      });
+      return;
+    }
     const response = {
       id: message.id,
       result: {

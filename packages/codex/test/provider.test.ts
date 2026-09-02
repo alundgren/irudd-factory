@@ -221,6 +221,19 @@ describe("Codex provider", () => {
     expect(patches[0]?.observedEffort).toBe("low");
   });
 
+  test("disables Codex apps at thread start", async () => {
+    const { provider, assignment, workspace } = await fixture(
+      "require-apps-disabled",
+    );
+    const result = await Effect.runPromise(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        () => Effect.void,
+      ),
+    );
+    expect(result.finalResponse).toBe("Pull request opened.");
+  });
+
   test("emits observed mismatch values before failing", async () => {
     for (const [mode, field, value] of [
       ["model-mismatch", "observedModel", "another-model"],
