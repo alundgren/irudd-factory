@@ -19,6 +19,7 @@
     "test:codex": "vp test packages/codex",
     "test:contracts": "vp test packages/contracts",
     "test:github": "vp test packages/github",
+    "test:integration": "node apps/service/src/integration-main.ts",
     "test:state-sqlite": "vp test packages/state-sqlite",
     "test:workspaces": "vp test packages/workspaces",
     "test:service": "vp test apps/service",

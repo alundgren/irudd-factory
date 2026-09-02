@@ -9,25 +9,43 @@ import { Schema } from "effect";
 
 /** The configuration file Factory reads, and the flag that overrides it. */
 export const CONFIG_FILE_NAME = "factory.json";
-const CONFIG_FLAG = "--config";
+export const CONFIG_FLAG = "--config";
+
+export const DEFAULT_PORT = 4317;
+export const DEFAULT_PROVIDER_TIMEOUTS: ProviderTimeouts = Object.freeze({
+  childStartupMs: 10_000,
+  initializationMs: 10_000,
+  modelSchemaMs: 20_000,
+  turnMs: 600_000,
+  shutdownMs: 5_000,
+});
+
+const RawCodex = Schema.Struct({
+  model: Schema.String,
+  reasoningEffort: Schema.String,
+});
+
+const RawTimeouts = Schema.Struct({
+  childStartupMs: Schema.optional(Schema.Number),
+  initializationMs: Schema.optional(Schema.Number),
+  modelSchemaMs: Schema.optional(Schema.Number),
+  turnMs: Schema.optional(Schema.Number),
+  shutdownMs: Schema.optional(Schema.Number),
+});
 
 const RawConfig = Schema.Struct({
   repository: Schema.String,
   databasePath: Schema.String,
   workspaceRoot: Schema.String,
   bindHost: Schema.String,
-  port: Schema.Number,
-  codex: Schema.Struct({
-    model: Schema.String,
-    reasoningEffort: Schema.String,
-  }),
-  timeouts: Schema.Struct({
-    childStartupMs: Schema.Number,
-    initializationMs: Schema.Number,
-    modelSchemaMs: Schema.Number,
-    turnMs: Schema.Number,
-    shutdownMs: Schema.Number,
-  }),
+  port: Schema.optional(Schema.Number),
+  codex: RawCodex,
+  timeouts: Schema.optional(RawTimeouts),
+});
+
+const RawIntegrationConfig = Schema.Struct({
+  codex: RawCodex,
+  timeouts: Schema.optional(RawTimeouts),
 });
 
 export interface FactoryConfig {
@@ -43,6 +61,50 @@ export interface FactoryConfig {
   readonly timeouts: ProviderTimeouts;
 }
 
+export interface IntegrationConfig {
+  readonly codex: FactoryConfig["codex"];
+  readonly timeouts: ProviderTimeouts;
+}
+
+function invalidStructure(error: unknown): FactoryError {
+  return new FactoryError({
+    code: "config_invalid",
+    message: `${CONFIG_FILE_NAME} does not match the required structure`,
+    detail: String(error),
+  });
+}
+
+function validateCodex(codex: IntegrationConfig["codex"]): void {
+  if (!codex.model.trim() || !codex.reasoningEffort.trim()) {
+    throw new FactoryError({
+      code: "config_invalid",
+      message: "Codex model and reasoning effort must be explicit",
+    });
+  }
+}
+
+function resolveTimeouts(
+  supplied:
+    | { readonly [Key in keyof ProviderTimeouts]?: number | undefined }
+    | undefined,
+): ProviderTimeouts {
+  const timeouts = { ...DEFAULT_PROVIDER_TIMEOUTS };
+  for (const [name, value] of Object.entries(supplied ?? {})) {
+    if (value !== undefined) {
+      timeouts[name as keyof ProviderTimeouts] = value;
+    }
+  }
+  for (const [name, value] of Object.entries(timeouts)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new FactoryError({
+        code: "config_invalid",
+        message: `${name} must be a positive integer millisecond timeout`,
+      });
+    }
+  }
+  return timeouts;
+}
+
 export function validateConfig(
   source: unknown,
   configDirectory = process.cwd(),
@@ -51,11 +113,7 @@ export function validateConfig(
   try {
     raw = Schema.decodeUnknownSync(RawConfig)(source);
   } catch (error) {
-    throw new FactoryError({
-      code: "config_invalid",
-      message: `${CONFIG_FILE_NAME} does not match the required structure`,
-      detail: String(error),
-    });
+    throw invalidStructure(error);
   }
   const ipv4 = raw.bindHost.split(".").map(Number);
   const loopback =
@@ -69,7 +127,8 @@ export function validateConfig(
       message: `Factory only accepts a loopback bind address, got ${raw.bindHost}`,
     });
   }
-  if (!Number.isSafeInteger(raw.port) || raw.port <= 0 || raw.port > 65_535) {
+  const port = raw.port ?? DEFAULT_PORT;
+  if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
     throw new FactoryError({
       code: "config_invalid",
       message: "port must be an integer from 1 through 65535",
@@ -81,25 +140,25 @@ export function validateConfig(
       message: "repository must use owner/name form",
     });
   }
-  if (!raw.codex.model.trim() || !raw.codex.reasoningEffort.trim()) {
-    throw new FactoryError({
-      code: "config_invalid",
-      message: "Codex model and reasoning effort must be explicit",
-    });
-  }
-  for (const [name, value] of Object.entries(raw.timeouts)) {
-    if (!Number.isSafeInteger(value) || value <= 0) {
-      throw new FactoryError({
-        code: "config_invalid",
-        message: `${name} must be a positive integer millisecond timeout`,
-      });
-    }
-  }
+  validateCodex(raw.codex);
   return {
     ...raw,
+    port,
+    timeouts: resolveTimeouts(raw.timeouts),
     databasePath: resolve(configDirectory, raw.databasePath),
     workspaceRoot: resolve(configDirectory, raw.workspaceRoot),
   };
+}
+
+export function validateIntegrationConfig(source: unknown): IntegrationConfig {
+  let raw: typeof RawIntegrationConfig.Type;
+  try {
+    raw = Schema.decodeUnknownSync(RawIntegrationConfig)(source);
+  } catch (error) {
+    throw invalidStructure(error);
+  }
+  validateCodex(raw.codex);
+  return { codex: raw.codex, timeouts: resolveTimeouts(raw.timeouts) };
 }
 
 export async function loadConfig(path = resolve(CONFIG_FILE_NAME)) {
@@ -114,6 +173,20 @@ export async function loadConfig(path = resolve(CONFIG_FILE_NAME)) {
     });
   }
   return validateConfig(source, dirname(path));
+}
+
+export async function loadIntegrationConfig(path = resolve(CONFIG_FILE_NAME)) {
+  let source: unknown;
+  try {
+    source = JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch (error) {
+    throw new FactoryError({
+      code: "config_read_failed",
+      message: `Could not read ${path}`,
+      detail: String(error),
+    });
+  }
+  return validateIntegrationConfig(source);
 }
 
 export function configPathFromArgs(

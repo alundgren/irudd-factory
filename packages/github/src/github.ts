@@ -5,6 +5,7 @@ import type {
   GitHubService,
 } from "@irudd-factory/application";
 import {
+  AUTHOR_WRITE_PERMISSIONS,
   CLAIM_LABEL,
   FactoryError,
   GitHub,
@@ -24,7 +25,7 @@ const GH_CLI = "gh";
 const CLOSED_BLOCKER_STATE = "CLOSED";
 
 /** Repository permissions that let an author's issue be picked up. */
-const AUTHOR_WRITE_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const authorWritePermissions = new Set<string>(AUTHOR_WRITE_PERMISSIONS);
 
 const PageInfo = Schema.Struct({
   hasNextPage: Schema.Boolean,
@@ -448,7 +449,7 @@ function makeService(runner: CommandRunner): GitHubService {
                 `repos/${repository}/collaborators/${issue.author.login}/permission`,
               ]),
             ).permission.toLowerCase();
-            if (!AUTHOR_WRITE_PERMISSIONS.has(permission)) continue;
+            if (!authorWritePermissions.has(permission)) continue;
             candidates.push({
               issue: {
                 nodeId: issue.id,

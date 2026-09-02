@@ -16,6 +16,9 @@ export const WORKFLOW_FILE = "WORKFLOW.md";
 /** The label Factory adds to take an issue, and reads back to confirm it. */
 export const CLAIM_LABEL = "claimed";
 
+/** Repository permissions that make an issue author eligible. */
+export const AUTHOR_WRITE_PERMISSIONS = ["admin", "maintain", "write"] as const;
+
 export const REQUIRED_ISSUE_LABELS = ["ready-for-agent"] as const;
 export const FORBIDDEN_ISSUE_LABELS = [
   CLAIM_LABEL,

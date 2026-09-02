@@ -115,6 +115,9 @@ importers:
       '@irudd-factory/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@irudd-factory/cli':
+        specifier: workspace:*
+        version: link:../cli
       '@irudd-factory/codex':
         specifier: workspace:*
         version: link:../../packages/codex
