@@ -47,6 +47,7 @@ export const FACTORY_ERROR_CODES = [
   "pull_request_verification_failed",
   "repository_invalid",
   "schema_generation_failed",
+  "service_shutdown",
   "starting_commit_invalid",
   "state_store_failed",
   "thread_id_missing",

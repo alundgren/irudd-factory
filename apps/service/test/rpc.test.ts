@@ -244,6 +244,54 @@ describe("Factory RPC service", () => {
     });
   });
 
+  test("stop interrupts an in-flight assignment instead of leaving it running", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-shutdown-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repository: "factory/fixture",
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: await availablePort(),
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const enterRunning = gate();
+    const neverFinishes = gate();
+    let interrupted = false;
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, "runnable", {
+        beforeRunning: enterRunning.wait,
+        beforeCompletion: neverFinishes.wait,
+        onProviderInterrupted: () => {
+          interrupted = true;
+        },
+      }),
+    );
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+
+    await runNextEligibleIssue(rpcUrl, "shutdown-command");
+    await waitForAssignmentState(rpcUrl, "starting");
+    enterRunning.release();
+    await waitForAssignmentState(rpcUrl, "running");
+
+    await Promise.race([
+      service.stop(),
+      delay(2_000).then(() => {
+        throw new Error("service.stop() hung waiting for the blocked run");
+      }),
+    ]);
+    expect(interrupted).toBe(true);
+  });
+
   test("returns every command result through the same RPC", async () => {
     for (const [scenarioName, expected] of [
       ["empty", "no_candidate"],

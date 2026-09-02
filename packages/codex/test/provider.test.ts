@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import type { Assignment, WorkspacePaths } from "@irudd-factory/contracts";
 import type { AssignmentPatch } from "@irudd-factory/application";
-import { Effect, Either } from "effect";
+import { Effect, Either, Fiber } from "effect";
 import {
   makeCodexProvider,
   terminateOwnedGroup,
@@ -26,7 +26,7 @@ const fakeServer = join(
   "fake-app-server.ts",
 );
 
-async function fixture(mode = "success") {
+async function fixture(mode = "success", options: { turnMs?: number } = {}) {
   const root = await mkdtemp(join(tmpdir(), "factory-codex-test-"));
   roots.push(root);
   const worktree = join(root, "worktree");
@@ -83,7 +83,7 @@ async function fixture(mode = "success") {
       childStartupMs: 500,
       initializationMs: 500,
       modelSchemaMs: 500,
-      turnMs: mode === "turn-timeout" ? 50 : 500,
+      turnMs: options.turnMs ?? (mode === "turn-timeout" ? 50 : 500),
       shutdownMs: 500,
     },
   });
@@ -431,5 +431,65 @@ describe("Codex provider", () => {
     } finally {
       if (captured) await terminateOwnedGroup(captured, 500);
     }
+  });
+
+  test("kills the App Server process group when the run is interrupted mid-turn", async () => {
+    const { assignment, workspace } = await fixture("turn-timeout", {
+      turnMs: 5_000,
+    });
+    let captured: ManagedProcess | undefined;
+    let terminateCalls = 0;
+    const provider = makeCodexProvider({
+      commandPrefix: [process.execPath, fakeServer, "turn-timeout"],
+      runtimeRoot: join(dirname(workspace.worktreePath), "interrupt-runtime"),
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      timeouts: {
+        childStartupMs: 500,
+        initializationMs: 500,
+        modelSchemaMs: 500,
+        turnMs: 5_000,
+        shutdownMs: 500,
+      },
+      terminateProcessGroup: async (child, shutdownMs) => {
+        captured = child;
+        terminateCalls += 1;
+        return terminateOwnedGroup(child, shutdownMs);
+      },
+    });
+    let turnStarted = false;
+    const fiber = Effect.runFork(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        (event) =>
+          Effect.sync(() => {
+            if (event.type === "provider.turn.started") turnStarted = true;
+          }),
+      ),
+    );
+    const startDeadline = Date.now() + 2_000;
+    while (!turnStarted && Date.now() < startDeadline) await delay(10);
+    expect(turnStarted).toBe(true);
+
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    const terminateDeadline = Date.now() + 2_000;
+    while (terminateCalls === 0 && Date.now() < terminateDeadline) {
+      await delay(10);
+    }
+    expect(terminateCalls).toBe(1);
+    expect(captured).toBeDefined();
+
+    const exitDeadline = Date.now() + 2_000;
+    const stillRunning = (): boolean => {
+      try {
+        process.kill(captured!.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    while (stillRunning() && Date.now() < exitDeadline) await delay(10);
+    expect(stillRunning()).toBe(false);
   });
 });

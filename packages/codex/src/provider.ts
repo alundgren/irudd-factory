@@ -244,7 +244,7 @@ export function makeCodexProvider(
   return {
     run: (input, emit) =>
       Effect.tryPromise({
-        try: async (): Promise<ProviderRunResult> => {
+        try: async (signal): Promise<ProviderRunResult> => {
           const runtime = resolve(options.runtimeRoot, input.assignment.id);
           const schemaRoot = join(runtime, "schema");
           await mkdir(schemaRoot, { recursive: true });
@@ -280,6 +280,12 @@ export function makeCodexProvider(
             });
           }
           const schemaDigest = await inspectSchemas(schemaRoot);
+          if (signal.aborted) {
+            throw new FactoryError({
+              code: "service_shutdown",
+              message: "Factory service is shutting down",
+            });
+          }
           const child = spawnManaged(
             [...prefix, "app-server", "--stdio", "--strict-config"],
             input.workspace.worktreePath,
@@ -306,6 +312,20 @@ export function makeCodexProvider(
           const throwIfTerminal = (): void => {
             if (terminalFailure) throw terminalFailure;
           };
+          const shutdownRequested = (): void =>
+            recordTerminal(
+              new FactoryError({
+                code: "service_shutdown",
+                message: "Factory service is shutting down",
+              }),
+            );
+          if (signal.aborted) {
+            shutdownRequested();
+          } else {
+            signal.addEventListener("abort", shutdownRequested, {
+              once: true,
+            });
+          }
           const guardTerminal = async <A>(
             operation: () => Promise<A>,
           ): Promise<A> => {
@@ -770,6 +790,7 @@ export function makeCodexProvider(
             }
             throw primary;
           } finally {
+            signal.removeEventListener("abort", shutdownRequested);
             unsubscribe();
             rpc.stop();
           }
