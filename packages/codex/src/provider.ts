@@ -18,9 +18,12 @@ import {
   type ProcessExit,
 } from "./process.ts";
 import {
+  APPROVE_APP_TOOL,
   APP_SERVER_CLIENT_NAME,
   APP_SERVER_METHODS,
   AppServerRpc,
+  CREATE_PULL_REQUEST_TOOL,
+  GITHUB_CONNECTOR_ID,
   REASONING_EFFORT_CONFIG_KEY,
   type RpcMessage,
 } from "./rpc.ts";
@@ -489,6 +492,15 @@ export function makeCodexProvider(
                   serviceName: APP_SERVER_CLIENT_NAME,
                   config: {
                     [REASONING_EFFORT_CONFIG_KEY]: options.reasoningEffort,
+                    apps: {
+                      [GITHUB_CONNECTOR_ID]: {
+                        tools: {
+                          [CREATE_PULL_REQUEST_TOOL]: {
+                            approval_mode: APPROVE_APP_TOOL,
+                          },
+                        },
+                      },
+                    },
                   },
                 },
                 options.timeouts.initializationMs,

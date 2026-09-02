@@ -34,6 +34,10 @@ export const APP_SERVER_CLIENT_NAME = "irudd_factory";
 
 export const REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort";
 
+export const GITHUB_CONNECTOR_ID = "connector_76869538009648d5b282a4bb21c3d157";
+export const CREATE_PULL_REQUEST_TOOL = "create_pull_request";
+export const APPROVE_APP_TOOL = "approve";
+
 export interface RpcMessage {
   readonly id?: number | string;
   readonly method?: string;

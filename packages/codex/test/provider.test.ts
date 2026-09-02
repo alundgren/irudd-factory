@@ -221,6 +221,20 @@ describe("Codex provider", () => {
     expect(patches[0]?.observedEffort).toBe("low");
   });
 
+  test("auto-approves GitHub pull request creation at thread start", async () => {
+    const { provider, assignment, workspace } = await fixture(
+      "require-pr-auto-approval",
+    );
+    const result = await Effect.runPromise(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        () => Effect.void,
+      ),
+    );
+    expect(result.finalResponse).toBe("Pull request opened.");
+    expect(result.approvalCount).toBe(0);
+  });
+
   test("emits observed mismatch values before failing", async () => {
     for (const [mode, field, value] of [
       ["model-mismatch", "observedModel", "another-model"],

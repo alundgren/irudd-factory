@@ -45,6 +45,11 @@ servers, apps, hooks, plugins, skills, and instruction files can affect a run.
 Factory records observed provider events but does not inspect credentials or
 copy authentication files into an isolated home.
 
+Factory overrides the GitHub connector's `create_pull_request` tool to run
+without approval. Opening the pull request is required to complete an
+assignment, and an unattended run has nobody who can answer the connector's
+approval prompt. Other connector writes retain the operator's configuration.
+
 Mitigation: operate Factory as the same trusted user who owns that configuration
 and review integrations before enabling unattended work.
 

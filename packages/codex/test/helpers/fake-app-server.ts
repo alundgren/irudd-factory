@@ -61,6 +61,26 @@ function requestedEffort(params: Record<string, unknown> | undefined): string {
   return typeof effort === "string" ? effort : CONFIGURED_EFFORT;
 }
 
+function hasUnattendedPullRequestApproval(
+  params: Record<string, unknown> | undefined,
+): boolean {
+  const config = params?.config as Record<string, unknown> | undefined;
+  const apps = config?.apps as Record<string, unknown> | undefined;
+  const github = apps?.connector_76869538009648d5b282a4bb21c3d157 as
+    | Record<string, unknown>
+    | undefined;
+  const tools = github?.tools as Record<string, unknown> | undefined;
+  const createPullRequest = tools?.create_pull_request as
+    | Record<string, unknown>
+    | undefined;
+  return (
+    params?.approvalPolicy === "never" &&
+    Object.keys(apps ?? {}).length === 1 &&
+    Object.keys(tools ?? {}).length === 1 &&
+    createPullRequest?.approval_mode === "approve"
+  );
+}
+
 /**
  * Everything a subagent thread reports before the assignment thread finishes:
  * its own settings, its own final message, and its own completed turn.
@@ -137,6 +157,19 @@ async function handle(line: string): Promise<void> {
   }
   if (message.method === "thread/start" && message.id !== undefined) {
     if (mode === "thread-timeout") return;
+    if (
+      mode === "require-pr-auto-approval" &&
+      !hasUnattendedPullRequestApproval(message.params)
+    ) {
+      send({
+        id: message.id,
+        error: {
+          code: -32602,
+          message: "unattended pull request approval config is missing",
+        },
+      });
+      return;
+    }
     const response = {
       id: message.id,
       result: {
