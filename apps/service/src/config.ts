@@ -12,6 +12,10 @@ export const CONFIG_FILE_NAME = "factory.json";
 export const CONFIG_FLAG = "--config";
 
 export const DEFAULT_PORT = 4317;
+export const DEFAULT_LOCAL_CLI_PORT = 4318;
+export const IPV4_LOOPBACK_HOST = "127.0.0.1";
+export const LOCAL_ACCESS_MODE = "local";
+export const TAILSCALE_ACCESS_MODE = "tailscale";
 export const DEFAULT_CODEX_SLOTS = 1;
 export const MIN_CODEX_SLOTS = 1;
 export const MAX_CODEX_SLOTS = 32;
@@ -50,11 +54,21 @@ const RawTimeouts = Schema.Struct({
   shutdownMs: Schema.optional(Schema.Number),
 });
 
+const RawAccess = Schema.Union(
+  Schema.Struct({ mode: Schema.Literal(LOCAL_ACCESS_MODE) }),
+  Schema.Struct({
+    mode: Schema.Literal(TAILSCALE_ACCESS_MODE),
+    operatorLogin: Schema.String,
+    localCliPort: Schema.optional(Schema.Number),
+  }),
+);
+
 const RawConfig = Schema.Struct({
   repositories: Schema.Array(RawRepository),
   databasePath: Schema.String,
   workspaceRoot: Schema.String,
   bindHost: Schema.String,
+  access: Schema.optional(RawAccess),
   port: Schema.optional(Schema.Number),
   pollIntervalMs: Schema.optional(Schema.Number),
   codex: RawCodex,
@@ -77,6 +91,13 @@ export interface FactoryConfig {
   readonly databasePath: string;
   readonly workspaceRoot: string;
   readonly bindHost: string;
+  readonly access?:
+    | { readonly mode: typeof LOCAL_ACCESS_MODE }
+    | {
+        readonly mode: typeof TAILSCALE_ACCESS_MODE;
+        readonly operatorLogin: string;
+        readonly localCliPort: number;
+      };
   readonly port: number;
   readonly pollIntervalMs: number;
   readonly codex: {
@@ -96,11 +117,10 @@ export interface IntegrationConfig {
   readonly timeouts: ProviderTimeouts;
 }
 
-function invalidStructure(error: unknown): FactoryError {
+function invalidStructure(): FactoryError {
   return new FactoryError({
     code: "config_invalid",
     message: `${CONFIG_FILE_NAME} does not match the required structure`,
-    detail: String(error),
   });
 }
 
@@ -160,8 +180,18 @@ export function validateConfig(
   let raw: typeof RawConfig.Type;
   try {
     raw = Schema.decodeUnknownSync(RawConfig)(source);
-  } catch (error) {
-    throw invalidStructure(error);
+  } catch {
+    throw invalidStructure();
+  }
+  const access = raw.access ?? { mode: LOCAL_ACCESS_MODE };
+  if (
+    access.mode === TAILSCALE_ACCESS_MODE &&
+    raw.bindHost !== IPV4_LOOPBACK_HOST
+  ) {
+    throw new FactoryError({
+      code: "non_loopback_bind_rejected",
+      message: "Tailscale access requires bindHost to equal 127.0.0.1",
+    });
   }
   const ipv4 = raw.bindHost.split(".").map(Number);
   const loopback =
@@ -181,6 +211,19 @@ export function validateConfig(
       code: "config_invalid",
       message: "port must be an integer from 1 through 65535",
     });
+  }
+  if (access.mode === TAILSCALE_ACCESS_MODE) {
+    if (
+      access.operatorLogin.length === 0 ||
+      access.operatorLogin.trim() !== access.operatorLogin ||
+      /[\r\n]/.test(access.operatorLogin)
+    ) {
+      throw new FactoryError({
+        code: "config_invalid",
+        message:
+          "access.operatorLogin must be a nonempty login without surrounding whitespace",
+      });
+    }
   }
   validateCodex(raw.codex);
   if (raw.repositories.length === 0) {
@@ -225,11 +268,33 @@ export function validateConfig(
     MIN_POLL_INTERVAL_MS,
     MAX_POLL_INTERVAL_MS,
   );
+  const resolvedAccess =
+    access.mode === LOCAL_ACCESS_MODE
+      ? access
+      : {
+          ...access,
+          localCliPort: boundedInteger(
+            access.localCliPort ?? DEFAULT_LOCAL_CLI_PORT,
+            "access.localCliPort",
+            1,
+            65_535,
+          ),
+        };
+  if (
+    resolvedAccess.mode === TAILSCALE_ACCESS_MODE &&
+    resolvedAccess.localCliPort === port
+  ) {
+    throw new FactoryError({
+      code: "config_invalid",
+      message: "access.localCliPort must differ from port",
+    });
+  }
   return {
     repositories,
     databasePath: resolve(configDirectory, raw.databasePath),
     workspaceRoot: resolve(configDirectory, raw.workspaceRoot),
     bindHost: raw.bindHost,
+    access: resolvedAccess,
     port,
     pollIntervalMs,
     codex: { ...raw.codex, slots },
@@ -241,8 +306,8 @@ export function validateIntegrationConfig(source: unknown): IntegrationConfig {
   let raw: typeof RawIntegrationConfig.Type;
   try {
     raw = Schema.decodeUnknownSync(RawIntegrationConfig)(source);
-  } catch (error) {
-    throw invalidStructure(error);
+  } catch {
+    throw invalidStructure();
   }
   validateCodex(raw.codex);
   const slots = boundedInteger(

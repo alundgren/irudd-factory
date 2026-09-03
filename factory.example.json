@@ -3,6 +3,7 @@
   "databasePath": ".factory/factory.db",
   "workspaceRoot": ".factory/workspaces",
   "bindHost": "127.0.0.1",
+  "access": { "mode": "local" },
   "pollIntervalMs": 30000,
   "codex": {
     "model": "gpt-5.6-luna",

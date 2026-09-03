@@ -25,7 +25,17 @@ import { layerGitHub } from "@irudd-factory/github";
 import { layerStateStore } from "@irudd-factory/state-sqlite";
 import { layerWorkspaces } from "@irudd-factory/workspaces";
 import { Effect, Fiber, Layer } from "effect";
-import type { FactoryConfig } from "./config.ts";
+import {
+  IPV4_LOOPBACK_HOST,
+  LOCAL_ACCESS_MODE,
+  TAILSCALE_ACCESS_MODE,
+  type FactoryConfig,
+} from "./config.ts";
+import { accessMiddleware } from "./access.ts";
+
+class LocalCliRouter extends HttpRouter.Tag(
+  "@irudd-factory/service/LocalCliRouter",
+)<LocalCliRouter>() {}
 
 export type FactoryDependencies = Layer.Layer<
   StateStore | GitHub | Workspaces | Provider | Clock | IdGenerator,
@@ -86,7 +96,9 @@ export async function startFactoryService(
   dependencies: FactoryDependencies,
   consoleDistPath = resolve("apps/console/dist"),
   nodeServer: Server = createServer(),
+  localCliServer: Server = createServer(),
 ) {
+  const access = config.access ?? { mode: LOCAL_ACCESS_MODE };
   await Promise.all([
     mkdir(dirname(config.databasePath), { recursive: true }),
     mkdir(config.workspaceRoot, { recursive: true }),
@@ -134,7 +146,7 @@ export async function startFactoryService(
         ]).pipe(Effect.asVoid),
       )
     : Layer.empty;
-  const Main = HttpRouter.Default.serve().pipe(
+  const Main = HttpRouter.Default.serve(accessMiddleware(access, "main")).pipe(
     Layer.provide(RpcLive),
     Layer.provide(ProtocolLive),
     Layer.provide(StaticLive),
@@ -145,54 +157,109 @@ export async function startFactoryService(
       }),
     ),
   );
+  const servers = [nodeServer];
+  let LocalCli: Layer.Layer<never, unknown, never> | null = null;
+  if (access.mode === TAILSCALE_ACCESS_MODE) {
+    const LocalCliRpcLive = RpcServer.layer(FactoryRpcs).pipe(
+      Layer.provide(handlerLayer(dependencies, application)),
+    );
+    const LocalCliProtocolLive = RpcServer.layerProtocolHttp({
+      path: RPC_PATH,
+      routerTag: LocalCliRouter,
+    }).pipe(Layer.provide(RpcSerialization.layerJson));
+    LocalCli = LocalCliRouter.serve(accessMiddleware(access, "local-cli")).pipe(
+      Layer.provide(LocalCliRpcLive),
+      Layer.provide(LocalCliProtocolLive),
+      Layer.provide(
+        NodeHttpServer.layer(() => localCliServer, {
+          host: IPV4_LOOPBACK_HOST,
+          port: access.localCliPort,
+        }),
+      ),
+    );
+    servers.push(localCliServer);
+  }
   let resolveListenerTermination!: () => void;
   const listenerTermination = new Promise<void>((resolveTermination) => {
     resolveListenerTermination = resolveTermination;
   });
-  const onRuntimeError = () => resolveListenerTermination();
-  const onRuntimeClose = () => resolveListenerTermination();
-  const cleanupListenerObservers = () => {
-    nodeServer.off("error", onRuntimeError);
-    nodeServer.off("close", onRuntimeClose);
-  };
-  let cleanupStartupObservers = () => undefined;
-  const listening = new Promise<void>((resolveListening, rejectListening) => {
-    cleanupStartupObservers = () => {
-      nodeServer.off("listening", onListening);
-      nodeServer.off("error", onError);
+  const runtimeObservers = servers.map((server) => {
+    const onRuntimeError = () => resolveListenerTermination();
+    const onRuntimeClose = () => resolveListenerTermination();
+    return {
+      install: () => {
+        server.on("error", onRuntimeError);
+        server.once("close", onRuntimeClose);
+      },
+      cleanup: () => {
+        server.off("error", onRuntimeError);
+        server.off("close", onRuntimeClose);
+      },
     };
-    const onListening = () => {
-      cleanupStartupObservers();
-      nodeServer.on("error", onRuntimeError);
-      nodeServer.once("close", onRuntimeClose);
-      resolveListening();
-    };
-    const onError = (error: Error) => {
-      cleanupStartupObservers();
-      rejectListening(error);
-    };
-    nodeServer.once("listening", onListening);
-    nodeServer.once("error", onError);
   });
-  const fiber = Effect.runFork(Layer.launch(Main));
-  const exit = Effect.runPromise(Fiber.await(fiber));
+  const startupObservers = servers.map((server, index) => {
+    let cleanup = () => undefined;
+    const listening = new Promise<void>((resolveListening, rejectListening) => {
+      const onListening = () => {
+        cleanup();
+        runtimeObservers[index]!.install();
+        resolveListening();
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        rejectListening(error);
+      };
+      cleanup = () => {
+        server.off("listening", onListening);
+        server.off("error", onError);
+      };
+      server.once("listening", onListening);
+      server.once("error", onError);
+    });
+    return { listening, cleanup };
+  });
+  const Service = LocalCli ? Layer.merge(Main, LocalCli) : Main;
+  const fibers = [Effect.runFork(Layer.launch(Service))];
+  const exits = fibers.map((fiber) => Effect.runPromise(Fiber.await(fiber)));
   try {
     await Promise.race([
-      listening,
-      exit.then((cause) => {
+      Promise.all(startupObservers.map(({ listening }) => listening)),
+      Promise.race(exits).then((cause) => {
         throw new FactoryError({
           code: "service_start_failed",
-          message: "Factory service stopped before its listener became ready",
+          message: "Factory service stopped before every listener became ready",
           detail: String(cause),
         });
       }),
     ]);
+    const earlyExit = await Promise.race([
+      Promise.race(exits).then((cause) => ({ cause })),
+      new Promise<null>((resolveReady) =>
+        setImmediate(() => resolveReady(null)),
+      ),
+    ]);
+    if (earlyExit) {
+      throw new FactoryError({
+        code: "service_start_failed",
+        message: "Factory service stopped during listener initialization",
+        detail: String(earlyExit.cause),
+      });
+    }
   } catch (error) {
     await Effect.runPromise(
-      application.shutdown().pipe(Effect.zipRight(Fiber.interrupt(fiber))),
+      application.shutdown().pipe(
+        Effect.zipRight(
+          Effect.all(
+            fibers.map((fiber) => Fiber.interrupt(fiber)),
+            {
+              discard: true,
+            },
+          ),
+        ),
+      ),
     );
-    cleanupStartupObservers();
-    cleanupListenerObservers();
+    startupObservers.forEach(({ cleanup }) => cleanup());
+    runtimeObservers.forEach(({ cleanup }) => cleanup());
     throw error instanceof FactoryError
       ? error
       : new FactoryError({
@@ -201,30 +268,58 @@ export async function startFactoryService(
           detail: String(error),
         });
   }
-  const address = nodeServer.address() as AddressInfo | null;
-  if (!address) {
+  const addresses = servers.map(
+    (server) => server.address() as AddressInfo | null,
+  );
+  if (addresses.some((address) => !address)) {
     await Effect.runPromise(
-      application.shutdown().pipe(Effect.zipRight(Fiber.interrupt(fiber))),
+      application.shutdown().pipe(
+        Effect.zipRight(
+          Effect.all(
+            fibers.map((fiber) => Fiber.interrupt(fiber)),
+            {
+              discard: true,
+            },
+          ),
+        ),
+      ),
     );
-    cleanupStartupObservers();
-    cleanupListenerObservers();
+    startupObservers.forEach(({ cleanup }) => cleanup());
+    runtimeObservers.forEach(({ cleanup }) => cleanup());
     throw new FactoryError({
       code: "service_start_failed",
-      message: "Factory service listener has no bound address",
+      message: "A Factory service listener has no bound address",
     });
   }
+  const address = addresses[0]!;
+  const localCliAddress = addresses[1];
   let stopPromise: Promise<void> | null = null;
   const stop = () => {
     stopPromise ??= Effect.runPromise(
-      application.shutdown().pipe(Effect.zipRight(Fiber.interrupt(fiber))),
+      application.shutdown().pipe(
+        Effect.zipRight(
+          Effect.all(
+            fibers.map((fiber) => Fiber.interrupt(fiber)),
+            {
+              discard: true,
+            },
+          ),
+        ),
+      ),
     )
       .then(() => undefined)
-      .finally(cleanupListenerObservers);
+      .finally(() => runtimeObservers.forEach(({ cleanup }) => cleanup()));
     return stopPromise;
   };
   return {
     url: `http://${config.bindHost.includes(":") ? `[${config.bindHost}]` : config.bindHost}:${address.port}`,
-    terminated: Promise.race([exit.then(() => undefined), listenerTermination]),
+    ...(localCliAddress
+      ? { localCliUrl: `http://${IPV4_LOOPBACK_HOST}:${localCliAddress.port}` }
+      : {}),
+    terminated: Promise.race([
+      Promise.race(exits).then(() => undefined),
+      listenerTermination,
+    ]),
     stop,
   };
 }

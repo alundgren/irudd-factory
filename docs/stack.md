@@ -61,8 +61,11 @@ same Effect RPC group. The console submits `RunNextEligibleIssue`, polls
 `GetFactorySnapshot`, and shows the durable receipt, current assignment,
 retained paths, pull request, errors, and event history.
 
-The current transport is unauthenticated HTTP bound only to an IP loopback
-address. Authentication, server streams, and remote console access are deferred.
+Local access uses unauthenticated HTTP on one IP-loopback listener. Tailscale
+access requires the configured `Tailscale-User-Login` on the main console and
+RPC listener, plus a matching HTTPS Origin for browser RPC. Its second
+IP-loopback listener accepts only Origin-less CLI RPC. Server streams are
+deferred.
 
 ## Effect
 
@@ -78,8 +81,9 @@ metadata, state, fake behavior, and expectations.
 
 ## Operations
 
-The service is currently started manually and binds to loopback. systemd,
-Tailscale exposure, authentication, polling, queues, cancellation, stall
+The service is currently started manually and binds to loopback. The operator
+may expose the authenticated main listener with Tailscale Serve. Factory does
+not install, configure, start, or stop Tailscale. systemd, cancellation, stall
 detection, and workspace cleanup remain deferred.
 
 ## Eligibility labels

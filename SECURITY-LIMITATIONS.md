@@ -52,11 +52,17 @@ copy authentication files into an isolated home.
 Mitigation: operate Factory as the same trusted user who owns that configuration
 and review integrations before enabling unattended work.
 
-## The current console has no authentication
+## Console access depends on its configured mode
 
-The service accepts commands without authentication. It rejects non-loopback
-bind addresses, so the current release is available only to local processes
-and the local browser.
+Local mode accepts unauthenticated requests on one IP-loopback listener. It
+allows Origin-less CLI requests and same-origin browser requests. Do not proxy
+or forward this listener.
 
-Mitigation: do not add a reverse proxy or remote port forwarding until an
-authenticated transport is implemented.
+Tailscale mode binds its main listener only to `127.0.0.1` and requires the
+configured `Tailscale-User-Login` on requests forwarded by Tailscale Serve. Its
+second listener accepts Origin-less CLI RPC on another loopback port. That
+listener has no identity check and must not be proxied. A process running as
+the same VM user can still call either loopback listener directly.
+
+Mitigation: expose only the Tailscale-mode main port through Tailscale Serve.
+Do not expose the local CLI port, and keep untrusted processes off the VM.

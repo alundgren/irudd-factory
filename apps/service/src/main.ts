@@ -8,6 +8,10 @@ const service = await startFactoryService(
   productionDependencies(config),
 );
 console.log(`Factory service listening at ${service.url}`);
+if (service.localCliUrl) {
+  console.log(`Local CLI RPC listening at ${service.localCliUrl}/rpc`);
+  console.log("Do not proxy the local CLI listener.");
+}
 
 await new Promise<void>((resolve) => {
   const stop = () => resolve();
