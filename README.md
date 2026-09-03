@@ -5,10 +5,10 @@ and records the result in SQLite. It is built for one developer operating a
 dedicated machine and repositories they own. The project was inspired by
 [Symphony](https://github.com/openai/symphony/blob/main/SPEC.md).
 
-The current milestone provides a manual loopback-only service, CLI, and browser
-console. It discovers eligible issues, pins repository policy to the default
-branch commit, claims one issue, creates a retained linked worktree, runs Codex
-through App Server, and verifies the resulting pull request.
+The current implementation provides a manual loopback-only service, CLI, and
+browser console. It discovers eligible issues, pins repository policy to the
+default branch commit, claims one issue, creates a retained linked worktree,
+runs Codex through App Server, and verifies the resulting pull request.
 
 ## Development
 
@@ -79,5 +79,4 @@ and current recovery limits.
 - [Product intent](docs/product-intent.md): product boundaries and operating rules
 - [Architecture](docs/architecture/c4.md): implemented components and dependencies
 - [Stack and conventions](docs/stack.md): runtime, state, provider, and eligibility decisions
-- [Prototypes](docs/prototypes/README.md): provider probe and completed dispatcher slice
 - [Accepted security limitations](SECURITY-LIMITATIONS.md): ambient credentials and filesystem access

@@ -1,1 +1,0 @@
-Change the fixture greeting from "Hello, probe!" to "Hello from the PR probe!" and update its test. Run bun test, commit the change, push the current probe run branch, and open a pull request against the default branch. Use only the existing HTTPS remote and the Git and gh credentials already available in this environment.

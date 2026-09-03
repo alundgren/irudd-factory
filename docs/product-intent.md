@@ -34,6 +34,5 @@ No retries: a failed run is something a human looks at. No tracker other than
 GitHub. No multi-host coordination. The security trades these rules imply are
 recorded in [SECURITY-LIMITATIONS.md](../SECURITY-LIMITATIONS.md).
 
-The approved next product scope is recorded in
-[operator-product.md](decisions/operator-product.md). It replaces the current
-single-repository milestone as the basis for the next implementation epic.
+The approved queue, recovery, console, and access decisions are recorded in
+[operator-product.md](decisions/operator-product.md).

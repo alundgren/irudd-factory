@@ -35,6 +35,10 @@ Turns use `approvalPolicy: "never"`. Nothing pauses for a human, so containment
 rests on the sandbox, the writable roots, and the eligibility rule, not on an
 operator reading a prompt.
 
+The Codex command sandbox permits network access because the agent must push
+its branch and open a pull request. App Server's own provider connection is
+separate from the command sandbox.
+
 Mitigation: every run asserts that no approval was requested, which turns an
 unexpected prompt into a failed run rather than a silent hang.
 
@@ -51,8 +55,8 @@ and review integrations before enabling unattended work.
 ## The current console has no authentication
 
 The service accepts commands without authentication. It rejects non-loopback
-bind addresses, so this milestone is available only to local processes and the
-local browser.
+bind addresses, so the current release is available only to local processes
+and the local browser.
 
 Mitigation: do not add a reverse proxy or remote port forwarding until an
 authenticated transport is implemented.

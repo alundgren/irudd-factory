@@ -1,8 +1,7 @@
 # Agent test rules
 
 Run active tests through the package scripts with `vp run`. The scripts invoke
-Vite+/Vitest with the root test configuration and exclude the isolated
-prototype suites.
+Vite+/Vitest with the root test configuration.
 
 Use the focused component suite while changing a component. Pass Vitest's `-t`
 option to run one test, for example:

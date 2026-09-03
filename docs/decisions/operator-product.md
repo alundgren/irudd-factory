@@ -1,6 +1,6 @@
 # Operator product delivery decision
 
-Status: approved for the next product epic.
+Status: approved.
 
 ## Product outcome
 
@@ -182,13 +182,6 @@ The final human verification uses a second tailnet device and the intended
 login. It checks successful console access, a harmless pause and resume, denial
 for a temporary mismatched login, and a local-mode fixture with no Tailscale
 dependency.
-
-## Repository cleanup
-
-The delivery removes `prototypes/codex-app-server-probe` and
-`docs/prototypes/README.md`. Current findings move into maintained product,
-architecture, security, stack, or operator documentation. Deterministic service
-fixtures remain. Obsolete prototype and completed-milestone wording is removed.
 
 Database records, transcripts, branches, and worktrees are retained
 indefinitely. Archive only changes console visibility.
