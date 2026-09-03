@@ -571,6 +571,40 @@ describe("Factory RPC service", () => {
         Effect.provideService(StateStore, store.service),
       ),
     );
+    const interrupted = definition.state.history?.find(
+      ({ assignment }) => assignment.id === "attempt-history-interrupted",
+    )?.assignment;
+    if (!interrupted?.workspace)
+      throw new Error("History fixture lacks its interrupted workspace");
+    await Effect.runPromise(
+      store.service.appendEvent(interrupted.id, {
+        type: "pull_request.lookup_started",
+        timestamp: "2026-01-13T12:11:00.000Z",
+        detail: {},
+      }),
+    );
+    await Effect.runPromise(
+      store.service.seedAssignment(
+        {
+          ...interrupted,
+          id: "attempt-history-lookup",
+          workspace: {
+            ...interrupted.workspace,
+            branch: "factory/attempt-history-lookup",
+          },
+          createdAt: "2026-01-13T13:00:00.000Z",
+          updatedAt: "2026-01-13T13:10:00.000Z",
+        },
+        [
+          {
+            assignmentId: "attempt-history-lookup",
+            type: "assignment.interrupted",
+            timestamp: "2026-01-13T13:10:00.000Z",
+            detail: { processReconciliation: "exited" },
+          },
+        ],
+      ),
+    );
     store.close();
     let pullRequestLookups = 0;
     const controls = {
@@ -591,9 +625,9 @@ describe("Factory RPC service", () => {
       cursor: first.nextCursor ?? 0,
       watermark: first.watermark,
     });
-    expect([...first.items, ...second.items]).toHaveLength(3);
+    expect([...first.items, ...second.items]).toHaveLength(4);
     expect((await readIssues(rpcUrl)).items).toHaveLength(1);
-    expect((await readTimeline(rpcUrl)).items).toHaveLength(3);
+    expect((await readTimeline(rpcUrl)).items).toHaveLength(4);
     expect((await readUsage(rpcUrl)).items).toHaveLength(1);
     const transcript = await readTranscript(rpcUrl, "attempt-history-failed");
     expect(transcript.items[0]?.truncated).toBe(true);

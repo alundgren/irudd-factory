@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AdmissionInput, Candidate } from "@irudd-factory/application";
@@ -466,6 +467,25 @@ describe("SQLite state store", () => {
       ).map(({ id }) => id),
     ).toEqual(["assignment-1"]);
     await Effect.runPromise(
+      recovered.service.appendEvent("assignment-1", {
+        type: "pull_request.lookup_started",
+        timestamp: "2026-01-01T00:00:01.500Z",
+        detail: {},
+      }),
+    );
+    expect(
+      await Effect.runPromise(
+        recovered.service.pullRequestRecoveryCandidates(),
+      ),
+    ).toEqual([]);
+    expect(
+      (
+        await Effect.runPromise(
+          recovered.service.unfinishedPullRequestLookups(),
+        )
+      ).map(({ id }) => id),
+    ).toEqual(["assignment-1"]);
+    await Effect.runPromise(
       recovered.service.appendEvent(
         "assignment-1",
         {
@@ -489,6 +509,9 @@ describe("SQLite state store", () => {
       await Effect.runPromise(
         recovered.service.pullRequestRecoveryCandidates(),
       ),
+    ).toEqual([]);
+    expect(
+      await Effect.runPromise(recovered.service.unfinishedPullRequestLookups()),
     ).toEqual([]);
     expect(
       (await Effect.runPromise(recovered.service.getAssignment("assignment-1")))
@@ -546,6 +569,73 @@ describe("SQLite state store", () => {
         process.kill(-pid, "SIGKILL");
       } catch {
         // Recovery normally removed the process group already.
+      }
+    }
+  });
+
+  test("does not finish recovery while a descendant remains in the process group", async () => {
+    const path = await databasePath();
+    const leader = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { spawn } from "node:child_process";
+const descendant = spawn(process.execPath, ["--input-type=module", "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+console.log(descendant.pid);
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);`,
+      ],
+      { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const leaderPid = leader.pid;
+    if (!leaderPid || !leader.stdout)
+      throw new Error("Test leader has no PID or stdout");
+    const [chunk] = await once(leader.stdout, "data");
+    const descendantPid = Number(String(chunk).trim());
+    const leaderIdentity = processIdentity(leaderPid);
+    const descendantIdentity = processIdentity(descendantPid);
+    leader.unref();
+    try {
+      const first = openStateStore(path);
+      await Effect.runPromise(
+        first.service.admit(admission("first", "assignment-1", [candidate()])),
+      );
+      await Effect.runPromise(
+        first.service.appendEvent(
+          "assignment-1",
+          {
+            type: "provider.process.started",
+            timestamp: "2026-01-01T00:00:01.000Z",
+            detail: {},
+          },
+          {
+            processGroupId: leaderPid,
+            processStartIdentity: leaderIdentity,
+            processStartPending: false,
+          },
+        ),
+      );
+      first.close();
+
+      const recovered = openStateStore(path, { recover: true });
+      expect(
+        (
+          await Effect.runPromise(
+            recovered.service.getAssignment("assignment-1"),
+          )
+        )?.state,
+      ).toBe("interrupted");
+      expect(isLiveProcessIdentity(leaderPid, leaderIdentity)).toBe(false);
+      expect(isLiveProcessIdentity(descendantPid, descendantIdentity)).toBe(
+        false,
+      );
+      recovered.close();
+    } finally {
+      try {
+        process.kill(-leaderPid, "SIGKILL");
+      } catch {
+        // Recovery normally removed every live member of the process group.
       }
     }
   });

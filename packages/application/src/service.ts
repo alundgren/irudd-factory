@@ -411,10 +411,23 @@ export function makeApplication(options: ApplicationOptions) {
       const state = yield* StateStore;
       const github = yield* GitHub;
       const clock = yield* Clock;
+      const unfinished = yield* state.unfinishedPullRequestLookups();
+      for (const attempt of unfinished) {
+        yield* state.appendEvent(attempt.id, {
+          type: ASSIGNMENT_EVENTS.pullRequestReconciled,
+          timestamp: clock.now(),
+          detail: { evidence: "unknown" },
+        });
+      }
       const candidates = yield* state.pullRequestRecoveryCandidates();
       for (const attempt of candidates) {
         const workspace = attempt.workspace;
         if (!workspace) continue;
+        yield* state.appendEvent(attempt.id, {
+          type: ASSIGNMENT_EVENTS.pullRequestLookupStarted,
+          timestamp: clock.now(),
+          detail: {},
+        });
         let pullRequest = null;
         if (github.lookupPullRequest) {
           const lookup = yield* Effect.either(

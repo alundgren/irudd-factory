@@ -380,7 +380,7 @@ describe("GitHub adapter", () => {
     expect(runner.calls[1]?.args).toContain("cursor=closing-page-2");
   });
 
-  test("leaves ambiguous pull request evidence unknown during recovery", async () => {
+  test("searches all pull request states and leaves historic ambiguity unknown", async () => {
     const closingIssuesReferences = {
       nodes: [
         {
@@ -426,5 +426,8 @@ describe("GitHub adapter", () => {
         lookup!("owner/repository", "factory/assignment-1", 1),
       ),
     ).toBeNull();
+    expect(runner.calls[0]?.args.join(" ")).toContain(
+      "states: [OPEN, CLOSED, MERGED]",
+    );
   });
 });

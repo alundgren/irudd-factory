@@ -195,6 +195,21 @@ const PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: Stri
   }
 }`;
 
+const RECOVERY_PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: String!, $pullCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 50, after: $pullCursor, states: [OPEN, CLOSED, MERGED], headRefName: $branch) {
+      nodes {
+        id number url isDraft headRefName
+        closingIssuesReferences(first: 50) {
+          nodes { number repository { nameWithOwner } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
 const CLOSING_ISSUES_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
   node(id: $id) {
     ... on PullRequest {
@@ -382,6 +397,7 @@ async function matchingPullRequests(
   repository: string,
   branch: string,
   issueNumber: number,
+  includeTerminal = false,
 ): Promise<ReadonlyArray<PullRequest>> {
   const [owner, name] = splitRepository(repository);
   const matches: PullRequest[] = [];
@@ -389,12 +405,16 @@ async function matchingPullRequests(
   do {
     const response = decodeJson(
       PullRequestsResponse,
-      await graphql(runner, PULL_REQUEST_QUERY, {
-        owner,
-        name,
-        branch,
-        ...(pullCursor ? { pullCursor } : {}),
-      }),
+      await graphql(
+        runner,
+        includeTerminal ? RECOVERY_PULL_REQUEST_QUERY : PULL_REQUEST_QUERY,
+        {
+          owner,
+          name,
+          branch,
+          ...(pullCursor ? { pullCursor } : {}),
+        },
+      ),
     );
     for (const pull of response.data.repository.pullRequests.nodes) {
       if (
@@ -618,6 +638,7 @@ function makeService(runner: CommandRunner): GitHubService {
             repository,
             branch,
             issueNumber,
+            true,
           );
           return matches.length === 1 ? matches[0]! : null;
         },

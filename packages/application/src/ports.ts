@@ -118,6 +118,10 @@ export interface StateStoreService {
     ReadonlyArray<Assignment>,
     FactoryError
   >;
+  readonly unfinishedPullRequestLookups: () => Effect.Effect<
+    ReadonlyArray<Assignment>,
+    FactoryError
+  >;
 }
 
 export class StateStore extends Context.Tag(

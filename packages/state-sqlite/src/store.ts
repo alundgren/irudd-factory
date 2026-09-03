@@ -4,6 +4,7 @@ import {
   closeSync,
   mkdirSync,
   openSync,
+  readdirSync,
   realpathSync,
   readFileSync,
   statSync,
@@ -269,12 +270,37 @@ function waitForStoredProcessExit(
   milliseconds: number,
 ): boolean {
   const deadline = Date.now() + milliseconds;
-  while (processStartIdentity(pid) === identity) {
+  while (
+    processStartIdentity(pid) === identity ||
+    processGroupHasLiveMembers(pid)
+  ) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) return false;
     Atomics.wait(recoveryWait, 0, 0, Math.min(RECOVERY_POLL_MS, remaining));
   }
   return true;
+}
+
+function processGroupHasLiveMembers(processGroupId: number): boolean {
+  try {
+    process.kill(-processGroupId, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    return true;
+  }
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (Number(fields[2]) === processGroupId && fields[0] !== "Z") {
+        return true;
+      }
+    } catch {
+      // The process may exit between listing /proc and reading its stat file.
+    }
+  }
+  return false;
 }
 
 function acquireDatabaseLease(path: string): DatabaseLease {
@@ -494,6 +520,8 @@ export function openStateStore(
             ? { pullRequestUrl: shortText(detail.pullRequestUrl) }
             : {}),
         };
+      case ASSIGNMENT_EVENTS.pullRequestLookupStarted:
+        return {};
       case ASSIGNMENT_EVENTS.interrupted:
         return shortText(detail.processReconciliation)
           ? { processReconciliation: shortText(detail.processReconciliation) }
@@ -1333,13 +1361,41 @@ export function openStateStore(
            AND pull_request_json IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM assignment_events
-             WHERE assignment_id = assignments.id AND type = $eventType
+             WHERE assignment_id = assignments.id
+               AND type IN ($startedEventType, $reconciledEventType)
            )
          ORDER BY created_at`,
               )
               .all({
                 state: "interrupted",
-                eventType: ASSIGNMENT_EVENTS.pullRequestReconciled,
+                startedEventType: ASSIGNMENT_EVENTS.pullRequestLookupStarted,
+                reconciledEventType: ASSIGNMENT_EVENTS.pullRequestReconciled,
+              }) as unknown as ReadonlyArray<AssignmentRow>
+          ).map(decodeAssignment),
+        catch: storageError,
+      }),
+    unfinishedPullRequestLookups: () =>
+      Effect.try({
+        try: () =>
+          (
+            database
+              .prepare(
+                `SELECT * FROM assignments
+                 WHERE state = $state
+                   AND EXISTS (
+                     SELECT 1 FROM assignment_events
+                     WHERE assignment_id = assignments.id AND type = $startedEventType
+                   )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM assignment_events
+                     WHERE assignment_id = assignments.id AND type = $reconciledEventType
+                   )
+                 ORDER BY created_at`,
+              )
+              .all({
+                state: "interrupted",
+                startedEventType: ASSIGNMENT_EVENTS.pullRequestLookupStarted,
+                reconciledEventType: ASSIGNMENT_EVENTS.pullRequestReconciled,
               }) as unknown as ReadonlyArray<AssignmentRow>
           ).map(decodeAssignment),
         catch: storageError,

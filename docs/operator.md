@@ -156,9 +156,10 @@ SIGTERM. The command returns its stored pass or failure status after the
 signal.
 
 A signal while the assignment is active cancels the run and returns nonzero.
-The assignment may remain `reserved`, `starting`, or `running` because Factory
-does not recover nonterminal work yet. On every exit after startup, the runner
-stops the application, Codex process group, and HTTP listener.
+The integration command does not restart the service, so its database may keep
+the last active state until the next normal startup records the interruption.
+On every exit after startup, the runner stops the application, Codex process
+group, and HTTP listener.
 
 Files remain under `.factory/integration/<run-id>`. The command does not delete
 the issue, label, branch, pull request, database, clone, worktree, or provider
