@@ -759,7 +759,15 @@ export function makeCodexProvider(
             if (!processExit) {
               rpc.expectProcessExit();
               const remainingMs = Math.max(0, cleanupDeadline - Date.now());
-              processExit = await terminateProcessGroup(child, remainingMs);
+              try {
+                processExit = await terminateProcessGroup(child, remainingMs);
+              } catch {
+                processExit = {
+                  code: null,
+                  signal: null,
+                  cleanupTimedOut: true,
+                };
+              }
             }
             try {
               await Effect.runPromise(

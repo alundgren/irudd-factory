@@ -438,6 +438,49 @@ describe("Codex provider", () => {
     }
   });
 
+  test("reports uncertain ownership when every termination attempt rejects", async () => {
+    const { assignment, workspace } = await fixture();
+    let captured: ManagedProcess | undefined;
+    const patches: Array<string | undefined> = [];
+    const provider = makeCodexProvider({
+      commandPrefix: [process.execPath, fakeServer, "success"],
+      runtimeRoot: join(dirname(workspace.worktreePath), "rejection-runtime"),
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      timeouts: {
+        childStartupMs: 500,
+        initializationMs: 500,
+        modelSchemaMs: 500,
+        turnMs: 500,
+        shutdownMs: 200,
+      },
+      terminateProcessGroup: async (child) => {
+        captured = child;
+        throw new Error("termination failed");
+      },
+    });
+    try {
+      const outcome = await Effect.runPromise(
+        Effect.either(
+          provider.run(
+            { assignment, workspace, prompt: "Implement it." },
+            (event) =>
+              Effect.sync(() => {
+                patches.push(event.patch?.state);
+              }),
+          ),
+        ),
+      );
+      expect(Either.isLeft(outcome)).toBe(true);
+      if (Either.isLeft(outcome)) {
+        expect(outcome.left.detail).toBe("cleanup_timeout");
+      }
+      expect(patches).toContain("ownership_uncertain");
+    } finally {
+      if (captured) await terminateOwnedGroup(captured, 500);
+    }
+  });
+
   test("kills the App Server process group when the run is interrupted mid-turn", async () => {
     const { assignment, workspace } = await fixture("turn-timeout", {
       turnMs: 5_000,
