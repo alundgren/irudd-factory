@@ -17,12 +17,17 @@ Tests never depend on a build artifact. Serve static fixtures the test itself
 writes, so `vp run test` stays independent of `vp run build:console`.
 
 Console changes require a live fixture check. Start one named fixture with
-`vp run fixture <scenario>`, open the printed URL with the available
+`vp run fixture <name>`, open the printed URL with the available
 browser-control tool, and inspect the relevant states at desktop and narrow
 viewports. Automated UI assertions do not replace this check.
 
 Do not use a real GitHub repository, Git worktree, or Codex process in automated
-tests. Use the application-owned deterministic scenarios and adapter fakes.
+tests. Use the catalog under `apps/service/fixtures` and its adapter fakes. Run
+`vp run fixture` to browse names and `vp run fixture <name> --describe` for a
+human-readable description. Agents and scripts must use
+`vp node scripts/fixture.ts --json` for the catalog and
+`vp node scripts/fixture.ts <name> --describe --json` for structured details.
+These direct commands keep stdout parseable by excluding task-runner output.
 
 # Code rules
 

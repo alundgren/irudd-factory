@@ -10,70 +10,71 @@ import {
   GitHub,
   IdGenerator,
   Provider,
-  SCENARIOS,
-  type ScenarioName,
+  StateStore,
   Workspaces,
 } from "@irudd-factory/application";
 import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
-import { Layer } from "effect";
-import { Effect } from "effect";
 import { layerStateStore } from "@irudd-factory/state-sqlite";
-import type { FactoryConfig } from "./config.ts";
-import type { FactoryDependencies } from "./service.ts";
+import { Effect, Layer } from "effect";
+import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryDependencies } from "../src/service.ts";
+import type { FixtureControls, FixtureDefinition } from "./types.ts";
 
-export interface FixtureControls {
-  readonly beforeRunning?: () => Promise<void>;
-  readonly beforeCompletion?: () => Promise<void>;
-  readonly onClaim?: () => void;
-  readonly onWorkspace?: () => void;
-  readonly onProviderRun?: () => void;
-  readonly onProviderInterrupted?: () => void;
-  readonly failAfterObservation?: {
-    readonly model?: string;
-    readonly effort?: string;
-  };
+function replaceAssignmentId(value: string, assignmentId: string): string {
+  return value.replace("{assignmentId}", assignmentId);
+}
+
+export function seedFixture(fixture: FixtureDefinition) {
+  return Effect.gen(function* () {
+    const store = yield* StateStore;
+    yield* store.reset();
+    if (fixture.state.assignment) {
+      yield* store.seedAssignment(
+        fixture.state.assignment,
+        fixture.state.events,
+      );
+    }
+  });
 }
 
 export function fixtureDependencies(
   config: FactoryConfig,
-  scenarioName: ScenarioName,
+  fixture: FixtureDefinition,
   controls: FixtureControls = {},
 ): FactoryDependencies {
-  const scenario = SCENARIOS[scenarioName];
-  const workflow = {
-    startingCommit: "a".repeat(40),
-    blobId: "b".repeat(40),
-    digest: "c".repeat(64),
-    body: "Implement the fixture issue and run its tests.",
-  };
-  const candidates: Candidate[] = scenario.candidates.map((issue) => ({
+  const candidates: Candidate[] = fixture.state.candidates.map((issue) => ({
     issue,
-    workflow,
+    workflow: fixture.behavior.candidateWorkflow,
   }));
   const github: GitHubService = {
     discoverCandidates: () => Effect.succeed(candidates),
     claimIssue: () =>
       Effect.sync(() => {
         controls.onClaim?.();
-        return "confirmed" as const;
+        return fixture.behavior.claimOutcome;
       }),
-    verifyPullRequest: () =>
-      Effect.succeed({
-        url: "https://github.com/factory/fixture/pull/99",
-        number: 99,
-        draft: false,
-      }),
+    verifyPullRequest: () => Effect.succeed(fixture.behavior.pullRequest),
   };
   const workspaces: WorkspaceService = {
     create: ({ assignmentId }) =>
       Effect.sync(() => {
         controls.onWorkspace?.();
+        const workspace = fixture.behavior.workspace;
         return {
-          clonePath: "/fixture/clones/factory--fixture",
-          worktreePath: `/fixture/worktrees/${assignmentId}`,
-          worktreeGitDir: `/fixture/clones/factory--fixture/.git/worktrees/${assignmentId}`,
-          commonGitDir: "/fixture/clones/factory--fixture/.git",
-          branch: `factory/${assignmentId}`,
+          clonePath: replaceAssignmentId(workspace.clonePath, assignmentId),
+          worktreePath: replaceAssignmentId(
+            workspace.worktreePath,
+            assignmentId,
+          ),
+          worktreeGitDir: replaceAssignmentId(
+            workspace.worktreeGitDir,
+            assignmentId,
+          ),
+          commonGitDir: replaceAssignmentId(
+            workspace.commonGitDir,
+            assignmentId,
+          ),
+          branch: replaceAssignmentId(workspace.branch, assignmentId),
         };
       }),
   };
@@ -85,7 +86,7 @@ export function fixtureDependencies(
           const observed = controls.failAfterObservation;
           yield* emit({
             type: ASSIGNMENT_EVENTS.providerSettingsObserved,
-            timestamp: scenario.now,
+            timestamp: fixture.state.now,
             detail: {
               ...(observed.model ? { observedModel: observed.model } : {}),
               ...(observed.effort ? { observedEffort: observed.effort } : {}),
@@ -104,49 +105,28 @@ export function fixtureDependencies(
         }
         yield* controls.beforeRunning
           ? Effect.promise(controls.beforeRunning)
-          : Effect.sleep("300 millis");
+          : Effect.sleep(`${fixture.behavior.provider.runningDelayMs} millis`);
         yield* emit({
           type: ASSIGNMENT_EVENTS.providerThreadStarted,
-          timestamp: scenario.now,
-          detail: { threadId: "thread-runnable" },
+          timestamp: fixture.state.now,
+          detail: { threadId: fixture.behavior.provider.result.threadId },
           patch: {
             state: "running",
-            codexVersion: "codex-cli fixture",
-            threadId: "thread-runnable",
+            codexVersion: fixture.behavior.provider.result.codexVersion,
+            threadId: fixture.behavior.provider.result.threadId,
             observedModel: config.codex.model,
             observedEffort: config.codex.reasoningEffort,
           },
         });
         yield* controls.beforeCompletion
           ? Effect.promise(controls.beforeCompletion)
-          : Effect.sleep("700 millis");
+          : Effect.sleep(
+              `${fixture.behavior.provider.completionDelayMs} millis`,
+            );
         return {
-          codexVersion: "codex-cli fixture",
-          threadId: "thread-runnable",
-          turnId: "turn-runnable",
+          ...fixture.behavior.provider.result,
           observedModel: config.codex.model,
           observedEffort: config.codex.reasoningEffort,
-          finalResponse: "Opened the fixture pull request.",
-          itemSummaries: [{ id: "item-1", type: "agentMessage" }],
-          tokenUsage: {
-            total: {
-              inputTokens: 10,
-              cachedInputTokens: 0,
-              outputTokens: 5,
-              reasoningOutputTokens: 0,
-              totalTokens: 15,
-            },
-            last: {
-              inputTokens: 10,
-              cachedInputTokens: 0,
-              outputTokens: 5,
-              reasoningOutputTokens: 0,
-              totalTokens: 15,
-            },
-            modelContextWindow: null,
-          },
-          approvalCount: 0,
-          processExit: { code: 0, signal: "SIGTERM" },
         };
       }).pipe(
         Effect.onInterrupt(() =>
@@ -159,9 +139,9 @@ export function fixtureDependencies(
     Layer.succeed(GitHub, github),
     Layer.succeed(Workspaces, workspaces),
     Layer.succeed(Provider, provider),
-    Layer.succeed(Clock, { now: () => scenario.now }),
+    Layer.succeed(Clock, { now: () => fixture.state.now }),
     Layer.succeed(IdGenerator, {
-      assignmentId: () => `assignment-${scenarioName}`,
+      assignmentId: () => `assignment-${fixture.name}`,
     }),
   );
 }

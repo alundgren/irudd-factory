@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "start": "node src/main.ts",
-    "fixture": "node src/fixture-main.ts",
+    "fixture": "vp -C ../.. run fixture",
     "test": "vp -C ../.. test apps/service"
   },
   "dependencies": {

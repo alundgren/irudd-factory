@@ -5,24 +5,21 @@ import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  SCENARIOS,
-  seedScenario,
-  StateStore,
-  type ScenarioName,
-} from "@irudd-factory/application";
+import { StateStore } from "@irudd-factory/application";
 import { openStateStore } from "@irudd-factory/state-sqlite";
 import { Effect } from "effect";
 import {
   getFactorySnapshot,
   runNextEligibleIssue,
 } from "../../cli/src/client.ts";
-import { fixtureDependencies } from "../src/fixtures.ts";
+import { fixtureDependencies, seedFixture } from "../fixtures/composition.ts";
+import { getFixture, type FixtureName } from "../fixtures/registry.ts";
 import { startFactoryService } from "../src/service.ts";
 import type { FactoryConfig } from "../src/config.ts";
 
 const roots: string[] = [];
 const stops: Array<() => Promise<void>> = [];
+const fixture = (name: FixtureName) => getFixture(name)!;
 afterEach(async () => {
   await Promise.all(stops.splice(0).map((stop) => stop()));
   await Promise.all(
@@ -99,7 +96,7 @@ describe("Factory RPC service", () => {
     };
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, "empty"),
+      fixtureDependencies(config, fixture("empty")),
     );
     expect(service.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(service.url.endsWith(":0")).toBe(false);
@@ -137,7 +134,10 @@ describe("Factory RPC service", () => {
     };
     try {
       await expect(
-        startFactoryService(config, fixtureDependencies(config, "empty")),
+        startFactoryService(
+          config,
+          fixtureDependencies(config, fixture("empty")),
+        ),
       ).rejects.toThrow("listener failed to start");
     } finally {
       await new Promise<void>((resolveClose, rejectClose) =>
@@ -169,7 +169,7 @@ describe("Factory RPC service", () => {
     const listener = createHttpServer();
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, "empty"),
+      fixtureDependencies(config, fixture("empty")),
       await makeConsoleDist(root),
       listener,
     );
@@ -203,7 +203,7 @@ describe("Factory RPC service", () => {
     const finish = gate();
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, "runnable", {
+      fixtureDependencies(config, fixture("runnable"), {
         beforeRunning: enterRunning.wait,
         beforeCompletion: finish.wait,
       }),
@@ -269,7 +269,7 @@ describe("Factory RPC service", () => {
     const calls = { claim: 0, workspace: 0, provider: 0 };
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, "runnable", {
+      fixtureDependencies(config, fixture("runnable"), {
         beforeRunning: enterRunning.wait,
         beforeCompletion: finish.wait,
         onClaim: () => calls.claim++,
@@ -316,7 +316,7 @@ describe("Factory RPC service", () => {
     };
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, "runnable", {
+      fixtureDependencies(config, fixture("runnable"), {
         failAfterObservation: {
           model: "unexpected-model",
           effort: "high",
@@ -359,7 +359,7 @@ describe("Factory RPC service", () => {
     let interrupted = false;
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, "runnable", {
+      fixtureDependencies(config, fixture("runnable"), {
         beforeRunning: enterRunning.wait,
         beforeCompletion: neverFinishes.wait,
         onProviderInterrupted: () => {
@@ -385,14 +385,12 @@ describe("Factory RPC service", () => {
   });
 
   test("returns every command result through the same RPC", async () => {
-    for (const [scenarioName, expected] of [
+    for (const [fixtureName, expected] of [
       ["empty", "no_candidate"],
       ["ambiguous", "selection_ambiguous"],
       ["busy-reserved", "provider_busy"],
     ] as const) {
-      const root = await mkdtemp(
-        join(tmpdir(), `factory-rpc-${scenarioName}-`),
-      );
+      const root = await mkdtemp(join(tmpdir(), `factory-rpc-${fixtureName}-`));
       roots.push(root);
       const config: FactoryConfig = {
         repository: "factory/fixture",
@@ -411,20 +409,20 @@ describe("Factory RPC service", () => {
       };
       const store = openStateStore(config.databasePath);
       await Effect.runPromise(
-        seedScenario(SCENARIOS[scenarioName as ScenarioName]).pipe(
+        seedFixture(fixture(fixtureName)).pipe(
           Effect.provideService(StateStore, store.service),
         ),
       );
       store.close();
       const service = await startFactoryService(
         config,
-        fixtureDependencies(config, scenarioName as ScenarioName),
+        fixtureDependencies(config, fixture(fixtureName)),
       );
       const rpcUrl = `${service.url}/rpc`;
       await waitForRpc(rpcUrl);
       const receipt = await runNextEligibleIssue(
         rpcUrl,
-        `command-${scenarioName}`,
+        `command-${fixtureName}`,
       );
       expect(receipt.result._tag).toBe(expected);
       if (receipt.result._tag === "selection_ambiguous") {
