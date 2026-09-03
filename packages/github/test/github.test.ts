@@ -91,6 +91,47 @@ describe("GitHub adapter", () => {
     expect(runner.calls.every(({ args }) => Array.isArray(args))).toBe(true);
   });
 
+  test("revalidates the issue and pinned workflow before start", async () => {
+    const runner = new FakeRunner([
+      discovery([issue()]),
+      workflowResponse,
+      ok({ permission: "write" }),
+      discovery([issue()]),
+      workflowResponse,
+      ok({ permission: "write" }),
+    ]);
+    const service = makeGitHubService(runner);
+    const [candidate] = await Effect.runPromise(
+      service.discoverCandidates("owner/repository"),
+    );
+    expect(candidate).toBeDefined();
+    await expect(
+      Effect.runPromise(service.revalidateIssue!(candidate!)),
+    ).resolves.toEqual(candidate);
+  });
+
+  test("rejects a workflow revision that changed after selection", async () => {
+    const runner = new FakeRunner([
+      discovery([issue()]),
+      workflowResponse,
+      ok({ permission: "write" }),
+      discovery([issue()]),
+      ok({
+        sha: "d".repeat(40),
+        encoding: "base64",
+        content: Buffer.from(workflow).toString("base64"),
+      }),
+      ok({ permission: "write" }),
+    ]);
+    const service = makeGitHubService(runner);
+    const [candidate] = await Effect.runPromise(
+      service.discoverCandidates("owner/repository"),
+    );
+    await expect(
+      Effect.runPromise(service.revalidateIssue!(candidate!)),
+    ).rejects.toThrow("changed before start");
+  });
+
   test("rejects forbidden labels, blockers, and non-writers", async () => {
     const runner = new FakeRunner([
       discovery([

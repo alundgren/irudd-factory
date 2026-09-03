@@ -55,12 +55,18 @@ function gate() {
 
 function config(root: string): FactoryConfig {
   return {
-    repository: FIXTURE_REPOSITORY,
+    repositories: [
+      {
+        repository: FIXTURE_REPOSITORY,
+        codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT },
+      },
+    ],
     databasePath: join(root, "factory.db"),
     workspaceRoot: join(root, "workspaces"),
     bindHost: "127.0.0.1",
     port: 0,
-    codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT },
+    codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT, slots: 1 },
+    pollIntervalMs: 30_000,
     timeouts: {
       childStartupMs: 1_000,
       initializationMs: 1_000,

@@ -11,7 +11,9 @@ import { Effect } from "effect";
 import {
   getFactorySnapshot,
   runNextEligibleIssue,
+  startIssue,
 } from "../../cli/src/client.ts";
+import { fixtureIssue } from "../fixtures/factories.ts";
 import { fixtureDependencies, seedFixture } from "../fixtures/composition.ts";
 import { getFixture, type FixtureName } from "../fixtures/registry.ts";
 import { startFactoryService } from "../src/service.ts";
@@ -80,12 +82,18 @@ describe("Factory RPC service", () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-ready-"));
     roots.push(root);
     const config: FactoryConfig = {
-      repository: "factory/fixture",
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
       port: 0,
-      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
       timeouts: {
         childStartupMs: 1_000,
         initializationMs: 1_000,
@@ -118,12 +126,18 @@ describe("Factory RPC service", () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-bind-failure-"));
     roots.push(root);
     const config: FactoryConfig = {
-      repository: "factory/fixture",
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
       port: address.port,
-      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
       timeouts: {
         childStartupMs: 1_000,
         initializationMs: 1_000,
@@ -152,12 +166,18 @@ describe("Factory RPC service", () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-termination-"));
     roots.push(root);
     const config: FactoryConfig = {
-      repository: "factory/fixture",
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
       port: 0,
-      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
       timeouts: {
         childStartupMs: 1_000,
         initializationMs: 1_000,
@@ -185,12 +205,18 @@ describe("Factory RPC service", () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-test-"));
     roots.push(root);
     const config: FactoryConfig = {
-      repository: "factory/fixture",
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
       port: 0,
-      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
       timeouts: {
         childStartupMs: 1_000,
         initializationMs: 1_000,
@@ -250,12 +276,18 @@ describe("Factory RPC service", () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-replay-race-"));
     roots.push(root);
     const config: FactoryConfig = {
-      repository: "factory/fixture",
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
       port: 0,
-      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
       timeouts: {
         childStartupMs: 1_000,
         initializationMs: 1_000,
@@ -300,12 +332,18 @@ describe("Factory RPC service", () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-mismatch-"));
     roots.push(root);
     const config: FactoryConfig = {
-      repository: "factory/fixture",
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
       port: 0,
-      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
       timeouts: {
         childStartupMs: 1_000,
         initializationMs: 1_000,
@@ -340,12 +378,18 @@ describe("Factory RPC service", () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-shutdown-"));
     roots.push(root);
     const config: FactoryConfig = {
-      repository: "factory/fixture",
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
       databasePath: join(root, "factory.db"),
       workspaceRoot: join(root, "workspaces"),
       bindHost: "127.0.0.1",
       port: 0,
-      codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
       timeouts: {
         childStartupMs: 1_000,
         initializationMs: 1_000,
@@ -393,12 +437,18 @@ describe("Factory RPC service", () => {
       const root = await mkdtemp(join(tmpdir(), `factory-rpc-${fixtureName}-`));
       roots.push(root);
       const config: FactoryConfig = {
-        repository: "factory/fixture",
+        repositories: [
+          {
+            repository: "factory/fixture",
+            codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+          },
+        ],
         databasePath: join(root, "factory.db"),
         workspaceRoot: join(root, "workspaces"),
         bindHost: "127.0.0.1",
         port: 0,
-        codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+        pollIntervalMs: 30_000,
         timeouts: {
           childStartupMs: 1_000,
           initializationMs: 1_000,
@@ -433,5 +483,81 @@ describe("Factory RPC service", () => {
       }
       await service.stop();
     }
+  });
+
+  test("starts issues from two repositories with effective Codex settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-pool-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "owner/one",
+          codex: { model: "model-one", reasoningEffort: "medium" },
+        },
+        {
+          repository: "owner/two",
+          codex: { model: "model-two", reasoningEffort: "high" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 30_000,
+      codex: { model: "global-model", reasoningEffort: "low", slots: 2 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const base = fixture("runnable");
+    const poolFixture = {
+      ...base,
+      name: "repository-pool",
+      state: {
+        ...base.state,
+        candidates: [
+          { ...fixtureIssue(11), repository: "owner/one" },
+          { ...fixtureIssue(22), repository: "owner/two" },
+        ],
+      },
+    };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, poolFixture),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+    const receipts = await Promise.all([
+      startIssue(rpcUrl, "start-one", "OWNER/ONE", 11),
+      startIssue(rpcUrl, "start-two", "owner/two", 22),
+    ]);
+    expect(receipts.map(({ result }) => result._tag)).toEqual([
+      "started",
+      "started",
+    ]);
+    const snapshot = await getFactorySnapshot(rpcUrl);
+    expect(
+      snapshot.assignments
+        ?.map((assignment) => ({
+          repository: assignment.issue.repository,
+          model: assignment.requestedModel,
+          effort: assignment.requestedEffort,
+        }))
+        .toSorted((left, right) =>
+          left.repository.localeCompare(right.repository),
+        ),
+    ).toEqual([
+      { repository: "owner/one", model: "model-one", effort: "medium" },
+      { repository: "owner/two", model: "model-two", effort: "high" },
+    ]);
+    expect(snapshot.configuration).toMatchObject({
+      codexSlots: 2,
+      pollIntervalMs: 30_000,
+    });
   });
 });

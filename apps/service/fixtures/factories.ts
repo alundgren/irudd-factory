@@ -55,6 +55,8 @@ export function fixtureAssignment(
     codexVersion: terminal ? "codex-cli 0.147.0" : null,
     threadId: terminal ? "thread-fixture" : null,
     turnId: terminal ? "turn-fixture" : null,
+    processGroupId: null,
+    processStartIdentity: null,
     pullRequest:
       state === "completed"
         ? {

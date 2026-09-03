@@ -2,6 +2,7 @@ export const ASSIGNMENT_EVENTS = {
   reserved: "assignment.reserved",
   completed: "assignment.completed",
   failed: "assignment.failed",
+  interrupted: "assignment.interrupted",
   workspaceCreated: "workspace.created",
   providerStartRequested: "provider.start.requested",
   providerProcessStarted: "provider.process.started",

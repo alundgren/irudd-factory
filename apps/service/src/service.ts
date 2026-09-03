@@ -66,6 +66,11 @@ function handlerLayer(
             Effect.provide(context),
             Effect.mapError((error) => `${error.code}: ${error.message}`),
           ),
+        StartIssue: ({ commandId, repository, issueNumber }) =>
+          application.startIssue(commandId, repository, issueNumber).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
         GetFactorySnapshot: () =>
           application.getSnapshot().pipe(
             Effect.provide(context),
@@ -87,10 +92,14 @@ export async function startFactoryService(
     mkdir(config.workspaceRoot, { recursive: true }),
   ]);
   const application = makeApplication({
-    repository: config.repository,
+    repositories: config.repositories.map((entry) => ({
+      repository: entry.repository,
+      model: entry.codex.model,
+      reasoningEffort: entry.codex.reasoningEffort,
+    })),
     provider: CODEX_PROVIDER,
-    model: config.codex.model,
-    reasoningEffort: config.codex.reasoningEffort,
+    slots: config.codex.slots,
+    pollIntervalMs: config.pollIntervalMs,
   });
   const RpcLive = RpcServer.layer(FactoryRpcs).pipe(
     Layer.provide(handlerLayer(dependencies, application)),

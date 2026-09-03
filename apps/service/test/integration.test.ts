@@ -130,7 +130,7 @@ function successJson(value: unknown): CommandResult {
 
 function validIntegrationConfig() {
   return {
-    codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+    codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
     timeouts: {
       childStartupMs: 1_000,
       initializationMs: 1_000,

@@ -30,5 +30,9 @@ export function stateLabel(state: Assignment["state"]): string {
       return "Completed";
     case "failed":
       return "Failed";
+    case "interrupted":
+      return "Interrupted";
+    case "ownership_uncertain":
+      return "Process ownership uncertain";
   }
 }

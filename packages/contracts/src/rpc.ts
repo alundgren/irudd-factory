@@ -11,6 +11,15 @@ export class FactoryRpcs extends RpcGroup.make(
     success: CommandReceipt,
     error: Schema.String,
   }),
+  Rpc.make("StartIssue", {
+    payload: {
+      commandId: Schema.String,
+      repository: Schema.String,
+      issueNumber: Schema.Number,
+    },
+    success: CommandReceipt,
+    error: Schema.String,
+  }),
   Rpc.make("GetFactorySnapshot", {
     success: FactorySnapshot,
     error: Schema.String,

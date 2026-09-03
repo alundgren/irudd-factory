@@ -1,4 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import type {
   AdmissionInput,
   AssignmentPatch,
@@ -43,6 +54,8 @@ interface AssignmentRow {
   readonly codex_version: string | null;
   readonly thread_id: string | null;
   readonly turn_id: string | null;
+  readonly process_group_id: number | null;
+  readonly process_start_identity: string | null;
   readonly pull_request_json: string | null;
   readonly error_json: string | null;
   readonly created_at: string;
@@ -110,6 +123,8 @@ function decodeAssignment(row: AssignmentRow): Assignment {
     codexVersion: row.codex_version,
     threadId: row.thread_id,
     turnId: row.turn_id,
+    processGroupId: row.process_group_id,
+    processStartIdentity: row.process_start_identity,
     pullRequest: decodeJsonOrNull(PullRequest, row.pull_request_json),
     error: decodeJsonOrNull(NormalizedError, row.error_json),
     createdAt: row.created_at,
@@ -142,12 +157,124 @@ export interface OpenStateStore {
   readonly close: () => void;
 }
 
-export function openStateStore(path: string): OpenStateStore {
-  const database = new DatabaseSync(path, { timeout: 5_000 });
+export interface StateStoreOptions {
+  readonly recover?: boolean;
+}
+
+interface DatabaseLease {
+  readonly release: () => void;
+}
+
+function canonicalDatabasePath(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return join(realpathSync(dirname(absolute)), basename(absolute));
+  }
+}
+
+function processStartIdentity(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const startTime = fields[19];
+    return startTime ? `${pid}:${startTime}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function acquireDatabaseLease(path: string): DatabaseLease {
+  const lockPath = `${path}.lock`;
+  const identity =
+    processStartIdentity(process.pid) ?? `${process.pid}:unknown`;
+  const token = JSON.stringify({ pid: process.pid, identity });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const descriptor = openSync(lockPath, "wx", 0o600);
+      try {
+        writeFileSync(descriptor, token, "utf8");
+      } finally {
+        closeSync(descriptor);
+      }
+      return {
+        release: () => {
+          try {
+            if (readFileSync(lockPath, "utf8") === token) unlinkSync(lockPath);
+          } catch {
+            // A missing or replaced lock no longer belongs to this process.
+          }
+        },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        const existing = JSON.parse(readFileSync(lockPath, "utf8")) as {
+          readonly pid?: unknown;
+          readonly identity?: unknown;
+        };
+        if (
+          typeof existing.pid === "number" &&
+          typeof existing.identity === "string" &&
+          processStartIdentity(existing.pid) === existing.identity
+        ) {
+          throw new FactoryError({
+            code: "database_in_use",
+            message: `Another Factory service owns ${path}`,
+          });
+        }
+        unlinkSync(lockPath);
+      } catch (readError) {
+        if (readError instanceof FactoryError) throw readError;
+        try {
+          if (Date.now() - statSync(lockPath).mtimeMs < 5_000) {
+            throw new FactoryError({
+              code: "database_in_use",
+              message: `Another Factory service is acquiring ${path}`,
+            });
+          }
+        } catch (statError) {
+          if (statError instanceof FactoryError) throw statError;
+        }
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // Another contender may already have replaced the stale lock.
+        }
+      }
+    }
+  }
+  throw new FactoryError({
+    code: "database_in_use",
+    message: `Could not acquire the lifetime lease for ${path}`,
+  });
+}
+
+export function openStateStore(
+  path: string,
+  options: StateStoreOptions = {},
+): OpenStateStore {
+  mkdirSync(dirname(resolve(path)), { recursive: true });
+  const databasePath = canonicalDatabasePath(path);
+  const lease = acquireDatabaseLease(databasePath);
+  let database: DatabaseSync;
+  try {
+    database = new DatabaseSync(databasePath, { timeout: 5_000 });
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA busy_timeout = 5000");
-  migrate(database);
+  try {
+    migrate(database);
+  } catch (error) {
+    database.close();
+    lease.release();
+    throw error;
+  }
 
   const receiptQuery = database.prepare(
     "SELECT command_id, result_json, created_at FROM command_receipts WHERE command_id = $commandId",
@@ -187,14 +314,16 @@ export function openStateStore(path: string): OpenStateStore {
           issue_url, issue_title, state, starting_commit, workflow_blob_id,
           workflow_digest, workflow_body, workspace_json, requested_model,
           requested_effort, observed_model, observed_effort, codex_version,
-          thread_id, turn_id, pull_request_json, error_json, created_at,
+          thread_id, turn_id, process_group_id, process_start_identity,
+          pull_request_json, error_json, created_at,
           updated_at, last_event_sequence
         ) VALUES (
           $id, $provider, $issueNodeId, $issueRepository, $issueNumber,
           $issueUrl, $issueTitle, $state, $startingCommit, $workflowBlobId,
           $workflowDigest, $workflowBody, $workspaceJson, $requestedModel,
           $requestedEffort, $observedModel, $observedEffort, $codexVersion,
-          $threadId, $turnId, $pullRequestJson, $errorJson, $createdAt,
+          $threadId, $turnId, $processGroupId, $processStartIdentity,
+          $pullRequestJson, $errorJson, $createdAt,
           $updatedAt, $lastEventSequence
         )`,
       )
@@ -219,6 +348,8 @@ export function openStateStore(path: string): OpenStateStore {
         codexVersion: value.codexVersion,
         threadId: value.threadId,
         turnId: value.turnId,
+        processGroupId: value.processGroupId ?? null,
+        processStartIdentity: value.processStartIdentity ?? null,
         pullRequestJson: value.pullRequest
           ? JSON.stringify(value.pullRequest)
           : null,
@@ -262,15 +393,18 @@ export function openStateStore(path: string): OpenStateStore {
       const existing = getReceiptSync(input.commandId);
       if (existing) return { receipt: existing, created: false };
 
-      const activeRow = database
+      const activeRows = database
         .prepare(
           `SELECT * FROM assignments
              WHERE provider = $provider
                AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
-             LIMIT 1`,
+             ORDER BY rowid`,
         )
-        .get({ provider: input.provider }) as AssignmentRow | undefined;
-      if (activeRow) {
+        .all({
+          provider: input.provider,
+        }) as unknown as ReadonlyArray<AssignmentRow>;
+      if (activeRows.length >= (input.slots ?? 1)) {
+        const activeRow = activeRows[0]!;
         return {
           receipt: insertReceipt(
             input.commandId,
@@ -285,7 +419,11 @@ export function openStateStore(path: string): OpenStateStore {
       }
 
       const seenIssueQuery = database.prepare(
-        "SELECT 1 AS present FROM assignments WHERE issue_node_id = $issueNodeId LIMIT 1",
+        input.allowRetry
+          ? `SELECT 1 AS present FROM assignments
+             WHERE issue_node_id = $issueNodeId
+               AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)}) LIMIT 1`
+          : "SELECT 1 AS present FROM assignments WHERE issue_node_id = $issueNodeId LIMIT 1",
       );
       const unseen = input.candidates.filter(
         (candidate) =>
@@ -336,6 +474,8 @@ export function openStateStore(path: string): OpenStateStore {
         codexVersion: null,
         threadId: null,
         turnId: null,
+        processGroupId: null,
+        processStartIdentity: null,
         pullRequest: null,
         error: null,
         createdAt: input.timestamp,
@@ -399,6 +539,8 @@ export function openStateStore(path: string): OpenStateStore {
                codex_version = $codexVersion,
                thread_id = $threadId,
                turn_id = $turnId,
+               process_group_id = $processGroupId,
+               process_start_identity = $processStartIdentity,
                pull_request_json = $pullRequestJson,
                error_json = $errorJson,
                updated_at = $updatedAt,
@@ -413,6 +555,8 @@ export function openStateStore(path: string): OpenStateStore {
           codexVersion: next.codexVersion,
           threadId: next.threadId,
           turnId: next.turnId,
+          processGroupId: next.processGroupId ?? null,
+          processStartIdentity: next.processStartIdentity ?? null,
           pullRequestJson: next.pullRequest
             ? JSON.stringify(next.pullRequest)
             : null,
@@ -423,6 +567,75 @@ export function openStateStore(path: string): OpenStateStore {
         });
       return { ...next, lastEventSequence: sequence };
     });
+  }
+
+  function reconcileStoredProcess(identity: {
+    readonly processGroupId: number;
+    readonly processStartIdentity: string;
+  }): "exited" | "terminated" | "uncertain" {
+    const current = processStartIdentity(identity.processGroupId);
+    if (current === null || current !== identity.processStartIdentity) {
+      return "exited";
+    }
+    try {
+      process.kill(-identity.processGroupId, "SIGTERM");
+      if (
+        processStartIdentity(identity.processGroupId) ===
+        identity.processStartIdentity
+      ) {
+        process.kill(-identity.processGroupId, "SIGKILL");
+      }
+      return "terminated";
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ESRCH"
+        ? "exited"
+        : "uncertain";
+    }
+  }
+
+  function interruptUnfinishedSync(
+    timestamp: string,
+    reconcileProcess: (identity: {
+      readonly processGroupId: number;
+      readonly processStartIdentity: string;
+    }) => "exited" | "terminated" | "uncertain",
+  ): void {
+    const rows = database
+      .prepare(
+        `SELECT * FROM assignments
+         WHERE state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
+         ORDER BY rowid`,
+      )
+      .all() as unknown as ReadonlyArray<AssignmentRow>;
+    for (const row of rows) {
+      const assignment = decodeAssignment(row);
+      const outcome =
+        assignment.processGroupId != null &&
+        assignment.processStartIdentity != null
+          ? reconcileProcess({
+              processGroupId: assignment.processGroupId,
+              processStartIdentity: assignment.processStartIdentity,
+            })
+          : "exited";
+      const uncertain = outcome === "uncertain";
+      appendEventSync(
+        assignment.id,
+        {
+          type: ASSIGNMENT_EVENTS.interrupted,
+          timestamp,
+          detail: { processReconciliation: outcome },
+        },
+        {
+          state: uncertain ? "ownership_uncertain" : "interrupted",
+          error: {
+            code: uncertain ? "process_identity_changed" : "service_shutdown",
+            message: uncertain
+              ? "Provider process ownership could not be confirmed"
+              : "Factory interrupted this attempt during startup recovery",
+          },
+        },
+      );
+    }
   }
 
   const service: StateStoreService = {
@@ -459,6 +672,11 @@ export function openStateStore(path: string): OpenStateStore {
           const assignmentRow = database
             .prepare("SELECT * FROM assignments ORDER BY rowid DESC LIMIT 1")
             .get() as AssignmentRow | undefined;
+          const assignments = (
+            database
+              .prepare("SELECT * FROM assignments ORDER BY rowid")
+              .all() as unknown as ReadonlyArray<AssignmentRow>
+          ).map(decodeAssignment);
           const current = assignmentRow
             ? decodeAssignment(assignmentRow)
             : null;
@@ -476,6 +694,7 @@ export function openStateStore(path: string): OpenStateStore {
           return {
             receipt: receiptRow ? decodeReceipt(receiptRow) : null,
             assignment: current,
+            assignments,
             events,
           };
         },
@@ -493,6 +712,11 @@ export function openStateStore(path: string): OpenStateStore {
             );
           });
         },
+        catch: storageError,
+      }),
+    interruptUnfinished: (timestamp, reconcileProcess) =>
+      Effect.try({
+        try: () => interruptUnfinishedSync(timestamp, reconcileProcess),
         catch: storageError,
       }),
     seedAssignment: (assignment, events) =>
@@ -516,7 +740,24 @@ export function openStateStore(path: string): OpenStateStore {
       }),
   };
 
-  return { database, service, close: () => database.close() };
+  try {
+    if (options.recover) {
+      interruptUnfinishedSync(new Date().toISOString(), reconcileStoredProcess);
+    }
+  } catch (error) {
+    database.close();
+    lease.release();
+    throw error;
+  }
+
+  return {
+    database,
+    service,
+    close: () => {
+      database.close();
+      lease.release();
+    },
+  };
 }
 
 function immediateTransaction<A>(
@@ -534,11 +775,14 @@ function immediateTransaction<A>(
   }
 }
 
-export const layerStateStore = (path: string) =>
+export const layerStateStore = (
+  path: string,
+  options: StateStoreOptions = { recover: true },
+) =>
   Layer.scoped(
     StateStore,
     Effect.acquireRelease(
-      Effect.sync(() => openStateStore(path)),
+      Effect.sync(() => openStateStore(path, options)),
       ({ close }) => Effect.sync(close),
     ).pipe(Effect.map(({ service }) => service)),
   );

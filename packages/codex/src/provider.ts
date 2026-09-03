@@ -12,6 +12,7 @@ import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
 import {
   runManagedCommand,
+  getProcessStartIdentity,
   spawnManaged,
   terminateOwnedGroup,
   type ManagedProcess,
@@ -245,6 +246,8 @@ export function makeCodexProvider(
     run: (input, emit) =>
       Effect.tryPromise({
         try: async (signal): Promise<ProviderRunResult> => {
+          const model = input.assignment.requestedModel;
+          const reasoningEffort = input.assignment.requestedEffort;
           const runtime = resolve(options.runtimeRoot, input.assignment.id);
           const schemaRoot = join(runtime, "schema");
           await mkdir(schemaRoot, { recursive: true });
@@ -290,6 +293,7 @@ export function makeCodexProvider(
             [...prefix, "app-server", "--stdio", "--strict-config"],
             input.workspace.worktreePath,
           );
+          const processStartIdentity = getProcessStartIdentity(child.pid);
           let threadId: string | null = null;
           let turnId: string | null = null;
           let approvalCount = 0;
@@ -447,8 +451,16 @@ export function makeCodexProvider(
                 emit({
                   type: ASSIGNMENT_EVENTS.providerProcessStarted,
                   timestamp: new Date().toISOString(),
-                  detail: { pid: child.pid, schemaDigest },
-                  patch: { codexVersion },
+                  detail: {
+                    pid: child.pid,
+                    processStartIdentity,
+                    schemaDigest,
+                  },
+                  patch: {
+                    codexVersion,
+                    processGroupId: child.pid,
+                    processStartIdentity,
+                  },
                 }),
               ),
             );
@@ -492,25 +504,23 @@ export function makeCodexProvider(
               }
               throw error;
             }
-            if (
-              !supportsModel(models, options.model, options.reasoningEffort)
-            ) {
+            if (!supportsModel(models, model, reasoningEffort)) {
               throw new FactoryError({
                 code: "model_or_effort_unavailable",
-                message: `${options.model} with ${options.reasoningEffort} effort is unavailable`,
+                message: `${model} with ${reasoningEffort} effort is unavailable`,
               });
             }
             const thread = await raceTerminal(() =>
               rpc.request(
                 APP_SERVER_METHODS.threadStart,
                 {
-                  model: options.model,
+                  model: model,
                   cwd: input.workspace.worktreePath,
                   approvalPolicy: "never",
                   sandbox: "workspace-write",
                   serviceName: APP_SERVER_CLIENT_NAME,
                   config: {
-                    [REASONING_EFFORT_CONFIG_KEY]: options.reasoningEffort,
+                    [REASONING_EFFORT_CONFIG_KEY]: reasoningEffort,
                     [APPS_CONFIG_KEY]: {
                       [APPS_DEFAULT_KEY]: { enabled: false },
                     },
@@ -550,19 +560,16 @@ export function makeCodexProvider(
                 }),
               ),
             );
-            if (observedModel !== options.model) {
+            if (observedModel !== model) {
               throw new FactoryError({
                 code: "observed_model_mismatch",
-                message: `Requested ${options.model}, observed ${observedModel ?? "none"}`,
+                message: `Requested ${model}, observed ${observedModel ?? "none"}`,
               });
             }
-            if (
-              observedEffort !== null &&
-              observedEffort !== options.reasoningEffort
-            ) {
+            if (observedEffort !== null && observedEffort !== reasoningEffort) {
               throw new FactoryError({
                 code: "observed_effort_mismatch",
-                message: `Requested ${options.reasoningEffort}, observed ${observedEffort}`,
+                message: `Requested ${reasoningEffort}, observed ${observedEffort}`,
               });
             }
             await guardTerminal(() =>
@@ -610,8 +617,8 @@ export function makeCodexProvider(
                     excludeSlashTmp: true,
                     excludeTmpdirEnvVar: true,
                   },
-                  model: options.model,
-                  effort: options.reasoningEffort,
+                  model: model,
+                  effort: reasoningEffort,
                 },
                 options.timeouts.initializationMs,
                 "initialization_timeout",
@@ -667,10 +674,10 @@ export function makeCodexProvider(
                 }),
               ),
             );
-            if (observedModel !== options.model) {
+            if (observedModel !== model) {
               throw new FactoryError({
                 code: "observed_model_mismatch",
-                message: `Requested ${options.model}, observed ${observedModel ?? "none"}`,
+                message: `Requested ${model}, observed ${observedModel ?? "none"}`,
               });
             }
             if (observedEffort === null) {
@@ -679,10 +686,10 @@ export function makeCodexProvider(
                 message: "Codex did not report the observed reasoning effort",
               });
             }
-            if (observedEffort !== options.reasoningEffort) {
+            if (observedEffort !== reasoningEffort) {
               throw new FactoryError({
                 code: "observed_effort_mismatch",
-                message: `Requested ${options.reasoningEffort}, observed ${observedEffort}`,
+                message: `Requested ${reasoningEffort}, observed ${observedEffort}`,
               });
             }
             if (!tokenUsage) {

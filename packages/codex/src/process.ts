@@ -3,6 +3,7 @@ import {
   type FactoryErrorCode,
 } from "@irudd-factory/application";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
 export interface ManagedProcess {
@@ -16,6 +17,22 @@ export interface ProcessExit {
   readonly code: number | null;
   readonly signal: "SIGTERM" | "SIGKILL" | null;
   readonly cleanupTimedOut: boolean;
+}
+
+export function getProcessStartIdentity(pid: number): string {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const startTime = fields[19];
+    if (!startTime) throw new Error("missing start time");
+    return `${pid}:${startTime}`;
+  } catch (error) {
+    throw new FactoryError({
+      code: "process_identity_changed",
+      message: `Could not read the start identity for process ${pid}`,
+      detail: String(error),
+    });
+  }
 }
 
 export function spawnManaged(

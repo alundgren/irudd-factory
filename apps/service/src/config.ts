@@ -12,6 +12,12 @@ export const CONFIG_FILE_NAME = "factory.json";
 export const CONFIG_FLAG = "--config";
 
 export const DEFAULT_PORT = 4317;
+export const DEFAULT_CODEX_SLOTS = 1;
+export const MIN_CODEX_SLOTS = 1;
+export const MAX_CODEX_SLOTS = 32;
+export const DEFAULT_POLL_INTERVAL_MS = 30_000;
+export const MIN_POLL_INTERVAL_MS = 1_000;
+export const MAX_POLL_INTERVAL_MS = 3_600_000;
 export const DEFAULT_PROVIDER_TIMEOUTS: ProviderTimeouts = Object.freeze({
   childStartupMs: 10_000,
   initializationMs: 10_000,
@@ -23,6 +29,17 @@ export const DEFAULT_PROVIDER_TIMEOUTS: ProviderTimeouts = Object.freeze({
 const RawCodex = Schema.Struct({
   model: Schema.String,
   reasoningEffort: Schema.String,
+  slots: Schema.optional(Schema.Number),
+});
+
+const RawRepository = Schema.Struct({
+  repository: Schema.String,
+  codex: Schema.optional(
+    Schema.Struct({
+      model: Schema.optional(Schema.String),
+      reasoningEffort: Schema.optional(Schema.String),
+    }),
+  ),
 });
 
 const RawTimeouts = Schema.Struct({
@@ -34,11 +51,12 @@ const RawTimeouts = Schema.Struct({
 });
 
 const RawConfig = Schema.Struct({
-  repository: Schema.String,
+  repositories: Schema.Array(RawRepository),
   databasePath: Schema.String,
   workspaceRoot: Schema.String,
   bindHost: Schema.String,
   port: Schema.optional(Schema.Number),
+  pollIntervalMs: Schema.optional(Schema.Number),
   codex: RawCodex,
   timeouts: Schema.optional(RawTimeouts),
 });
@@ -49,20 +67,32 @@ const RawIntegrationConfig = Schema.Struct({
 });
 
 export interface FactoryConfig {
-  readonly repository: string;
+  readonly repositories: ReadonlyArray<{
+    readonly repository: string;
+    readonly codex: {
+      readonly model: string;
+      readonly reasoningEffort: string;
+    };
+  }>;
   readonly databasePath: string;
   readonly workspaceRoot: string;
   readonly bindHost: string;
   readonly port: number;
+  readonly pollIntervalMs: number;
   readonly codex: {
     readonly model: string;
     readonly reasoningEffort: string;
+    readonly slots: number;
   };
   readonly timeouts: ProviderTimeouts;
 }
 
 export interface IntegrationConfig {
-  readonly codex: FactoryConfig["codex"];
+  readonly codex: {
+    readonly model: string;
+    readonly reasoningEffort: string;
+    readonly slots: number;
+  };
   readonly timeouts: ProviderTimeouts;
 }
 
@@ -74,13 +104,31 @@ function invalidStructure(error: unknown): FactoryError {
   });
 }
 
-function validateCodex(codex: IntegrationConfig["codex"]): void {
+function validateCodex(codex: {
+  readonly model: string;
+  readonly reasoningEffort: string;
+}): void {
   if (!codex.model.trim() || !codex.reasoningEffort.trim()) {
     throw new FactoryError({
       code: "config_invalid",
       message: "Codex model and reasoning effort must be explicit",
     });
   }
+}
+
+function boundedInteger(
+  value: number,
+  name: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new FactoryError({
+      code: "config_invalid",
+      message: `${name} must be an integer from ${minimum} through ${maximum}`,
+    });
+  }
+  return value;
 }
 
 function resolveTimeouts(
@@ -134,19 +182,58 @@ export function validateConfig(
       message: "port must be an integer from 1 through 65535",
     });
   }
-  if (!REPOSITORY_NAME_PATTERN.test(raw.repository)) {
+  validateCodex(raw.codex);
+  if (raw.repositories.length === 0) {
     throw new FactoryError({
       code: "config_invalid",
-      message: "repository must use owner/name form",
+      message: "repositories must contain at least one repository",
     });
   }
-  validateCodex(raw.codex);
+  const seen = new Set<string>();
+  const repositories = raw.repositories.map((entry) => {
+    if (!REPOSITORY_NAME_PATTERN.test(entry.repository)) {
+      throw new FactoryError({
+        code: "config_invalid",
+        message: "repository must use owner/name form",
+      });
+    }
+    const repository = entry.repository.toLowerCase();
+    if (seen.has(repository)) {
+      throw new FactoryError({
+        code: "config_invalid",
+        message: `repositories contains duplicate ${repository}`,
+      });
+    }
+    seen.add(repository);
+    const effective = {
+      model: entry.codex?.model ?? raw.codex.model,
+      reasoningEffort:
+        entry.codex?.reasoningEffort ?? raw.codex.reasoningEffort,
+    };
+    validateCodex(effective);
+    return { repository, codex: effective };
+  });
+  const slots = boundedInteger(
+    raw.codex.slots ?? DEFAULT_CODEX_SLOTS,
+    "codex.slots",
+    MIN_CODEX_SLOTS,
+    MAX_CODEX_SLOTS,
+  );
+  const pollIntervalMs = boundedInteger(
+    raw.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+    "pollIntervalMs",
+    MIN_POLL_INTERVAL_MS,
+    MAX_POLL_INTERVAL_MS,
+  );
   return {
-    ...raw,
-    port,
-    timeouts: resolveTimeouts(raw.timeouts),
+    repositories,
     databasePath: resolve(configDirectory, raw.databasePath),
     workspaceRoot: resolve(configDirectory, raw.workspaceRoot),
+    bindHost: raw.bindHost,
+    port,
+    pollIntervalMs,
+    codex: { ...raw.codex, slots },
+    timeouts: resolveTimeouts(raw.timeouts),
   };
 }
 
@@ -158,7 +245,20 @@ export function validateIntegrationConfig(source: unknown): IntegrationConfig {
     throw invalidStructure(error);
   }
   validateCodex(raw.codex);
-  return { codex: raw.codex, timeouts: resolveTimeouts(raw.timeouts) };
+  const slots = boundedInteger(
+    raw.codex.slots ?? DEFAULT_CODEX_SLOTS,
+    "codex.slots",
+    MIN_CODEX_SLOTS,
+    MAX_CODEX_SLOTS,
+  );
+  return {
+    codex: {
+      model: raw.codex.model,
+      reasoningEffort: raw.codex.reasoningEffort,
+      slots,
+    },
+    timeouts: resolveTimeouts(raw.timeouts),
+  };
 }
 
 export async function loadConfig(path = resolve(CONFIG_FILE_NAME)) {

@@ -28,12 +28,18 @@ export async function launchFixture(
     await rm(path, { force: true });
   }
   const config: FactoryConfig = {
-    repository: FIXTURE_REPOSITORY,
+    repositories: [
+      {
+        repository: FIXTURE_REPOSITORY,
+        codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT },
+      },
+    ],
     databasePath,
     workspaceRoot: resolve(root, "workspaces"),
     bindHost: "127.0.0.1",
     port: Number(environment.FACTORY_FIXTURE_PORT ?? "4317"),
-    codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT },
+    codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT, slots: 1 },
+    pollIntervalMs: 30_000,
     timeouts: {
       childStartupMs: 1_000,
       initializationMs: 1_000,
