@@ -71,7 +71,9 @@ export class AppServerRpc {
   private nextId = 1;
   private readonly pending = new Map<number | string, Pending>();
   private readonly waiters = new Set<Waiter>();
-  private readonly listeners = new Set<(message: RpcMessage) => void>();
+  private readonly listeners = new Set<
+    (message: RpcMessage) => void | Promise<void>
+  >();
   private failure: FactoryError | null = null;
   private processExitExpected = false;
   private outputDrained: Promise<void> = Promise.resolve();
@@ -120,7 +122,9 @@ export class AppServerRpc {
     return this.outputDrained;
   }
 
-  onMessage(listener: (message: RpcMessage) => void): () => void {
+  onMessage(
+    listener: (message: RpcMessage) => void | Promise<void>,
+  ): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
@@ -223,11 +227,11 @@ export class AppServerRpc {
         while (newline >= 0) {
           const line = buffered.slice(0, newline).trim();
           buffered = buffered.slice(newline + 1);
-          if (line) this.handleLine(line);
+          if (line) await this.handleLine(line);
           newline = buffered.indexOf("\n");
         }
       }
-      if (buffered.trim()) this.handleLine(buffered.trim());
+      if (buffered.trim()) await this.handleLine(buffered.trim());
     } catch (error) {
       this.fail(
         error instanceof FactoryError
@@ -240,7 +244,7 @@ export class AppServerRpc {
     }
   }
 
-  private handleLine(line: string): void {
+  private async handleLine(line: string): Promise<void> {
     let message: RpcMessage;
     try {
       message = JSON.parse(line) as RpcMessage;
@@ -270,8 +274,8 @@ export class AppServerRpc {
       }
       return;
     }
-    for (const listener of this.listeners) listener(message);
-    for (const waiter of [...this.waiters]) {
+    for (const listener of this.listeners) await listener(message);
+    for (const waiter of this.waiters) {
       if (!waiter.predicate(message)) continue;
       clearTimeout(waiter.timer);
       this.waiters.delete(waiter);

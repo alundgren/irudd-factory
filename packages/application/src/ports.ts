@@ -198,6 +198,9 @@ export interface ProviderService {
       readonly workspace: WorkspacePaths;
     },
     emit: (event: ProviderEvent) => Effect.Effect<void, FactoryError>,
+    retain?: (
+      records: ReadonlyArray<RetainedProviderRecord>,
+    ) => Effect.Effect<void, FactoryError>,
   ) => Effect.Effect<ProviderRunResult, FactoryError>;
 }
 

@@ -67,6 +67,16 @@ function processIdentity(pid: number): string {
   return `${pid}:${startTime}`;
 }
 
+function isLiveProcessIdentity(pid: number, identity: string): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[0] !== "Z" && `${pid}:${fields[19]}` === identity;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
@@ -500,6 +510,7 @@ describe("SQLite state store", () => {
     const pid = child.pid;
     if (!pid) throw new Error("Test child has no PID");
     child.unref();
+    const identity = processIdentity(pid);
     try {
       const first = openStateStore(path);
       await Effect.runPromise(
@@ -515,7 +526,7 @@ describe("SQLite state store", () => {
           },
           {
             processGroupId: pid,
-            processStartIdentity: processIdentity(pid),
+            processStartIdentity: identity,
             processStartPending: false,
           },
         ),
@@ -527,6 +538,7 @@ describe("SQLite state store", () => {
         recovered.service.getAssignment("assignment-1"),
       );
       expect(assignment?.state).toBe("interrupted");
+      expect(isLiveProcessIdentity(pid, identity)).toBe(false);
       recovered.close();
       await waitForProcessExit(pid);
     } finally {

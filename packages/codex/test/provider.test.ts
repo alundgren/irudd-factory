@@ -156,6 +156,28 @@ describe("Codex provider", () => {
     expect(result.records?.some(({ kind }) => kind === "usage")).toBe(false);
   });
 
+  test("persists observed records before a running turn is interrupted", async () => {
+    const { provider, assignment, workspace } = await fixture(
+      "retention-pause",
+      { turnMs: 5_000 },
+    );
+    const retained: string[] = [];
+    const fiber = Effect.runFork(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        () => Effect.void,
+        (records) =>
+          Effect.sync(() => retained.push(...records.map(({ kind }) => kind))),
+      ),
+    );
+    const deadline = Date.now() + 2_000;
+    while (!retained.includes("usage") && Date.now() < deadline) {
+      await delay(10);
+    }
+    expect(retained).toEqual(["item", "item", "transcript", "usage"]);
+    await Effect.runPromise(Fiber.interrupt(fiber));
+  });
+
   test("ignores everything a subagent thread reports", async () => {
     const { provider, assignment, workspace } = await fixture("subagent-noise");
     const result = await Effect.runPromise(

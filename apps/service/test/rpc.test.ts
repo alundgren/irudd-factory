@@ -422,6 +422,34 @@ describe("Factory RPC service", () => {
         onProviderInterrupted: () => {
           interrupted = true;
         },
+        providerRecordsBeforeCompletion: [
+          {
+            kind: "transcript",
+            timestamp: "2026-01-15T12:00:01.000Z",
+            text: "Durable text observed before interruption.",
+          },
+          {
+            kind: "usage",
+            timestamp: "2026-01-15T12:00:02.000Z",
+            usage: {
+              total: {
+                inputTokens: 10,
+                cachedInputTokens: 1,
+                outputTokens: 5,
+                reasoningOutputTokens: 2,
+                totalTokens: 15,
+              },
+              last: {
+                inputTokens: 10,
+                cachedInputTokens: 1,
+                outputTokens: 5,
+                reasoningOutputTokens: 2,
+                totalTokens: 15,
+              },
+              modelContextWindow: null,
+            },
+          },
+        ],
       }),
     );
     const rpcUrl = `${service.url}/rpc`;
@@ -439,6 +467,16 @@ describe("Factory RPC service", () => {
       }),
     ]);
     expect(interrupted).toBe(true);
+    const retained = openStateStore(config.databasePath);
+    const transcript = await Effect.runPromise(
+      retained.service.readTranscript("assignment-runnable-1", {}),
+    );
+    const usage = await Effect.runPromise(retained.service.readUsage({}));
+    expect(transcript.items[0]?.text).toBe(
+      "Durable text observed before interruption.",
+    );
+    expect(usage.items[0]?.total.totalTokens).toBe(15);
+    retained.close();
   });
 
   test("returns every command result through the same RPC", async () => {
@@ -534,9 +572,15 @@ describe("Factory RPC service", () => {
       ),
     );
     store.close();
+    let pullRequestLookups = 0;
+    const controls = {
+      onPullRequestLookup: () => {
+        pullRequestLookups += 1;
+      },
+    };
     const service = await startFactoryService(
       config,
-      fixtureDependencies(config, definition),
+      fixtureDependencies(config, definition, controls),
     );
     const rpcUrl = `${service.url}/rpc`;
     await waitForRpc(rpcUrl);
@@ -557,7 +601,15 @@ describe("Factory RPC service", () => {
     expect(
       (await readEvents(rpcUrl, "attempt-history-failed")).items.length,
     ).toBeGreaterThan(1);
+    expect(pullRequestLookups).toBe(1);
     await service.stop();
+    const restarted = await startFactoryService(
+      config,
+      fixtureDependencies(config, definition, controls),
+    );
+    await waitForRpc(`${restarted.url}/rpc`);
+    expect(pullRequestLookups).toBe(1);
+    await restarted.stop();
   });
 
   test("starts issues from two repositories with effective Codex settings", async () => {

@@ -82,7 +82,9 @@ async function listFiles(root: string, current = root): Promise<string[]> {
   const nested = await Promise.all(
     entries.map((entry) => {
       const path = join(current, entry.name);
-      return entry.isDirectory() ? listFiles(root, path) : [path];
+      return entry.isDirectory()
+        ? listFiles(root, path)
+        : Promise.resolve([path]);
     }),
   );
   return nested.flat();
@@ -246,7 +248,7 @@ export function makeCodexProvider(
   }
 
   return {
-    run: (input, emit) =>
+    run: (input, emit, retain) =>
       Effect.tryPromise({
         try: async (signal): Promise<ProviderRunResult> => {
           const model = input.assignment.requestedModel;
@@ -307,6 +309,15 @@ export function makeCodexProvider(
           let tokenUsage: ProviderTokenUsage | null = null;
           const itemSummaries: Array<Readonly<Record<string, unknown>>> = [];
           const retainedRecords: RetainedProviderRecord[] = [];
+          const retainRecords = async (
+            records: ReadonlyArray<RetainedProviderRecord>,
+          ): Promise<void> => {
+            if (retain) {
+              await Effect.runPromise(retain(records));
+            } else {
+              retainedRecords.push(...records);
+            }
+          };
           let terminalFailure: FactoryError | null = null;
           let resolveTerminal!: (error: FactoryError) => void;
           const terminalSignal = new Promise<FactoryError>((resolve) => {
@@ -388,7 +399,7 @@ export function makeCodexProvider(
             },
             recordTerminal,
           );
-          const unsubscribe = rpc.onMessage((message) => {
+          const unsubscribe = rpc.onMessage(async (message) => {
             if (!belongsToAssignmentThread(message)) return;
             if (message.method === APP_SERVER_METHODS.modelRerouted) {
               reroutes.push({
@@ -431,18 +442,20 @@ export function makeCodexProvider(
             ) {
               const summary = normalizedItem(message);
               itemSummaries.push(summary);
-              retainedRecords.push({
-                kind: "item",
-                timestamp: new Date().toISOString(),
-                phase: summary.phase === "started" ? "started" : "completed",
-                ...(typeof summary.id === "string" ? { id: summary.id } : {}),
-                ...(typeof summary.type === "string"
-                  ? { itemType: summary.type }
-                  : {}),
-                ...(typeof summary.status === "string"
-                  ? { status: summary.status }
-                  : {}),
-              });
+              await retainRecords([
+                {
+                  kind: "item",
+                  timestamp: new Date().toISOString(),
+                  phase: summary.phase === "started" ? "started" : "completed",
+                  ...(typeof summary.id === "string" ? { id: summary.id } : {}),
+                  ...(typeof summary.type === "string"
+                    ? { itemType: summary.type }
+                    : {}),
+                  ...(typeof summary.status === "string"
+                    ? { status: summary.status }
+                    : {}),
+                },
+              ]);
             }
             if (message.method === APP_SERVER_METHODS.itemCompleted) {
               const item = message.params?.item as
@@ -453,20 +466,24 @@ export function makeCodexProvider(
                 typeof item.text === "string"
               ) {
                 finalResponse = item.text;
-                retainedRecords.push({
-                  kind: "transcript",
-                  timestamp: new Date().toISOString(),
-                  text: item.text,
-                });
+                await retainRecords([
+                  {
+                    kind: "transcript",
+                    timestamp: new Date().toISOString(),
+                    text: item.text,
+                  },
+                ]);
               }
             }
             if (message.method === APP_SERVER_METHODS.threadTokenUsageUpdated) {
               tokenUsage = normalizeTokenUsage(message.params?.tokenUsage);
-              retainedRecords.push({
-                kind: "usage",
-                timestamp: new Date().toISOString(),
-                usage: tokenUsage,
-              });
+              await retainRecords([
+                {
+                  kind: "usage",
+                  timestamp: new Date().toISOString(),
+                  usage: tokenUsage,
+                },
+              ]);
             }
           });
           rpc.start();
@@ -738,13 +755,15 @@ export function makeCodexProvider(
             }
             await guardTerminal(() => rpc.drainOutput());
             throwIfTerminal();
-            retainedRecords.push({
-              kind: "process_exit",
-              timestamp: new Date().toISOString(),
-              code: processExit.code,
-              signal: processExit.signal,
-              cleanupTimedOut: processExit.cleanupTimedOut,
-            });
+            await retainRecords([
+              {
+                kind: "process_exit",
+                timestamp: new Date().toISOString(),
+                code: processExit.code,
+                signal: processExit.signal,
+                cleanupTimedOut: processExit.cleanupTimedOut,
+              },
+            ]);
             const result: ProviderRunResult = {
               codexVersion,
               threadId,
@@ -760,7 +779,7 @@ export function makeCodexProvider(
                 signal: processExit.signal,
                 schemaDigest,
               },
-              records: retainedRecords,
+              records: retain ? [] : retainedRecords,
             };
             throwIfTerminal();
             return result;

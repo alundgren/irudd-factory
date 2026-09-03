@@ -269,6 +269,7 @@ async function handle(line: string): Promise<void> {
         },
       });
     }
+    if (mode === "retention-pause") return;
     send({
       method: "turn/completed",
       params: {

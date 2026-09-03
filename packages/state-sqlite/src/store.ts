@@ -237,6 +237,11 @@ interface DatabaseLease {
   readonly release: () => void;
 }
 
+const RECOVERY_TERM_WAIT_MS = 250;
+const RECOVERY_EXIT_CONFIRM_MS = 5_000;
+const RECOVERY_POLL_MS = 10;
+const recoveryWait = new Int32Array(new SharedArrayBuffer(4));
+
 function canonicalDatabasePath(path: string): string {
   const absolute = resolve(path);
   try {
@@ -250,11 +255,26 @@ function processStartIdentity(pid: number): string | null {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (fields[0] === "Z") return null;
     const startTime = fields[19];
     return startTime ? `${pid}:${startTime}` : null;
   } catch {
     return null;
   }
+}
+
+function waitForStoredProcessExit(
+  pid: number,
+  identity: string,
+  milliseconds: number,
+): boolean {
+  const deadline = Date.now() + milliseconds;
+  while (processStartIdentity(pid) === identity) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    Atomics.wait(recoveryWait, 0, 0, Math.min(RECOVERY_POLL_MS, remaining));
+  }
+  return true;
 }
 
 function acquireDatabaseLease(path: string): DatabaseLease {
@@ -820,12 +840,22 @@ export function openStateStore(
     try {
       process.kill(-identity.processGroupId, "SIGTERM");
       if (
-        processStartIdentity(identity.processGroupId) ===
-        identity.processStartIdentity
+        waitForStoredProcessExit(
+          identity.processGroupId,
+          identity.processStartIdentity,
+          RECOVERY_TERM_WAIT_MS,
+        )
       ) {
-        process.kill(-identity.processGroupId, "SIGKILL");
+        return "terminated";
       }
-      return "terminated";
+      process.kill(-identity.processGroupId, "SIGKILL");
+      return waitForStoredProcessExit(
+        identity.processGroupId,
+        identity.processStartIdentity,
+        RECOVERY_EXIT_CONFIRM_MS - RECOVERY_TERM_WAIT_MS,
+      )
+        ? "terminated"
+        : "uncertain";
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === "ESRCH"
         ? "exited"

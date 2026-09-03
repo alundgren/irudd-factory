@@ -73,7 +73,11 @@ export function fixtureDependencies(
         return fixture.behavior.claimOutcome;
       }),
     verifyPullRequest: () => Effect.succeed(fixture.behavior.pullRequest),
-    lookupPullRequest: () => Effect.succeed(fixture.behavior.pullRequest),
+    lookupPullRequest: () =>
+      Effect.sync(() => {
+        controls.onPullRequestLookup?.();
+        return fixture.behavior.pullRequest;
+      }),
   };
   const workspaces: WorkspaceService = {
     create: ({ assignmentId }) =>
@@ -99,7 +103,7 @@ export function fixtureDependencies(
       }),
   };
   const provider: ProviderService = {
-    run: (input, emit) =>
+    run: (input, emit, retain) =>
       Effect.gen(function* () {
         controls.onProviderRun?.();
         if (controls.cleanupUncertain) {
@@ -152,6 +156,9 @@ export function fixtureDependencies(
             observedEffort: input.assignment.requestedEffort,
           },
         });
+        if (controls.providerRecordsBeforeCompletion && retain) {
+          yield* retain(controls.providerRecordsBeforeCompletion);
+        }
         yield* controls.beforeCompletion
           ? Effect.promise(controls.beforeCompletion)
           : Effect.sleep(

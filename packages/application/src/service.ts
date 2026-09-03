@@ -142,6 +142,7 @@ export function makeApplication(options: ApplicationOptions) {
                   : Effect.void,
               ),
             ),
+        (records) => state.appendProviderRecords(withWorkspace.id, records),
       );
       if (result.records && result.records.length > 0) {
         yield* state.appendProviderRecords(withWorkspace.id, result.records);
