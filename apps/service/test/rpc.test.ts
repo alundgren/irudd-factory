@@ -1,13 +1,20 @@
-import { afterEach, describe, expect, test } from "vite-plus/test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+} from "@effect/platform";
+import { RpcClient, RpcSerialization } from "@effect/rpc";
 import { StateStore } from "@irudd-factory/application";
+import { FactoryRpcs } from "@irudd-factory/contracts";
 import { openStateStore } from "@irudd-factory/state-sqlite";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import {
   getFactorySnapshot,
   readAttempts,
@@ -22,7 +29,10 @@ import {
 import { fixtureIssue } from "../fixtures/factories.ts";
 import { fixtureDependencies, seedFixture } from "../fixtures/composition.ts";
 import { getFixture, type FixtureName } from "../fixtures/registry.ts";
-import { startFactoryService } from "../src/service.ts";
+import {
+  type FactoryDependencies,
+  startFactoryService,
+} from "../src/service.ts";
 import type { FactoryConfig } from "../src/config.ts";
 
 const roots: string[] = [];
@@ -46,6 +56,49 @@ async function makeConsoleDist(root: string): Promise<string> {
     writeFile(join(dist, "assets", "index.js"), "export {};\n"),
   ]);
   return dist;
+}
+
+function serviceConfig(
+  root: string,
+  access: FactoryConfig["access"] = { mode: "local" },
+): FactoryConfig {
+  return {
+    repositories: [
+      {
+        repository: "factory/fixture",
+        codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+      },
+    ],
+    databasePath: join(root, "factory.db"),
+    workspaceRoot: join(root, "workspaces"),
+    bindHost: "127.0.0.1",
+    port: 0,
+    access,
+    codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+    pollIntervalMs: 30_000,
+    timeouts: {
+      childStartupMs: 1_000,
+      initializationMs: 1_000,
+      modelSchemaMs: 1_000,
+      turnMs: 5_000,
+      shutdownMs: 1_000,
+    },
+  };
+}
+
+function getSnapshotWithHeaders(
+  url: string,
+  headers: Readonly<Record<string, string>>,
+) {
+  const Protocol = RpcClient.layerProtocolHttp({
+    url,
+    transformClient: (client) =>
+      HttpClient.mapRequest(client, HttpClientRequest.setHeaders(headers)),
+  }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]));
+  return Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.GetFactorySnapshot();
+  }).pipe(Effect.scoped, Effect.provide(Protocol), Effect.runPromise);
 }
 
 async function waitForRpc(url: string): Promise<void> {
@@ -90,6 +143,249 @@ async function waitForAssignmentState(
 }
 
 describe("Factory RPC service", () => {
+  test("allows same-origin local requests and rejects foreign browser origins", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-local-access-"));
+    roots.push(root);
+    const config = serviceConfig(root);
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, fixture("empty")),
+      await makeConsoleDist(root),
+    );
+    stops.push(service.stop);
+
+    await expect(
+      fetch(service.url, { headers: { Origin: service.url } }).then(
+        (response) => response.status,
+      ),
+    ).resolves.toBe(200);
+    const foreign = await fetch(service.url, {
+      headers: { Origin: "https://foreign.example" },
+    });
+    expect(foreign.status).toBe(403);
+    expect(foreign.headers.get("x-factory-access-decision")).toBe(
+      "origin_rejected",
+    );
+    await expect(
+      getFactorySnapshot(`${service.url}/rpc`),
+    ).resolves.toMatchObject({ assignment: null });
+  });
+
+  test("separates authenticated Tailscale access from the local CLI listener", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-tailscale-access-"));
+    roots.push(root);
+    const access = {
+      mode: "tailscale" as const,
+      operatorLogin: "operator@example.com",
+      localCliPort: 0,
+    };
+    const config = serviceConfig(root, access);
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, fixture("empty")),
+      await makeConsoleDist(root),
+    );
+    stops.push(service.stop);
+    expect(service.localCliUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+
+    const host = "factory.tailnet.ts.net";
+    const main = await fetch(service.url, {
+      headers: {
+        Host: host,
+        "Tailscale-User-Login": "operator@example.com",
+      },
+    });
+    expect(main.status).toBe(200);
+    await expect(
+      getSnapshotWithHeaders(`${service.url}/rpc`, {
+        Origin: service.url.replace("http://", "https://"),
+        "Tailscale-User-Login": "operator@example.com",
+      }),
+    ).resolves.toMatchObject({ assignment: null });
+    await expect(
+      getFactorySnapshot(`${service.url}/rpc`),
+    ).rejects.toBeDefined();
+
+    const localCliUrl = service.localCliUrl!;
+    expect(
+      (
+        await fetch(`${localCliUrl}/rpc`, {
+          method: "POST",
+          body: "[]",
+        })
+      ).status,
+    ).not.toBe(403);
+    await expect(
+      getFactorySnapshot(`${localCliUrl}/rpc`),
+    ).resolves.toMatchObject({ assignment: null });
+    expect((await fetch(localCliUrl)).status).toBe(403);
+    expect(
+      (
+        await fetch(`${localCliUrl}/rpc`, {
+          headers: { Origin: "https://factory.tailnet.ts.net" },
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  test("keeps the configured operator login out of denials, logs, events, and storage", async () => {
+    const operatorLogin = "private-operator@example.com";
+    const logged: unknown[] = [];
+    const spies = [
+      vi.spyOn(console, "debug").mockImplementation((...args) => {
+        logged.push(args);
+      }),
+      vi.spyOn(console, "error").mockImplementation((...args) => {
+        logged.push(args);
+      }),
+      vi.spyOn(console, "info").mockImplementation((...args) => {
+        logged.push(args);
+      }),
+      vi.spyOn(console, "log").mockImplementation((...args) => {
+        logged.push(args);
+      }),
+      vi.spyOn(console, "warn").mockImplementation((...args) => {
+        logged.push(args);
+      }),
+    ];
+    const root = await mkdtemp(join(tmpdir(), "factory-identity-redaction-"));
+    roots.push(root);
+    const config = serviceConfig(root, {
+      mode: "tailscale",
+      operatorLogin,
+      localCliPort: 0,
+    });
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, fixture("empty")),
+      await makeConsoleDist(root),
+    );
+    try {
+      const denial = await fetch(service.url, {
+        headers: {
+          Host: "factory.tailnet.ts.net",
+          Origin: "https://foreign.tailnet.ts.net",
+          "Tailscale-User-Login": operatorLogin,
+        },
+      });
+      const denialEvidence = JSON.stringify({
+        status: denial.status,
+        headers: Object.fromEntries(denial.headers),
+        body: await denial.text(),
+      });
+      const snapshot = await getFactorySnapshot(`${service.localCliUrl!}/rpc`);
+      expect(denial.status).toBe(403);
+      expect(denialEvidence).not.toContain(operatorLogin);
+      expect(JSON.stringify(snapshot)).not.toContain(operatorLogin);
+    } finally {
+      await service.stop();
+      spies.forEach((spy) => spy.mockRestore());
+    }
+    expect(JSON.stringify(logged)).not.toContain(operatorLogin);
+    expect((await readFile(config.databasePath)).includes(operatorLogin)).toBe(
+      false,
+    );
+  });
+
+  test("closes the main listener when the local CLI listener cannot bind", async () => {
+    const occupied = createNetServer();
+    await new Promise<void>((resolveListen) =>
+      occupied.listen(0, "127.0.0.1", resolveListen),
+    );
+    const occupiedAddress = occupied.address();
+    if (!occupiedAddress || typeof occupiedAddress === "string") {
+      throw new Error("no TCP port");
+    }
+    const root = await mkdtemp(join(tmpdir(), "factory-atomic-listeners-"));
+    roots.push(root);
+    const config = serviceConfig(root, {
+      mode: "tailscale",
+      operatorLogin: "operator@example.com",
+      localCliPort: occupiedAddress.port,
+    });
+    const mainServer = createHttpServer();
+    try {
+      await expect(
+        startFactoryService(
+          config,
+          fixtureDependencies(config, fixture("empty")),
+          await makeConsoleDist(root),
+          mainServer,
+        ),
+      ).rejects.toThrow("listener failed to start");
+      expect(mainServer.listening).toBe(false);
+    } finally {
+      await new Promise<void>((resolveClose, rejectClose) =>
+        occupied.close((error) =>
+          error ? rejectClose(error) : resolveClose(),
+        ),
+      );
+    }
+  });
+
+  test("closes the local CLI listener when the main listener cannot bind", async () => {
+    const occupied = createNetServer();
+    await new Promise<void>((resolveListen) =>
+      occupied.listen(0, "127.0.0.1", resolveListen),
+    );
+    const occupiedAddress = occupied.address();
+    if (!occupiedAddress || typeof occupiedAddress === "string") {
+      throw new Error("no TCP port");
+    }
+    const root = await mkdtemp(join(tmpdir(), "factory-atomic-main-"));
+    roots.push(root);
+    const config = {
+      ...serviceConfig(root, {
+        mode: "tailscale",
+        operatorLogin: "operator@example.com",
+        localCliPort: 0,
+      }),
+      port: occupiedAddress.port,
+    };
+    const localCliServer = createHttpServer();
+    try {
+      await expect(
+        startFactoryService(
+          config,
+          fixtureDependencies(config, fixture("empty")),
+          await makeConsoleDist(root),
+          createHttpServer(),
+          localCliServer,
+        ),
+      ).rejects.toThrow("listener failed to start");
+      expect(localCliServer.listening).toBe(false);
+    } finally {
+      await new Promise<void>((resolveClose, rejectClose) =>
+        occupied.close((error) =>
+          error ? rejectClose(error) : resolveClose(),
+        ),
+      );
+    }
+  });
+
+  test("opens neither listener when dependency initialization fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-atomic-init-"));
+    roots.push(root);
+    const config = serviceConfig(root, {
+      mode: "tailscale",
+      operatorLogin: "operator@example.com",
+      localCliPort: 0,
+    });
+    const mainServer = createHttpServer();
+    const localCliServer = createHttpServer();
+    await expect(
+      startFactoryService(
+        config,
+        Layer.fail("planned initialization failure") as FactoryDependencies,
+        await makeConsoleDist(root),
+        mainServer,
+        localCliServer,
+      ),
+    ).rejects.toThrow("listener initialization");
+    expect(mainServer.listening).toBe(false);
+    expect(localCliServer.listening).toBe(false);
+  });
+
   test("returns an assigned port only after RPC is ready", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-ready-"));
     roots.push(root);

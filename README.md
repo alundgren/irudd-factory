@@ -5,10 +5,11 @@ and records the result in SQLite. It is built for one developer operating a
 dedicated machine and repositories they own. The project was inspired by
 [Symphony](https://github.com/openai/symphony/blob/main/SPEC.md).
 
-The current implementation provides a manual loopback-only service, CLI, and
-browser console. It discovers eligible issues, pins repository policy to the
-default branch commit, claims one issue, creates a retained linked worktree,
-runs Codex through App Server, and verifies the resulting pull request.
+The current implementation provides a service, CLI, and browser console with
+separate local and Tailscale Serve access modes. It discovers eligible issues,
+pins repository policy to the default branch commit, claims one issue, creates
+a retained linked worktree, runs Codex through App Server, and verifies the
+resulting pull request.
 
 ## Development
 
@@ -70,9 +71,9 @@ the service running for inspection until Ctrl-C. See the
 credentials, repository overrides, retained files, cancellation behavior, and
 the configuration fields this command reads.
 
-The normal service defaults to `http://127.0.0.1:4317/` when `port` is omitted.
-See the [operator guide](docs/operator.md) for normal startup, fixtures,
-and current recovery limits.
+The normal service defaults to local access at `http://127.0.0.1:4317/` when
+`access` and `port` are omitted. See the [operator guide](docs/operator.md) for
+local and Tailscale Serve startup, fixtures, and current recovery limits.
 
 ## Project records
 

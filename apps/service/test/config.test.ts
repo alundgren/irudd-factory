@@ -2,6 +2,7 @@ import { describe, expect, test } from "vite-plus/test";
 import {
   configPathFromArgs,
   DEFAULT_CODEX_SLOTS,
+  DEFAULT_LOCAL_CLI_PORT,
   DEFAULT_MAX_RETAINED_TEXT_BYTES,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_PORT,
@@ -73,6 +74,7 @@ describe("factory configuration", () => {
     expect(config.timeouts).toEqual(DEFAULT_PROVIDER_TIMEOUTS);
     expect(config.codex.slots).toBe(DEFAULT_CODEX_SLOTS);
     expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
+    expect(config.access).toEqual({ mode: "local" });
     expect(config.retention).toEqual({
       sensitivePatterns: [],
       maxTextBytes: DEFAULT_MAX_RETAINED_TEXT_BYTES,
@@ -99,6 +101,79 @@ describe("factory configuration", () => {
       validateConfig({ ...valid, retention: { maxTextBytes: 255 } }),
     ).toThrow("retention.maxTextBytes");
   });
+
+  test("accepts explicit local access", () => {
+    expect(
+      validateConfig({ ...valid, access: { mode: "local" } }).access,
+    ).toEqual({ mode: "local" });
+  });
+
+  test("requires a Tailscale operator and defaults its CLI port", () => {
+    const config = validateConfig({
+      ...valid,
+      access: { mode: "tailscale", operatorLogin: "operator@example.com" },
+    });
+    expect(config.access).toEqual({
+      mode: "tailscale",
+      operatorLogin: "operator@example.com",
+      localCliPort: DEFAULT_LOCAL_CLI_PORT,
+    });
+    expect(() =>
+      validateConfig({ ...valid, access: { mode: "tailscale" } }),
+    ).toThrow("required structure");
+    expect(() =>
+      validateConfig({
+        ...valid,
+        access: { mode: "tailscale", operatorLogin: "" },
+      }),
+    ).toThrow("operatorLogin must be a nonempty login");
+  });
+
+  test("does not include the configured operator login in validation errors", () => {
+    const operatorLogin = "private-operator@example.com";
+    let message = "";
+    try {
+      validateConfig({
+        ...valid,
+        access: { mode: "invalid", operatorLogin },
+      });
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain("does not match the required structure");
+    expect(message).not.toContain(operatorLogin);
+  });
+
+  test("requires distinct valid ports in Tailscale mode", () => {
+    const access = {
+      mode: "tailscale" as const,
+      operatorLogin: "operator@example.com",
+    };
+    expect(() =>
+      validateConfig({ ...valid, access: { ...access, localCliPort: 4317 } }),
+    ).toThrow("localCliPort must differ from port");
+    for (const localCliPort of [0, 1.5, 65_536]) {
+      expect(() =>
+        validateConfig({ ...valid, access: { ...access, localCliPort } }),
+      ).toThrow("localCliPort must be an integer from 1 through 65535");
+    }
+  });
+
+  test.each(["::1", "127.0.0.2", "0.0.0.0", "localhost"])(
+    "rejects Tailscale access on bind host %s",
+    (bindHost) => {
+      expect(() =>
+        validateConfig({
+          ...valid,
+          bindHost,
+          access: {
+            mode: "tailscale",
+            operatorLogin: "operator@example.com",
+          },
+        }),
+      ).toThrow("requires bindHost to equal 127.0.0.1");
+    },
+  );
 
   test("merges partial timeout overrides over the defaults", () => {
     const config = validateConfig({

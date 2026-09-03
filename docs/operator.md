@@ -1,7 +1,7 @@
 # Operator guide
 
-Factory currently handles one repository and one active Codex assignment. It is
-a manual local service, not a scheduler.
+Factory operates configured repositories through a local or Tailscale-served
+console.
 
 ## Requirements
 
@@ -13,8 +13,41 @@ a manual local service, not a scheduler.
 
 Install dependencies with `vp install --frozen-lockfile`. Copy
 `factory.example.json` to `factory.json` and set the repository, database
-path, workspace root, Codex model, and reasoning effort. The bind address must
-be an IPv4 or IPv6 loopback address.
+path, workspace root, Codex model, and reasoning effort. Omitted `access`
+defaults to local mode. Local mode accepts any IP-loopback bind address:
+
+```json
+{
+  "bindHost": "127.0.0.1",
+  "port": 4317,
+  "access": { "mode": "local" }
+}
+```
+
+Local mode serves the console and RPC together. Browser RPC requests must have
+an HTTP Origin matching their Host. Ordinary navigation and asset requests may
+omit Origin. The CLI sends no Origin and is accepted on the same listener. Do
+not put this mode behind a proxy or port forward.
+
+To use Tailscale Serve, set the exact expected login and keep `bindHost` at
+`127.0.0.1`:
+
+```json
+{
+  "bindHost": "127.0.0.1",
+  "port": 4317,
+  "access": {
+    "mode": "tailscale",
+    "operatorLogin": "operator@example.com",
+    "localCliPort": 4318
+  }
+}
+```
+
+`localCliPort` is optional and defaults to `4318`. It must differ from `port`.
+Factory starts both listeners together. The main listener requires the exact
+Tailscale identity and an HTTPS same-origin browser RPC request. The local CLI
+listener accepts only Origin-less RPC and never serves console files.
 
 `port` is optional and defaults to `4317`. `timeouts` is also optional. You may
 override any subset of these defaults:
@@ -55,6 +88,10 @@ Agent messages may repeat any repository or machine file the agent could read.
 Treat the database, transcripts, branches, and worktrees as sensitive data.
 
 ## Start and inspect Factory
+
+The commands in this section use local mode. In Tailscale mode, use the
+separate CLI URL documented below and open the HTTPS URL printed by
+`tailscale serve` in the browser.
 
 ```sh
 vp run build:console
@@ -105,6 +142,19 @@ The CLI requires the caller to provide the command ID:
 ```sh
 vp node apps/cli/src/main.ts run-next --command-id 40b8af63-b7cc-4bc7-96d6-43d9aa42fc91
 wait "$service_pid"
+```
+
+In Tailscale mode, point the CLI at its separate listener:
+
+```sh
+vp node apps/cli/src/main.ts snapshot --url http://127.0.0.1:4318/rpc
+```
+
+Never proxy the local CLI listener. Factory does not install, configure, start,
+or stop Tailscale. After Factory starts, expose only the main port:
+
+```sh
+tailscale serve --bg 4317
 ```
 
 Factory accepts the command only when exactly one issue is eligible. A second
@@ -237,5 +287,5 @@ to confirm that another command receives a durable `provider_busy` result.
 Receipt replay and all attempts survive restart. Factory interrupts unfinished
 attempts and does not resume or retry them. If provider process ownership is
 uncertain, the attempt continues to consume capacity until an operator can
-resolve it. Polling, cancellation, queues, stall detection, authentication,
-remote access, and automatic cleanup are deferred.
+resolve it. Cancellation, stall detection, and automatic cleanup are deferred.
+Remote console access is available through the Tailscale mode described above.
