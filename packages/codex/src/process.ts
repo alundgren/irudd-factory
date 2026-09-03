@@ -152,6 +152,10 @@ export async function runManagedCommand(options: {
   readonly cwd: string;
   readonly timeoutMs: number;
   readonly timeoutCode: FactoryErrorCode;
+  readonly terminateProcessGroup?: (
+    child: ManagedProcess,
+    shutdownMs: number,
+  ) => Promise<ProcessExit>;
 }): Promise<{ stdout: string; stderr: string; code: number }> {
   const child = spawnManaged(options.command, options.cwd);
   const stdoutPromise = readStream(child.process.stdout);
@@ -161,10 +165,15 @@ export async function runManagedCommand(options: {
     delay(options.timeoutMs).then(() => ({ _tag: "timeout" as const })),
   ]);
   if (result._tag === "timeout") {
-    const cleanup = await terminateOwnedGroup(
-      child,
-      Math.min(options.timeoutMs, 1_000),
-    );
+    let cleanup: ProcessExit;
+    try {
+      cleanup = await (options.terminateProcessGroup ?? terminateOwnedGroup)(
+        child,
+        Math.min(options.timeoutMs, 1_000),
+      );
+    } catch {
+      cleanup = { code: null, signal: null, cleanupTimedOut: true };
+    }
     throw new FactoryError({
       code: options.timeoutCode,
       message: `Provider command exceeded ${options.timeoutMs} ms`,
