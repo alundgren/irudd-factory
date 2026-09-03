@@ -40,6 +40,10 @@ export async function launchFixture(
     port: Number(environment.FACTORY_FIXTURE_PORT ?? "4317"),
     codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT, slots: 1 },
     pollIntervalMs: 30_000,
+    retention: {
+      sensitivePatterns: ["fixture-secret-[0-9]+"],
+      maxTextBytes: 512,
+    },
     timeouts: {
       childStartupMs: 1_000,
       initializationMs: 1_000,
@@ -49,7 +53,7 @@ export async function launchFixture(
     },
   };
 
-  const seedStore = openStateStore(databasePath);
+  const seedStore = openStateStore(databasePath, config.retention);
   await Effect.runPromise(
     seedFixture(fixture).pipe(
       Effect.provideService(StateStore, seedStore.service),

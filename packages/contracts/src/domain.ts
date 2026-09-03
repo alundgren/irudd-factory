@@ -90,6 +90,10 @@ export const Assignment = Schema.Struct({
 });
 export type Assignment = typeof Assignment.Type;
 
+/** A retained console session. Assignment remains the command-side name. */
+export const Attempt = Assignment;
+export type Attempt = Assignment;
+
 export const AssignmentEvent = Schema.Struct({
   sequence: Schema.Number,
   assignmentId: Schema.String,
