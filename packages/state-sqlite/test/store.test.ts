@@ -2,6 +2,10 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import type { AdmissionInput, Candidate } from "@irudd-factory/application";
 import { Effect } from "effect";
 import { openStateStore } from "../src/index.ts";
@@ -45,12 +49,35 @@ function admission(
   return {
     commandId,
     provider: "codex",
-    candidates,
+    candidates: candidates.map((value) => ({
+      ...value,
+      requestedModel: "gpt-5.6-luna",
+      requestedEffort: "low",
+    })),
     assignmentId,
-    requestedModel: "gpt-5.6-luna",
-    requestedEffort: "low",
     timestamp: "2026-01-01T00:00:00.000Z",
   };
+}
+
+function processIdentity(pid: number): string {
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  const startTime = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  if (!startTime) throw new Error("Test process has no start identity");
+  return `${pid}:${startTime}`;
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    await delay(20);
+  }
+  throw new Error(`Process ${pid} did not exit`);
 }
 
 describe("SQLite state store", () => {
@@ -71,7 +98,7 @@ describe("SQLite state store", () => {
           .prepare("SELECT version FROM schema_migrations")
           .get() as { version: number } | undefined
       )?.version,
-    ).toBe(1);
+    ).toBe(2);
     opened.close();
   });
 
@@ -148,41 +175,17 @@ describe("SQLite state store", () => {
     opened.close();
   });
 
-  test("serializes different commands into one assignment", async () => {
+  test("holds an exclusive lifetime lease for the database", async () => {
     const path = await databasePath();
     const first = openStateStore(path);
-    const second = openStateStore(path);
-    const results = await Promise.all([
-      Effect.runPromise(
-        first.service.admit(
-          admission("command-a", "assignment-a", [candidate()]),
-        ),
-      ),
-      Effect.runPromise(
-        second.service.admit(
-          admission("command-b", "assignment-b", [candidate()]),
-        ),
-      ),
-    ]);
-    expect(results.map(({ receipt }) => receipt.result._tag).sort()).toEqual([
-      "provider_busy",
-      "started",
-    ]);
-    expect(
-      (
-        first.database
-          .prepare("SELECT count(*) AS count FROM assignments")
-          .get() as { count: number } | undefined
-      )?.count,
-    ).toBe(1);
+    expect(() => openStateStore(path)).toThrow("Another Factory service owns");
     first.close();
-    second.close();
+    expect(() => openStateStore(path).close()).not.toThrow();
   });
 
   test("marks only one concurrent same-command admission as created", async () => {
     const path = await databasePath();
     const first = openStateStore(path);
-    const second = openStateStore(path);
     const results = await Promise.all([
       Effect.runPromise(
         first.service.admit(
@@ -190,14 +193,214 @@ describe("SQLite state store", () => {
         ),
       ),
       Effect.runPromise(
-        second.service.admit(
+        first.service.admit(
           admission("same-command", "assignment-b", [candidate()]),
         ),
       ),
     ]);
-    expect(results.map(({ created }) => created).sort()).toEqual([false, true]);
+    expect(
+      results
+        .map(({ created }) => created)
+        .sort((left, right) => Number(left) - Number(right)),
+    ).toEqual([false, true]);
     expect(results[0]?.receipt).toEqual(results[1]?.receipt);
     first.close();
-    second.close();
+  });
+
+  test("reserves distinct issues up to the configured slot count", async () => {
+    const opened = openStateStore(await databasePath());
+    const [first, second] = await Promise.all([
+      Effect.runPromise(
+        opened.service.admit({
+          ...admission("first", "assignment-1", [candidate()]),
+          slots: 2,
+        }),
+      ),
+      Effect.runPromise(
+        opened.service.admit({
+          ...admission("second", "assignment-2", [candidate("I_2", 2)]),
+          slots: 2,
+        }),
+      ),
+    ]);
+    expect(first.receipt.result._tag).toBe("started");
+    expect(second.receipt.result._tag).toBe("started");
+    opened.close();
+  });
+
+  test("allows a later attempt for a terminal issue when requested", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      opened.service.appendEvent(
+        "assignment-1",
+        {
+          type: "assignment.failed",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          detail: {},
+        },
+        { state: "failed" },
+      ),
+    );
+    const retry = await Effect.runPromise(
+      opened.service.admit({
+        ...admission("retry", "assignment-2", [candidate()]),
+        allowRetry: true,
+      }),
+    );
+    expect(retry.receipt.result._tag).toBe("started");
+    opened.close();
+  });
+
+  test("rejects an incompatible database with a reset diagnostic", async () => {
+    const path = await databasePath();
+    const legacy = new DatabaseSync(path);
+    legacy.exec(
+      "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL) STRICT",
+    );
+    legacy
+      .prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES ($version, $appliedAt)",
+      )
+      .run({ version: 1, appliedAt: "2026-01-01T00:00:00.000Z" });
+    legacy.close();
+    expect(() => openStateStore(path)).toThrow("must be reset");
+  });
+
+  test("marks unfinished attempts interrupted during startup recovery", async () => {
+    const path = await databasePath();
+    const first = openStateStore(path);
+    await Effect.runPromise(
+      first.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    first.close();
+
+    const recovered = openStateStore(path, { recover: true });
+    const assignment = await Effect.runPromise(
+      recovered.service.getAssignment("assignment-1"),
+    );
+    expect(assignment?.state).toBe("interrupted");
+    recovered.close();
+  });
+
+  test("terminates a stored detached process group during recovery", async () => {
+    const path = await databasePath();
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+    const pid = child.pid;
+    if (!pid) throw new Error("Test child has no PID");
+    child.unref();
+    try {
+      const first = openStateStore(path);
+      await Effect.runPromise(
+        first.service.admit(admission("first", "assignment-1", [candidate()])),
+      );
+      await Effect.runPromise(
+        first.service.appendEvent(
+          "assignment-1",
+          {
+            type: "provider.process.started",
+            timestamp: "2026-01-01T00:00:01.000Z",
+            detail: {},
+          },
+          {
+            processGroupId: pid,
+            processStartIdentity: processIdentity(pid),
+            processStartPending: false,
+          },
+        ),
+      );
+      first.close();
+
+      const recovered = openStateStore(path, { recover: true });
+      const assignment = await Effect.runPromise(
+        recovered.service.getAssignment("assignment-1"),
+      );
+      expect(assignment?.state).toBe("interrupted");
+      recovered.close();
+      await waitForProcessExit(pid);
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Recovery normally removed the process group already.
+      }
+    }
+  });
+
+  test("blocks capacity when a crash leaves process start pending", async () => {
+    const path = await databasePath();
+    const first = openStateStore(path);
+    await Effect.runPromise(
+      first.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      first.service.appendEvent(
+        "assignment-1",
+        {
+          type: "provider.process.start_pending",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          detail: {},
+        },
+        { processStartPending: true },
+      ),
+    );
+    first.close();
+
+    const recovered = openStateStore(path, { recover: true });
+    const assignment = await Effect.runPromise(
+      recovered.service.getAssignment("assignment-1"),
+    );
+    expect(assignment?.state).toBe("ownership_uncertain");
+    const busy = await Effect.runPromise(
+      recovered.service.admit(
+        admission("second", "assignment-2", [candidate("I_2", 2)]),
+      ),
+    );
+    expect(busy.receipt.result._tag).toBe("provider_busy");
+    recovered.close();
+  });
+
+  test("keeps capacity blocked when process ownership is uncertain", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      opened.service.appendEvent(
+        "assignment-1",
+        {
+          type: "provider.process.started",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          detail: {},
+        },
+        { processGroupId: 1234, processStartIdentity: "1234:5" },
+      ),
+    );
+    await Effect.runPromise(
+      opened.service.interruptUnfinished(
+        "2026-01-01T00:00:02.000Z",
+        () => "uncertain",
+      ),
+    );
+    const assignment = await Effect.runPromise(
+      opened.service.getAssignment("assignment-1"),
+    );
+    expect(assignment?.state).toBe("ownership_uncertain");
+    const busy = await Effect.runPromise(
+      opened.service.admit(
+        admission("second", "assignment-2", [candidate("I_2", 2)]),
+      ),
+    );
+    expect(busy.receipt.result._tag).toBe("provider_busy");
+    opened.close();
   });
 });

@@ -5,6 +5,15 @@ export function assignmentIsBusy(assignment: Assignment | null): boolean {
   return assignment ? isProviderBusy(assignment.state) : false;
 }
 
+export function codexCapacityFull(
+  assignments: ReadonlyArray<Assignment>,
+  slots: number,
+): boolean {
+  return (
+    assignments.filter(({ state }) => isProviderBusy(state)).length >= slots
+  );
+}
+
 export function resultTitle(result: CommandResult): string {
   switch (result._tag) {
     case "started":
@@ -30,5 +39,9 @@ export function stateLabel(state: Assignment["state"]): string {
       return "Completed";
     case "failed":
       return "Failed";
+    case "interrupted":
+      return "Interrupted";
+    case "ownership_uncertain":
+      return "Process ownership uncertain";
   }
 }

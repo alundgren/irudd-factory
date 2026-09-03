@@ -5,7 +5,12 @@ import type {
   FactorySnapshot,
 } from "@irudd-factory/contracts";
 import { loadSnapshot, runNext } from "./client.ts";
-import { assignmentIsBusy, resultTitle, stateLabel } from "./view-model.ts";
+import {
+  assignmentIsBusy,
+  codexCapacityFull,
+  resultTitle,
+  stateLabel,
+} from "./view-model.ts";
 
 const emptySnapshot: FactorySnapshot = {
   receipt: null,
@@ -55,8 +60,8 @@ function CommandOutcome({ receipt }: { receipt: CommandReceipt }) {
       </p>
       {result._tag === "no_candidate" ? (
         <p className="measure">
-          When this command ran, the configured repository had no eligible issue
-          that Factory had not handled before.
+          When this command ran, the configured repositories had no eligible
+          issue that Factory had not handled before.
         </p>
       ) : null}
       {result._tag === "selection_ambiguous" ? (
@@ -260,10 +265,17 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const busy = useMemo(
-    () => assignmentIsBusy(snapshot.assignment),
-    [snapshot.assignment],
-  );
+  const busy = useMemo(() => {
+    const assignments =
+      snapshot.assignments ??
+      (assignmentIsBusy(snapshot.assignment) && snapshot.assignment
+        ? [snapshot.assignment]
+        : []);
+    return codexCapacityFull(
+      assignments,
+      snapshot.configuration?.codexSlots ?? 1,
+    );
+  }, [snapshot]);
 
   async function submit() {
     setSubmitting(true);

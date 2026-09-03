@@ -346,6 +346,7 @@ describe("Codex provider", () => {
     const { assignment, workspace } = await fixture("interrupt-timeout");
     let captured: ManagedProcess | undefined;
     let terminationReturnedAt = 0;
+    const patches: Array<string | undefined> = [];
     const provider = makeCodexProvider({
       commandPrefix: [process.execPath, fakeServer, "interrupt-timeout"],
       runtimeRoot: join(dirname(workspace.worktreePath), "deadline-runtime"),
@@ -374,7 +375,10 @@ describe("Codex provider", () => {
         Effect.either(
           provider.run(
             { assignment, workspace, prompt: "Implement it." },
-            () => Effect.void,
+            (event) =>
+              Effect.sync(() => {
+                patches.push(event.patch?.state);
+              }),
           ),
         ),
       );
@@ -382,6 +386,7 @@ describe("Codex provider", () => {
       expect(Either.isLeft(outcome)).toBe(true);
       expect(afterFailureMs).toBeLessThan(75);
       expect(captured).toBeDefined();
+      expect(patches).toContain("ownership_uncertain");
     } finally {
       if (captured) await terminateOwnedGroup(captured, 500);
     }
@@ -428,6 +433,49 @@ describe("Codex provider", () => {
       }
       expect(budgets).toHaveLength(2);
       expect(budgets[1]).toBeLessThan(150);
+    } finally {
+      if (captured) await terminateOwnedGroup(captured, 500);
+    }
+  });
+
+  test("reports uncertain ownership when every termination attempt rejects", async () => {
+    const { assignment, workspace } = await fixture();
+    let captured: ManagedProcess | undefined;
+    const patches: Array<string | undefined> = [];
+    const provider = makeCodexProvider({
+      commandPrefix: [process.execPath, fakeServer, "success"],
+      runtimeRoot: join(dirname(workspace.worktreePath), "rejection-runtime"),
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      timeouts: {
+        childStartupMs: 500,
+        initializationMs: 500,
+        modelSchemaMs: 500,
+        turnMs: 500,
+        shutdownMs: 200,
+      },
+      terminateProcessGroup: async (child) => {
+        captured = child;
+        throw new Error("termination failed");
+      },
+    });
+    try {
+      const outcome = await Effect.runPromise(
+        Effect.either(
+          provider.run(
+            { assignment, workspace, prompt: "Implement it." },
+            (event) =>
+              Effect.sync(() => {
+                patches.push(event.patch?.state);
+              }),
+          ),
+        ),
+      );
+      expect(Either.isLeft(outcome)).toBe(true);
+      if (Either.isLeft(outcome)) {
+        expect(outcome.left.detail).toBe("cleanup_timeout");
+      }
+      expect(patches).toContain("ownership_uncertain");
     } finally {
       if (captured) await terminateOwnedGroup(captured, 500);
     }

@@ -18,14 +18,19 @@ export interface Candidate {
   readonly workflow: WorkflowRevision;
 }
 
+export interface AdmissionCandidate extends Candidate {
+  readonly requestedModel: string;
+  readonly requestedEffort: string;
+}
+
 export interface AdmissionInput {
   readonly commandId: string;
   readonly provider: string;
-  readonly candidates: ReadonlyArray<Candidate>;
+  readonly candidates: ReadonlyArray<AdmissionCandidate>;
   readonly assignmentId: string;
-  readonly requestedModel: string;
-  readonly requestedEffort: string;
   readonly timestamp: string;
+  readonly slots?: number;
+  readonly allowRetry?: boolean;
 }
 
 export interface AdmissionResult {
@@ -41,6 +46,9 @@ export interface AssignmentPatch {
   readonly codexVersion?: string;
   readonly threadId?: string;
   readonly turnId?: string;
+  readonly processGroupId?: number;
+  readonly processStartIdentity?: string;
+  readonly processStartPending?: boolean;
   readonly pullRequest?: PullRequest;
   readonly error?: NormalizedError;
 }
@@ -62,6 +70,13 @@ export interface StateStoreService {
   ) => Effect.Effect<Assignment | null, FactoryError>;
   readonly getSnapshot: () => Effect.Effect<FactorySnapshot, FactoryError>;
   readonly reset: () => Effect.Effect<void, FactoryError>;
+  readonly interruptUnfinished: (
+    timestamp: string,
+    reconcileProcess: (identity: {
+      readonly processGroupId: number;
+      readonly processStartIdentity: string;
+    }) => "exited" | "terminated" | "uncertain",
+  ) => Effect.Effect<void, FactoryError>;
   readonly seedAssignment: (
     assignment: Assignment,
     events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>,
@@ -78,6 +93,9 @@ export interface GitHubService {
   readonly discoverCandidates: (
     repository: string,
   ) => Effect.Effect<ReadonlyArray<Candidate>, FactoryError>;
+  readonly revalidateIssue?: (
+    candidate: Candidate,
+  ) => Effect.Effect<Candidate, FactoryError>;
   readonly claimIssue: (
     issue: IssueRef,
   ) => Effect.Effect<ClaimOutcome, FactoryError>;

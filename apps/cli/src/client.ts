@@ -20,6 +20,18 @@ export function runNextEligibleIssue(
   }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
 }
 
+export function startIssue(
+  url: string,
+  commandId: string,
+  repository: string,
+  issueNumber: number,
+): Promise<CommandReceipt> {
+  return Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.StartIssue({ commandId, repository, issueNumber });
+  }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
+}
+
 export function getFactorySnapshot(url: string): Promise<FactorySnapshot> {
   return Effect.gen(function* () {
     const client = yield* RpcClient.make(FactoryRpcs);

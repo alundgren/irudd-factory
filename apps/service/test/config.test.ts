@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vite-plus/test";
 import {
   configPathFromArgs,
+  DEFAULT_CODEX_SLOTS,
+  DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_PORT,
   DEFAULT_PROVIDER_TIMEOUTS,
   validateConfig,
@@ -8,7 +10,7 @@ import {
 } from "../src/index.ts";
 
 const valid = {
-  repository: "owner/repository",
+  repositories: [{ repository: "owner/repository" }],
   databasePath: ".factory/factory.db",
   workspaceRoot: ".factory/workspaces",
   bindHost: "127.0.0.1",
@@ -68,6 +70,8 @@ describe("factory configuration", () => {
     const config = validateConfig(source);
     expect(config.port).toBe(DEFAULT_PORT);
     expect(config.timeouts).toEqual(DEFAULT_PROVIDER_TIMEOUTS);
+    expect(config.codex.slots).toBe(DEFAULT_CODEX_SLOTS);
+    expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
   });
 
   test("merges partial timeout overrides over the defaults", () => {
@@ -111,10 +115,75 @@ describe("factory configuration", () => {
       timeouts: { initializationMs: 321 },
     });
     expect(integration).toEqual({
-      codex: valid.codex,
+      codex: { ...valid.codex, slots: DEFAULT_CODEX_SLOTS },
       timeouts: { ...DEFAULT_PROVIDER_TIMEOUTS, initializationMs: 321 },
     });
   });
+
+  test("normalizes repositories and resolves independent Codex overrides", () => {
+    const config = validateConfig({
+      ...valid,
+      codex: {
+        model: "global-model",
+        reasoningEffort: "medium",
+        slots: 32,
+      },
+      pollIntervalMs: 1_000,
+      repositories: [
+        { repository: "Owner/One", codex: { model: "repo-model" } },
+        {
+          repository: "owner/Two",
+          codex: { reasoningEffort: "high" },
+        },
+      ],
+    });
+    expect(config.repositories).toEqual([
+      {
+        repository: "owner/one",
+        codex: { model: "repo-model", reasoningEffort: "medium" },
+      },
+      {
+        repository: "owner/two",
+        codex: { model: "global-model", reasoningEffort: "high" },
+      },
+    ]);
+    expect(config.codex.slots).toBe(32);
+    expect(config.pollIntervalMs).toBe(1_000);
+  });
+
+  test("requires a nonempty unique repository pool", () => {
+    expect(() => validateConfig({ ...valid, repositories: [] })).toThrow(
+      "at least one repository",
+    );
+    expect(() =>
+      validateConfig({
+        ...valid,
+        repositories: [
+          { repository: "Owner/Repo" },
+          { repository: "owner/repo" },
+        ],
+      }),
+    ).toThrow("duplicate owner/repo");
+    const { repositories: _repositories, ...withoutRepositories } = valid;
+    expect(() => validateConfig(withoutRepositories)).toThrow(
+      "required structure",
+    );
+  });
+
+  test.each([0, 33, 1.5])("rejects invalid Codex slots %s", (slots) => {
+    expect(() =>
+      validateConfig({ ...valid, codex: { ...valid.codex, slots } }),
+    ).toThrow("codex.slots must be an integer from 1 through 32");
+  });
+
+  test.each([999, 3_600_001, 1.5])(
+    "rejects invalid poll intervals %s",
+    (pollIntervalMs) => {
+      expect(() => validateConfig({ ...valid, pollIntervalMs })).toThrow(
+        "pollIntervalMs must be an integer from 1000 through 3600000",
+      );
+    },
+  );
 
   test("validates integration Codex settings and supplied timeouts", () => {
     expect(() =>

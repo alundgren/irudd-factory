@@ -6,20 +6,22 @@ export const ASSIGNMENT_STATES = [
   "running",
   "completed",
   "failed",
+  "interrupted",
+  "ownership_uncertain",
 ] as const;
 
 export const AssignmentState = Schema.Literal(...ASSIGNMENT_STATES);
 export type AssignmentState = typeof AssignmentState.Type;
 
 /**
- * The states that hold a provider. The SQLite schema enforces one assignment
- * per provider across exactly this set, so the list drives both that SQL and
- * the projection the console reads.
+ * The states that consume a Codex slot. SQLite uses this list for slot counts,
+ * active-issue uniqueness, recovery, and the console projection.
  */
 export const ACTIVE_ASSIGNMENT_STATES = [
   "reserved",
   "starting",
   "running",
+  "ownership_uncertain",
 ] as const satisfies ReadonlyArray<AssignmentState>;
 
 export const IssueRef = Schema.Struct({
@@ -77,6 +79,9 @@ export const Assignment = Schema.Struct({
   codexVersion: Schema.NullOr(Schema.String),
   threadId: Schema.NullOr(Schema.String),
   turnId: Schema.NullOr(Schema.String),
+  processGroupId: Schema.optional(Schema.NullOr(Schema.Number)),
+  processStartIdentity: Schema.optional(Schema.NullOr(Schema.String)),
+  processStartPending: Schema.optional(Schema.Boolean),
   pullRequest: Schema.NullOr(PullRequest),
   error: Schema.NullOr(NormalizedError),
   createdAt: Schema.String,
@@ -125,7 +130,23 @@ export type CommandReceipt = typeof CommandReceipt.Type;
 export const FactorySnapshot = Schema.Struct({
   receipt: Schema.NullOr(CommandReceipt),
   assignment: Schema.NullOr(Assignment),
+  assignments: Schema.optional(Schema.Array(Assignment)),
   events: Schema.Array(AssignmentEvent),
+  configuration: Schema.optional(
+    Schema.Struct({
+      repositories: Schema.Array(
+        Schema.Struct({
+          repository: Schema.String,
+          codex: Schema.Struct({
+            model: Schema.String,
+            reasoningEffort: Schema.String,
+          }),
+        }),
+      ),
+      codexSlots: Schema.Number,
+      pollIntervalMs: Schema.Number,
+    }),
+  ),
 });
 export type FactorySnapshot = typeof FactorySnapshot.Type;
 

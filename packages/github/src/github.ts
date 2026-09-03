@@ -476,6 +476,31 @@ function makeService(runner: CommandRunner): GitHubService {
                 message: String(error),
               }),
       }),
+    revalidateIssue: (candidate) =>
+      makeService(runner)
+        .discoverCandidates(candidate.issue.repository)
+        .pipe(
+          Effect.flatMap((current) => {
+            const match = current.find(
+              ({ issue }) => issue.nodeId === candidate.issue.nodeId,
+            );
+            if (
+              !match ||
+              match.workflow.startingCommit !==
+                candidate.workflow.startingCommit ||
+              match.workflow.blobId !== candidate.workflow.blobId ||
+              match.workflow.digest !== candidate.workflow.digest
+            ) {
+              return Effect.fail(
+                new FactoryError({
+                  code: "issue_ineligible",
+                  message: `${candidate.issue.repository}#${candidate.issue.number} changed before start`,
+                }),
+              );
+            }
+            return Effect.succeed(match);
+          }),
+        ),
     claimIssue: (issue) =>
       Effect.promise(async (): Promise<ClaimOutcome> => {
         let mutation: Awaited<ReturnType<CommandRunner["run"]>> | null = null;

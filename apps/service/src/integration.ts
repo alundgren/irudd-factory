@@ -49,6 +49,7 @@ const EXPECTED_EVENTS = [
   ASSIGNMENT_EVENTS.reserved,
   ASSIGNMENT_EVENTS.providerStartRequested,
   ASSIGNMENT_EVENTS.workspaceCreated,
+  ASSIGNMENT_EVENTS.providerProcessStartPending,
   ASSIGNMENT_EVENTS.providerThreadStarted,
   ASSIGNMENT_EVENTS.providerTurnStarted,
   ASSIGNMENT_EVENTS.providerTurnFinished,
@@ -562,12 +563,21 @@ export async function runLiveIntegration(
   write(`Issue: ${issue.url}`);
   write(`Retained directory: ${retainedDirectory}`);
   const config = {
-    repository: parsed.repository,
+    repositories: [
+      {
+        repository: parsed.repository,
+        codex: {
+          model: integrationConfig.codex.model,
+          reasoningEffort: integrationConfig.codex.reasoningEffort,
+        },
+      },
+    ],
     databasePath: join(retainedDirectory, "factory.db"),
     workspaceRoot: join(retainedDirectory, "workspaces"),
     bindHost: "127.0.0.1",
     port: 0,
     codex: integrationConfig.codex,
+    pollIntervalMs: 30_000,
     timeouts: integrationConfig.timeouts,
   };
   const productionGitHub = runtime.github ?? makeGitHubService(runner);

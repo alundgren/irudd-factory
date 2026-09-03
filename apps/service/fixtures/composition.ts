@@ -42,12 +42,19 @@ export function fixtureDependencies(
   fixture: FixtureDefinition,
   controls: FixtureControls = {},
 ): FactoryDependencies {
+  let assignmentSequence = 0;
   const candidates: Candidate[] = fixture.state.candidates.map((issue) => ({
     issue,
     workflow: fixture.behavior.candidateWorkflow,
   }));
   const github: GitHubService = {
-    discoverCandidates: () => Effect.succeed(candidates),
+    discoverCandidates: (repository) =>
+      Effect.succeed(
+        candidates.filter(
+          (candidate) => candidate.issue.repository === repository,
+        ),
+      ),
+    revalidateIssue: (candidate) => Effect.succeed(candidate),
     claimIssue: () =>
       Effect.sync(() => {
         controls.onClaim?.();
@@ -79,9 +86,23 @@ export function fixtureDependencies(
       }),
   };
   const provider: ProviderService = {
-    run: (_input, emit) =>
+    run: (input, emit) =>
       Effect.gen(function* () {
         controls.onProviderRun?.();
+        if (controls.cleanupUncertain) {
+          yield* emit({
+            type: ASSIGNMENT_EVENTS.providerFailed,
+            timestamp: fixture.state.now,
+            detail: { processExit: { cleanupTimedOut: true } },
+            patch: { state: "ownership_uncertain" },
+          });
+          return yield* Effect.fail(
+            new FactoryError({
+              code: "cleanup_timeout",
+              message: "Fixture could not confirm provider exit",
+            }),
+          );
+        }
         if (controls.failAfterObservation) {
           const observed = controls.failAfterObservation;
           yield* emit({
@@ -114,8 +135,8 @@ export function fixtureDependencies(
             state: "running",
             codexVersion: fixture.behavior.provider.result.codexVersion,
             threadId: fixture.behavior.provider.result.threadId,
-            observedModel: config.codex.model,
-            observedEffort: config.codex.reasoningEffort,
+            observedModel: input.assignment.requestedModel,
+            observedEffort: input.assignment.requestedEffort,
           },
         });
         yield* controls.beforeCompletion
@@ -125,8 +146,8 @@ export function fixtureDependencies(
             );
         return {
           ...fixture.behavior.provider.result,
-          observedModel: config.codex.model,
-          observedEffort: config.codex.reasoningEffort,
+          observedModel: input.assignment.requestedModel,
+          observedEffort: input.assignment.requestedEffort,
         };
       }).pipe(
         Effect.onInterrupt(() =>
@@ -135,13 +156,14 @@ export function fixtureDependencies(
       ),
   };
   return Layer.mergeAll(
-    layerStateStore(config.databasePath),
+    layerStateStore(config.databasePath, { recover: false }),
     Layer.succeed(GitHub, github),
     Layer.succeed(Workspaces, workspaces),
     Layer.succeed(Provider, provider),
     Layer.succeed(Clock, { now: () => fixture.state.now }),
     Layer.succeed(IdGenerator, {
-      assignmentId: () => `assignment-${fixture.name}`,
+      assignmentId: () =>
+        `assignment-${fixture.name}-${(assignmentSequence += 1)}`,
     }),
   );
 }

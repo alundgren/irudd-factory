@@ -3,6 +3,7 @@ import {
   type FactoryErrorCode,
 } from "@irudd-factory/application";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
 export interface ManagedProcess {
@@ -16,6 +17,22 @@ export interface ProcessExit {
   readonly code: number | null;
   readonly signal: "SIGTERM" | "SIGKILL" | null;
   readonly cleanupTimedOut: boolean;
+}
+
+export function getProcessStartIdentity(pid: number): string {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const startTime = fields[19];
+    if (!startTime) throw new Error("missing start time");
+    return `${pid}:${startTime}`;
+  } catch (error) {
+    throw new FactoryError({
+      code: "process_identity_changed",
+      message: `Could not read the start identity for process ${pid}`,
+      detail: String(error),
+    });
+  }
 }
 
 export function spawnManaged(
@@ -135,6 +152,10 @@ export async function runManagedCommand(options: {
   readonly cwd: string;
   readonly timeoutMs: number;
   readonly timeoutCode: FactoryErrorCode;
+  readonly terminateProcessGroup?: (
+    child: ManagedProcess,
+    shutdownMs: number,
+  ) => Promise<ProcessExit>;
 }): Promise<{ stdout: string; stderr: string; code: number }> {
   const child = spawnManaged(options.command, options.cwd);
   const stdoutPromise = readStream(child.process.stdout);
@@ -144,10 +165,19 @@ export async function runManagedCommand(options: {
     delay(options.timeoutMs).then(() => ({ _tag: "timeout" as const })),
   ]);
   if (result._tag === "timeout") {
-    await terminateOwnedGroup(child, Math.min(options.timeoutMs, 1_000));
+    let cleanup: ProcessExit;
+    try {
+      cleanup = await (options.terminateProcessGroup ?? terminateOwnedGroup)(
+        child,
+        Math.min(options.timeoutMs, 1_000),
+      );
+    } catch {
+      cleanup = { code: null, signal: null, cleanupTimedOut: true };
+    }
     throw new FactoryError({
       code: options.timeoutCode,
       message: `Provider command exceeded ${options.timeoutMs} ms`,
+      ...(cleanup.cleanupTimedOut ? { detail: "cleanup_timeout" } : {}),
     });
   }
   const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
