@@ -169,18 +169,35 @@ needed for diagnosis. The current release has no cleanup command.
 
 ## Deterministic fixtures
 
-Build and start any seeded scenario with:
+List the registered fixtures and their tags before choosing one:
+
+```sh
+vp run fixture
+vp run fixture --json
+```
+
+Inspect the state, behavior, and suggested checks declared by one fixture:
+
+```sh
+vp run fixture runnable --describe
+vp run fixture runnable --describe --json
+```
+
+Start the selected fixture with:
 
 ```sh
 vp run fixture runnable
 ```
 
-Available scenarios are `empty`, `ambiguous`, `busy-reserved`,
-`busy-starting`, `busy-running`, `runnable`, `failed-long`,
-`completed-ready`, and `completed-draft`. Each start removes only that
-scenario's SQLite database and recreates it through the production migrations.
-GitHub, workspace, and Codex ports are fake; the SQLite store, Effect RPC
-transport, CLI client, service, and console are real.
+Each fixture owns its metadata, deterministic state, fake behavior, and
+machine-checked expectations. A start removes only the selected fixture's
+SQLite database and recreates it through the real migrations. GitHub,
+workspace, and Codex ports are fake. The SQLite store, application command,
+Effect RPC transport, CLI client, service, console, and shutdown path are real.
+
+Fixture launches are refused when `NODE_ENV=production`. Listing and describing
+fixtures remain available because those commands do not build the console,
+create runtime files, construct dependencies, or open a listener.
 
 While a busy fixture runs, use the second-client command printed by the fixture
 to confirm that another command receives a durable `provider_busy` result.

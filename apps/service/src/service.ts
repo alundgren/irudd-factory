@@ -78,7 +78,7 @@ function handlerLayer(
 
 export async function startFactoryService(
   config: FactoryConfig,
-  dependencies: FactoryDependencies = productionDependencies(config),
+  dependencies: FactoryDependencies,
   consoleDistPath = resolve("apps/console/dist"),
   nodeServer: Server = createServer(),
 ) {

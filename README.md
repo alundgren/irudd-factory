@@ -31,15 +31,22 @@ vp run typecheck
 vp run test
 ```
 
-Start a deterministic local instance with the runnable fixture:
+List the deterministic local fixtures:
 
 ```sh
+vp run fixture
+```
+
+Inspect one fixture, then launch it:
+
+```sh
+vp run fixture runnable --describe
 vp run fixture runnable
 ```
 
 The command prints the console URL and keeps the service running until you stop
 it with Ctrl-C. See the [operator guide](docs/operator.md#deterministic-fixtures)
-for the other fixture scenarios.
+for catalog and JSON discovery commands.
 
 Copy [`factory.example.json`](factory.example.json) to `factory.json` and adjust
 the repository and paths to run the normal service against GitHub.
@@ -58,7 +65,7 @@ credentials, repository overrides, retained files, cancellation behavior, and
 the configuration fields this command reads.
 
 The normal service defaults to `http://127.0.0.1:4317/` when `port` is omitted.
-See the [operator guide](docs/operator.md) for normal startup, fixture scenarios,
+See the [operator guide](docs/operator.md) for normal startup, fixtures,
 and current recovery limits.
 
 ## Project records

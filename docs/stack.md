@@ -63,8 +63,10 @@ Effect wraps I/O, resources, transactions, concurrency, schemas, and RPC.
 validates GitHub responses, stored payloads, configuration, and protocol
 messages.
 
-Selection rules, transitions, prompt building, and scenario descriptions stay
-ordinary TypeScript where an Effect service is unnecessary.
+Selection rules, transitions, and prompt building stay ordinary TypeScript
+where an Effect service is unnecessary. Fixture definitions live under
+`apps/service/fixtures`; discovery and contract tests consume their typed
+metadata, state, fake behavior, and expectations.
 
 ## Operations
 
