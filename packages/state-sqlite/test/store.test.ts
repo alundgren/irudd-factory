@@ -640,6 +640,77 @@ setInterval(() => {}, 1000);`,
     }
   });
 
+  test("keeps capacity blocked when the saved leader exited but its descendant remains", async () => {
+    const path = await databasePath();
+    const leader = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { spawn } from "node:child_process";
+const descendant = spawn(process.execPath, ["--input-type=module", "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+console.log(descendant.pid);
+setInterval(() => {}, 1000);`,
+      ],
+      { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const leaderPid = leader.pid;
+    if (!leaderPid || !leader.stdout)
+      throw new Error("Test leader has no PID or stdout");
+    const [chunk] = await once(leader.stdout, "data");
+    const descendantPid = Number(String(chunk).trim());
+    const leaderIdentity = processIdentity(leaderPid);
+    const descendantIdentity = processIdentity(descendantPid);
+    try {
+      const first = openStateStore(path);
+      await Effect.runPromise(
+        first.service.admit(admission("first", "assignment-1", [candidate()])),
+      );
+      await Effect.runPromise(
+        first.service.appendEvent(
+          "assignment-1",
+          {
+            type: "provider.process.started",
+            timestamp: "2026-01-01T00:00:01.000Z",
+            detail: {},
+          },
+          {
+            processGroupId: leaderPid,
+            processStartIdentity: leaderIdentity,
+            processStartPending: false,
+          },
+        ),
+      );
+      first.close();
+
+      const leaderClosed = once(leader, "close");
+      process.kill(leaderPid, "SIGKILL");
+      await leaderClosed;
+      expect(isLiveProcessIdentity(descendantPid, descendantIdentity)).toBe(
+        true,
+      );
+
+      const recovered = openStateStore(path, { recover: true });
+      expect(
+        (
+          await Effect.runPromise(
+            recovered.service.getAssignment("assignment-1"),
+          )
+        )?.state,
+      ).toBe("ownership_uncertain");
+      expect(isLiveProcessIdentity(descendantPid, descendantIdentity)).toBe(
+        true,
+      );
+      recovered.close();
+    } finally {
+      try {
+        process.kill(-leaderPid, "SIGKILL");
+      } catch {
+        // Test cleanup removes the surviving descendant process group.
+      }
+    }
+  });
+
   test("blocks capacity when a crash leaves process start pending", async () => {
     const path = await databasePath();
     const first = openStateStore(path);

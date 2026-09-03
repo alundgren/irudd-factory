@@ -863,7 +863,9 @@ export function openStateStore(
   }): "exited" | "terminated" | "uncertain" {
     const current = processStartIdentity(identity.processGroupId);
     if (current === null || current !== identity.processStartIdentity) {
-      return "exited";
+      return processGroupHasLiveMembers(identity.processGroupId)
+        ? "uncertain"
+        : "exited";
     }
     try {
       process.kill(-identity.processGroupId, "SIGTERM");
