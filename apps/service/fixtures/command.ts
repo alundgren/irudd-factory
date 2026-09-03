@@ -8,7 +8,11 @@ import {
 import { FIXTURE_REGISTRY, getFixture } from "./registry.ts";
 import type { FixtureDefinition } from "./types.ts";
 
-const USAGE = "usage: vp run fixture [--json] | <name> [--describe [--json]]";
+const USAGE = [
+  "usage: vp run fixture [<name> [--describe]]",
+  "       vp node scripts/fixture.ts --json",
+  "       vp node scripts/fixture.ts <name> --describe --json",
+].join("\n");
 
 export interface FixtureCommandIO {
   readonly stdout: (value: string) => void;

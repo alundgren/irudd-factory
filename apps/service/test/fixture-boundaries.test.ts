@@ -12,7 +12,6 @@ describe("fixture import boundaries", () => {
     ]) {
       const source = await readFile(resolve(path), "utf8");
       expect(source).not.toMatch(/fixtures\//);
-      expect(source).not.toMatch(/fixture-main/);
     }
   });
 

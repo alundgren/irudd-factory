@@ -37,6 +37,12 @@ List the deterministic local fixtures:
 vp run fixture
 ```
 
+Scripts and agents can read the compact catalog as one JSON document with:
+
+```sh
+vp node scripts/fixture.ts --json
+```
+
 Inspect one fixture, then launch it:
 
 ```sh

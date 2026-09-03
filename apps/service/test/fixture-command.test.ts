@@ -2,13 +2,19 @@ import { describe, expect, test } from "vite-plus/test";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 import { promisify } from "node:util";
 import { runFixtureCommand } from "../fixtures/command.ts";
 import { FIXTURE_REGISTRY } from "../fixtures/registry.ts";
 import type { FixtureDefinition } from "../fixtures/types.ts";
 
 const execFileAsync = promisify(execFile);
+const directCommandEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !name.startsWith("VP_")),
+);
+directCommandEnvironment.PATH = directCommandEnvironment.PATH?.split(delimiter)
+  .filter((entry) => entry !== resolve("node_modules/.bin"))
+  .join(delimiter);
 
 function capture() {
   const stdout: string[] = [];
@@ -100,6 +106,9 @@ describe("fixture command dispatch", () => {
       expect(output.stdout).toEqual([]);
       expect(output.stderr.join("")).toContain("fixture_arguments_invalid");
       expect(output.stderr.join("")).toContain("usage: vp run fixture");
+      expect(output.stderr.join("")).toContain(
+        "vp node scripts/fixture.ts --json",
+      );
       expect(output.calls).toEqual({ build: 0, launch: 0 });
     }
   });
@@ -133,15 +142,12 @@ describe("fixture command process", () => {
   test("emits compact JSON only and keeps inspection paths unchanged", async () => {
     const paths = [resolve(".factory/fixtures"), resolve("apps/console/dist")];
     const before = await Promise.all(paths.map(fingerprint));
-    const compact = await execFileAsync("vp", ["run", "fixture", "--json"], {
-      cwd: resolve("."),
-    });
-    const outputLines = compact.stdout.trimEnd().split("\n");
-    expect(outputLines[0]).toMatch(
-      /^\$ node apps\/service\/src\/fixture-main\.ts --json/,
+    const compact = await execFileAsync(
+      "vp",
+      ["node", "scripts/fixture.ts", "--json"],
+      { cwd: resolve("."), env: directCommandEnvironment },
     );
-    expect(outputLines).toHaveLength(2);
-    const parsed = JSON.parse(outputLines[1]!) as unknown[];
+    const parsed = JSON.parse(compact.stdout) as unknown[];
     expect(parsed).toHaveLength(FIXTURE_REGISTRY.length);
     expect(parsed).toEqual(
       FIXTURE_REGISTRY.map(({ name, summary, tags }) => ({
@@ -152,13 +158,16 @@ describe("fixture command process", () => {
     );
     expect(compact.stderr).toBe("");
 
-    const launcher = await execFileAsync(
-      "node",
-      ["apps/service/src/fixture-main.ts", "--json"],
-      { cwd: resolve(".") },
+    const detailed = await execFileAsync(
+      "vp",
+      ["node", "scripts/fixture.ts", "runnable", "--describe", "--json"],
+      { cwd: resolve("."), env: directCommandEnvironment },
     );
-    expect(JSON.parse(launcher.stdout)).toEqual(parsed);
-    expect(launcher.stderr).toBe("");
+    expect(JSON.parse(detailed.stdout)).toMatchObject({
+      name: "runnable",
+      expectations: { command: { result: "started" } },
+    });
+    expect(detailed.stderr).toBe("");
 
     await execFileAsync("vp", ["run", "fixture", "runnable", "--describe"], {
       cwd: resolve("."),

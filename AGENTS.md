@@ -23,8 +23,11 @@ viewports. Automated UI assertions do not replace this check.
 
 Do not use a real GitHub repository, Git worktree, or Codex process in automated
 tests. Use the catalog under `apps/service/fixtures` and its adapter fakes. Run
-`vp run fixture` to discover names and `vp run fixture <name> --describe` to
-inspect a fixture's declared state, behavior, and checks.
+`vp run fixture` to browse names and `vp run fixture <name> --describe` for a
+human-readable description. Agents and scripts must use
+`vp node scripts/fixture.ts --json` for the catalog and
+`vp node scripts/fixture.ts <name> --describe --json` for structured details.
+These direct commands keep stdout parseable by excluding task-runner output.
 
 # Code rules
 

@@ -173,14 +173,20 @@ List the registered fixtures and their tags before choosing one:
 
 ```sh
 vp run fixture
-vp run fixture --json
+```
+
+For scripts and agents, use the direct entry point. It writes one JSON document
+to stdout without Vite+ task-runner diagnostics:
+
+```sh
+vp node scripts/fixture.ts --json
 ```
 
 Inspect the state, behavior, and suggested checks declared by one fixture:
 
 ```sh
 vp run fixture runnable --describe
-vp run fixture runnable --describe --json
+vp node scripts/fixture.ts runnable --describe --json
 ```
 
 Start the selected fixture with:

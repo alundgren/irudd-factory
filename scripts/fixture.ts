@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { FactoryError } from "@irudd-factory/application";
-import { runFixtureCommand } from "../fixtures/command.ts";
+import { runFixtureCommand } from "../apps/service/fixtures/command.ts";
+import { FactoryError } from "../packages/application/src/index.ts";
 
 async function buildConsole(): Promise<void> {
   await new Promise<void>((resolveBuild, rejectBuild) => {
@@ -37,7 +37,8 @@ process.exitCode = await runFixtureCommand(
   {
     buildConsole,
     launch: async (fixture) => {
-      const { launchFixture } = await import("../fixtures/launch.ts");
+      const { launchFixture } =
+        await import("../apps/service/fixtures/launch.ts");
       await launchFixture(fixture);
     },
   },
