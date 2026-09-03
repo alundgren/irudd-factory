@@ -1,9 +1,0 @@
-{
-  "name": "codex-probe-fixture",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "bun test",
-    "probe-long-running": "bun run scripts/long-running.ts"
-  }
-}

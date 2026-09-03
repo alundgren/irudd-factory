@@ -1,6 +1,6 @@
 # Stack and conventions
 
-These are the implemented decisions for the manual single-repository milestone.
+These are the implemented decisions for the current product.
 
 ## Runtime
 
@@ -32,17 +32,25 @@ Receipt replay happens before GitHub discovery, so restarting the service does
 not change the result returned for an existing command ID. Factory records
 `provider.start.requested` before spawning Codex and records the thread ID
 before marking an assignment `running`. Automatic recovery of nonterminal
-assignments is not part of this milestone.
+assignments is not implemented.
 
 ## Provider
 
-The application depends on a `Provider` port. Codex is the only adapter. The
-adapter normalizes the App Server thread ID, turn ID, item summaries, token
-usage, final message, model, reasoning effort, CLI version, approvals, reroutes,
-errors, and process exit.
+The application depends on a `Provider` port. Codex is the only adapter. It
+uses JSON-RPC over App Server standard input and output without a TTY. Before
+starting a thread, the adapter checks that App Server offers the configured
+model and reasoning effort. It generates and validates the installed protocol
+schemas, then records their digest with the provider thread.
+
+The adapter normalizes the App Server thread ID, turn ID, item summaries,
+token usage, final message, model, reasoning effort, CLI version, approvals,
+reroutes, errors, and process exit. A missing model, an effort mismatch, or a
+model reroute fails the assignment instead of selecting another configuration.
 
 Codex runs as `codex app-server --strict-config` with the operator's ordinary
-`~/.codex`. Any approval request fails the assignment immediately. Shutdown
+`~/.codex`. Any approval request fails the assignment immediately. The turn
+names the worktree and its Git directories as writable roots and permits
+network access so Codex can push its branch and open the pull request. Shutdown
 first attempts `turn/interrupt`, then stops the owned process group within one
 total deadline.
 

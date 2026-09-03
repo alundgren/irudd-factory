@@ -6,15 +6,9 @@ export default defineConfig({
   },
   fmt: {
     printWidth: 80,
-    ignorePatterns: [
-      "pnpm-lock.yaml",
-      "dist/**",
-      "node_modules/**",
-      "prototypes/codex-app-server-probe/fixture/acceptance/**",
-    ],
+    ignorePatterns: ["pnpm-lock.yaml", "dist/**", "node_modules/**"],
   },
   lint: {
-    ignorePatterns: ["prototypes/**"],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
