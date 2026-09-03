@@ -107,13 +107,22 @@ export function makeApplication(options: ApplicationOptions) {
         { workspace },
       );
 
+      const processPending = yield* state.appendEvent(
+        withWorkspace.id,
+        {
+          type: ASSIGNMENT_EVENTS.providerProcessStartPending,
+          timestamp: clock.now(),
+          detail: {},
+        },
+        { processStartPending: true },
+      );
       const prompt = buildAssignmentPrompt(
         withWorkspace.workflow.body,
         withWorkspace.issue.repository,
         withWorkspace.issue.number,
       );
       const result = yield* provider.run(
-        { assignment: withWorkspace, prompt, workspace },
+        { assignment: processPending, prompt, workspace },
         (event) =>
           state
             .appendEvent(
@@ -146,6 +155,7 @@ export function makeApplication(options: ApplicationOptions) {
           turnId: result.turnId,
           observedModel: result.observedModel,
           observedEffort: result.observedEffort,
+          processStartPending: false,
         },
       );
       const pullRequest = yield* github.verifyPullRequest(
@@ -175,7 +185,11 @@ export function makeApplication(options: ApplicationOptions) {
               timestamp: clock.now(),
               detail: { code: normalized.code, message: normalized.message },
             },
-            { state: "failed", error: normalized },
+            {
+              state: "failed",
+              error: normalized,
+              processStartPending: false,
+            },
           );
         }).pipe(Effect.catchAll(() => Effect.void)),
       ),

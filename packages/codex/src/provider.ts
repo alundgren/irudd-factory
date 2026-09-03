@@ -460,6 +460,7 @@ export function makeCodexProvider(
                     codexVersion,
                     processGroupId: child.pid,
                     processStartIdentity,
+                    processStartPending: false,
                   },
                 }),
               ),

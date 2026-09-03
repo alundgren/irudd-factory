@@ -263,6 +263,7 @@ describe("Factory RPC service", () => {
       "assignment.reserved",
       "provider.start.requested",
       "workspace.created",
+      "provider.process.start_pending",
       "provider.thread.started",
       "provider.turn.finished",
       "assignment.completed",

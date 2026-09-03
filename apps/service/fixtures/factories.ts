@@ -57,6 +57,7 @@ export function fixtureAssignment(
     turnId: terminal ? "turn-fixture" : null,
     processGroupId: null,
     processStartIdentity: null,
+    processStartPending: false,
     pullRequest:
       state === "completed"
         ? {

@@ -45,6 +45,7 @@ export interface AssignmentPatch {
   readonly turnId?: string;
   readonly processGroupId?: number;
   readonly processStartIdentity?: string;
+  readonly processStartPending?: boolean;
   readonly pullRequest?: PullRequest;
   readonly error?: NormalizedError;
 }

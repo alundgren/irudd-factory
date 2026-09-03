@@ -49,6 +49,7 @@ const EXPECTED_EVENTS = [
   ASSIGNMENT_EVENTS.reserved,
   ASSIGNMENT_EVENTS.providerStartRequested,
   ASSIGNMENT_EVENTS.workspaceCreated,
+  ASSIGNMENT_EVENTS.providerProcessStartPending,
   ASSIGNMENT_EVENTS.providerThreadStarted,
   ASSIGNMENT_EVENTS.providerTurnStarted,
   ASSIGNMENT_EVENTS.providerTurnFinished,

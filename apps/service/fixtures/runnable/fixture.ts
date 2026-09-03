@@ -28,6 +28,7 @@ export const runnableFixture = {
         ASSIGNMENT_EVENTS.reserved,
         ASSIGNMENT_EVENTS.providerStartRequested,
         ASSIGNMENT_EVENTS.workspaceCreated,
+        ASSIGNMENT_EVENTS.providerProcessStartPending,
         ASSIGNMENT_EVENTS.providerThreadStarted,
         ASSIGNMENT_EVENTS.providerTurnFinished,
         ASSIGNMENT_EVENTS.completed,

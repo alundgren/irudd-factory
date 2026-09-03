@@ -56,6 +56,7 @@ interface AssignmentRow {
   readonly turn_id: string | null;
   readonly process_group_id: number | null;
   readonly process_start_identity: string | null;
+  readonly process_start_pending: number;
   readonly pull_request_json: string | null;
   readonly error_json: string | null;
   readonly created_at: string;
@@ -125,6 +126,7 @@ function decodeAssignment(row: AssignmentRow): Assignment {
     turnId: row.turn_id,
     processGroupId: row.process_group_id,
     processStartIdentity: row.process_start_identity,
+    processStartPending: row.process_start_pending === 1,
     pullRequest: decodeJsonOrNull(PullRequest, row.pull_request_json),
     error: decodeJsonOrNull(NormalizedError, row.error_json),
     createdAt: row.created_at,
@@ -315,6 +317,7 @@ export function openStateStore(
           workflow_digest, workflow_body, workspace_json, requested_model,
           requested_effort, observed_model, observed_effort, codex_version,
           thread_id, turn_id, process_group_id, process_start_identity,
+          process_start_pending,
           pull_request_json, error_json, created_at,
           updated_at, last_event_sequence
         ) VALUES (
@@ -323,6 +326,7 @@ export function openStateStore(
           $workflowDigest, $workflowBody, $workspaceJson, $requestedModel,
           $requestedEffort, $observedModel, $observedEffort, $codexVersion,
           $threadId, $turnId, $processGroupId, $processStartIdentity,
+          $processStartPending,
           $pullRequestJson, $errorJson, $createdAt,
           $updatedAt, $lastEventSequence
         )`,
@@ -350,6 +354,7 @@ export function openStateStore(
         turnId: value.turnId,
         processGroupId: value.processGroupId ?? null,
         processStartIdentity: value.processStartIdentity ?? null,
+        processStartPending: value.processStartPending ? 1 : 0,
         pullRequestJson: value.pullRequest
           ? JSON.stringify(value.pullRequest)
           : null,
@@ -476,6 +481,7 @@ export function openStateStore(
         turnId: null,
         processGroupId: null,
         processStartIdentity: null,
+        processStartPending: false,
         pullRequest: null,
         error: null,
         createdAt: input.timestamp,
@@ -541,6 +547,7 @@ export function openStateStore(
                turn_id = $turnId,
                process_group_id = $processGroupId,
                process_start_identity = $processStartIdentity,
+               process_start_pending = $processStartPending,
                pull_request_json = $pullRequestJson,
                error_json = $errorJson,
                updated_at = $updatedAt,
@@ -557,6 +564,7 @@ export function openStateStore(
           turnId: next.turnId,
           processGroupId: next.processGroupId ?? null,
           processStartIdentity: next.processStartIdentity ?? null,
+          processStartPending: next.processStartPending ? 1 : 0,
           pullRequestJson: next.pullRequest
             ? JSON.stringify(next.pullRequest)
             : null,
@@ -616,7 +624,9 @@ export function openStateStore(
               processGroupId: assignment.processGroupId,
               processStartIdentity: assignment.processStartIdentity,
             })
-          : "exited";
+          : assignment.processStartPending
+            ? "uncertain"
+            : "exited";
       const uncertain = outcome === "uncertain";
       appendEventSync(
         assignment.id,

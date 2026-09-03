@@ -41,6 +41,7 @@ const statements = [
     turn_id TEXT,
     process_group_id INTEGER,
     process_start_identity TEXT,
+    process_start_pending INTEGER NOT NULL CHECK (process_start_pending IN (0, 1)),
     pull_request_json TEXT,
     error_json TEXT,
     created_at TEXT NOT NULL,

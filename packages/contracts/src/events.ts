@@ -5,6 +5,7 @@ export const ASSIGNMENT_EVENTS = {
   interrupted: "assignment.interrupted",
   workspaceCreated: "workspace.created",
   providerStartRequested: "provider.start.requested",
+  providerProcessStartPending: "provider.process.start_pending",
   providerProcessStarted: "provider.process.started",
   providerSettingsObserved: "provider.settings.observed",
   providerThreadStarted: "provider.thread.started",

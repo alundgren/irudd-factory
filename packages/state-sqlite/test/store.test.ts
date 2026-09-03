@@ -3,6 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import type { AdmissionInput, Candidate } from "@irudd-factory/application";
 import { Effect } from "effect";
 import { openStateStore } from "../src/index.ts";
@@ -52,6 +55,27 @@ function admission(
     requestedEffort: "low",
     timestamp: "2026-01-01T00:00:00.000Z",
   };
+}
+
+function processIdentity(pid: number): string {
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  const startTime = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  if (!startTime) throw new Error("Test process has no start identity");
+  return `${pid}:${startTime}`;
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    await delay(20);
+  }
+  throw new Error(`Process ${pid} did not exit`);
 }
 
 describe("SQLite state store", () => {
@@ -256,6 +280,90 @@ describe("SQLite state store", () => {
       recovered.service.getAssignment("assignment-1"),
     );
     expect(assignment?.state).toBe("interrupted");
+    recovered.close();
+  });
+
+  test("terminates a stored detached process group during recovery", async () => {
+    const path = await databasePath();
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+    const pid = child.pid;
+    if (!pid) throw new Error("Test child has no PID");
+    child.unref();
+    try {
+      const first = openStateStore(path);
+      await Effect.runPromise(
+        first.service.admit(admission("first", "assignment-1", [candidate()])),
+      );
+      await Effect.runPromise(
+        first.service.appendEvent(
+          "assignment-1",
+          {
+            type: "provider.process.started",
+            timestamp: "2026-01-01T00:00:01.000Z",
+            detail: {},
+          },
+          {
+            processGroupId: pid,
+            processStartIdentity: processIdentity(pid),
+            processStartPending: false,
+          },
+        ),
+      );
+      first.close();
+
+      const recovered = openStateStore(path, { recover: true });
+      const assignment = await Effect.runPromise(
+        recovered.service.getAssignment("assignment-1"),
+      );
+      expect(assignment?.state).toBe("interrupted");
+      recovered.close();
+      await waitForProcessExit(pid);
+    } finally {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Recovery normally removed the process group already.
+      }
+    }
+  });
+
+  test("blocks capacity when a crash leaves process start pending", async () => {
+    const path = await databasePath();
+    const first = openStateStore(path);
+    await Effect.runPromise(
+      first.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      first.service.appendEvent(
+        "assignment-1",
+        {
+          type: "provider.process.start_pending",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          detail: {},
+        },
+        { processStartPending: true },
+      ),
+    );
+    first.close();
+
+    const recovered = openStateStore(path, { recover: true });
+    const assignment = await Effect.runPromise(
+      recovered.service.getAssignment("assignment-1"),
+    );
+    expect(assignment?.state).toBe("ownership_uncertain");
+    const busy = await Effect.runPromise(
+      recovered.service.admit(
+        admission("second", "assignment-2", [candidate("I_2", 2)]),
+      ),
+    );
+    expect(busy.receipt.result._tag).toBe("provider_busy");
     recovered.close();
   });
 

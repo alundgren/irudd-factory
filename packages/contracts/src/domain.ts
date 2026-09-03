@@ -81,6 +81,7 @@ export const Assignment = Schema.Struct({
   turnId: Schema.NullOr(Schema.String),
   processGroupId: Schema.optional(Schema.NullOr(Schema.Number)),
   processStartIdentity: Schema.optional(Schema.NullOr(Schema.String)),
+  processStartPending: Schema.optional(Schema.Boolean),
   pullRequest: Schema.NullOr(PullRequest),
   error: Schema.NullOr(NormalizedError),
   createdAt: Schema.String,
