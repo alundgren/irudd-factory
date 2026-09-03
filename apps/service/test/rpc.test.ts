@@ -804,6 +804,114 @@ describe("Factory RPC service", () => {
     expect((await getFactorySnapshot(rpcUrl)).assignment).toBeNull();
   });
 
+  test("does not retry a failed claim while discovery stays eligible", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-claim-tenure-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 20,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const base = fixture("runnable");
+    const claimFailureFixture = {
+      ...base,
+      name: "claim-tenure",
+      behavior: { ...base.behavior, claimOutcome: "unclaimed" as const },
+    };
+    let claimCalls = 0;
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, claimFailureFixture, {
+        onClaim: () => claimCalls++,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForAssignmentState(rpcUrl, "failed");
+    await delay(120);
+    expect(claimCalls).toBe(1);
+  });
+
+  test("preserves queue tenure across an operational validation failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-validation-retry-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 40,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    let validationUnavailable = true;
+    const completion = gate();
+    const calls = { revalidate: 0, claim: 0, workspace: 0, provider: 0 };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, fixture("runnable"), {
+        revalidateFailure: () =>
+          validationUnavailable ? "GitHub validation is unavailable" : null,
+        revalidateFailureCode: "github_discovery_failed",
+        beforeCompletion: () => completion.wait(),
+        onRevalidate: () => calls.revalidate++,
+        onClaim: () => calls.claim++,
+        onWorkspace: () => calls.workspace++,
+        onProviderRun: () => calls.provider++,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    const deadline = Date.now() + 3_000;
+    while (calls.revalidate === 0 && Date.now() < deadline) await delay(20);
+    expect(calls.revalidate).toBeGreaterThan(0);
+    await setDispatchPaused(rpcUrl, true);
+    const first = await listQueue(rpcUrl, { limit: 10 });
+    expect(first.items).toHaveLength(1);
+    expect(first.items[0]).toMatchObject({ startable: true, reason: null });
+    expect(calls).toMatchObject({ claim: 0, workspace: 0, provider: 0 });
+
+    await delay(100);
+    const second = await listQueue(rpcUrl, { limit: 10 });
+    expect(second.items[0]?.tenureId).toBe(first.items[0]?.tenureId);
+    expect(second.items[0]?.eligibleSince).toBe(first.items[0]?.eligibleSince);
+    expect(calls).toMatchObject({ claim: 0, workspace: 0, provider: 0 });
+
+    validationUnavailable = false;
+    await setDispatchPaused(rpcUrl, false);
+    await waitForAssignmentState(rpcUrl, "running");
+    expect(calls).toMatchObject({ claim: 1, workspace: 1, provider: 1 });
+    completion.release();
+  });
+
   test("exposes durable dispatch controls and stable queue pages", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-rpc-controls-"));
     roots.push(root);

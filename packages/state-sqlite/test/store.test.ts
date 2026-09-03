@@ -656,4 +656,63 @@ describe("SQLite state store", () => {
     ).toEqual({ count: 1 });
     opened.close();
   });
+
+  test("requires an ineligible observation before an admitted issue gets a new tenure", async () => {
+    const opened = openStateStore(await databasePath());
+    const observed = candidate();
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const [firstTenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    expect(firstTenure).toBeDefined();
+    await Effect.runPromise(
+      opened.service.admit({
+        ...admission("first", "assignment-1", [observed]),
+        queueTenureId: firstTenure!.tenureId,
+        slots: 1,
+        allowRetry: true,
+        source: "automatic",
+      }),
+    );
+
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    expect(
+      await Effect.runPromise(opened.service.getDispatchableQueue(10)),
+    ).toEqual([]);
+
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [],
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:03:00.000Z",
+      }),
+    );
+    const [secondTenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    expect(secondTenure).toMatchObject({
+      eligibleSince: "2026-01-01T00:03:00.000Z",
+    });
+    expect(secondTenure?.tenureId).not.toBe(firstTenure?.tenureId);
+    opened.close();
+  });
 });

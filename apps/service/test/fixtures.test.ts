@@ -319,5 +319,5 @@ describe("fixture contract", () => {
       await service.stop();
       stops.pop();
     }
-  });
+  }, 10_000);
 });

@@ -96,6 +96,14 @@ const statements = [
    WHERE ended_at IS NULL`,
   `CREATE INDEX queue_repository_active
    ON queue_tenures(issue_repository) WHERE ended_at IS NULL`,
+  `CREATE TABLE issue_queue_status (
+    issue_node_id TEXT PRIMARY KEY,
+    issue_repository TEXT NOT NULL,
+    eligible INTEGER NOT NULL CHECK (eligible IN (0, 1)),
+    observed_at TEXT NOT NULL
+  ) STRICT`,
+  `CREATE INDEX issue_queue_status_repository
+   ON issue_queue_status(issue_repository, eligible)`,
   `CREATE TABLE queue_tenure_versions (
     revision INTEGER PRIMARY KEY AUTOINCREMENT,
     tenure_id TEXT NOT NULL REFERENCES queue_tenures(id) ON DELETE CASCADE,

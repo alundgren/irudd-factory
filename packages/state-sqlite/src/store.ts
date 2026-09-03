@@ -106,6 +106,11 @@ interface DispatchStateRow {
   readonly updated_at: string;
 }
 
+interface IssueQueueStatusRow {
+  readonly issue_node_id: string;
+  readonly eligible: number;
+}
+
 function storageError(error: unknown): FactoryError {
   return error instanceof FactoryError
     ? error
@@ -569,18 +574,52 @@ export function openStateStore(
       });
   }
 
+  function setIssueQueueStatus(
+    issueNodeId: string,
+    repository: string,
+    eligible: boolean,
+    timestamp: string,
+  ): void {
+    database
+      .prepare(
+        `INSERT INTO issue_queue_status(
+           issue_node_id, issue_repository, eligible, observed_at
+         ) VALUES ($issueNodeId, $repository, $eligible, $observedAt)
+         ON CONFLICT(issue_node_id) DO UPDATE SET
+           issue_repository = excluded.issue_repository,
+           eligible = excluded.eligible,
+           observed_at = excluded.observed_at`,
+      )
+      .run({
+        issueNodeId,
+        repository,
+        eligible: eligible ? 1 : 0,
+        observedAt: timestamp,
+      });
+  }
+
   function reconcileQueueSync(input: QueueObservationInput): void {
     immediateTransaction(database, () => {
+      const repository = input.repository.toLowerCase();
       const currentRows = database
         .prepare(
           `SELECT * FROM queue_tenures
            WHERE issue_repository = $repository AND ended_at IS NULL`,
         )
         .all({
-          repository: input.repository,
+          repository,
         }) as unknown as ReadonlyArray<QueueTenureRow>;
       const currentByNode = new Map(
         currentRows.map((row) => [row.issue_node_id, row]),
+      );
+      const priorStatuses = database
+        .prepare(
+          `SELECT issue_node_id, eligible FROM issue_queue_status
+           WHERE issue_repository = $repository`,
+        )
+        .all({ repository }) as unknown as ReadonlyArray<IssueQueueStatusRow>;
+      const priorStatusByNode = new Map(
+        priorStatuses.map((row) => [row.issue_node_id, row.eligible]),
       );
       const observedNodes = new Set(
         input.candidates.map(({ candidate }) => candidate.issue.nodeId),
@@ -593,6 +632,16 @@ export function openStateStore(
             input.timestamp,
             "no_longer_eligible",
             "GitHub no longer reports this issue as eligible",
+          );
+        }
+      }
+      for (const status of priorStatuses) {
+        if (status.eligible === 1 && !observedNodes.has(status.issue_node_id)) {
+          setIssueQueueStatus(
+            status.issue_node_id,
+            repository,
+            false,
+            input.timestamp,
           );
         }
       }
@@ -644,12 +693,12 @@ export function openStateStore(
             });
           }
           recordQueueVersion(updated);
-        } else {
+        } else if (priorStatusByNode.get(issue.nodeId) !== 1) {
           const id = tenureId ?? `tenure-${randomUUID()}`;
           insert.run({
             id,
             issueNodeId: issue.nodeId,
-            issueRepository: issue.repository.toLowerCase(),
+            issueRepository: repository,
             issueNumber: issue.number,
             issueUrl: issue.url,
             issueTitle: issue.title,
@@ -671,6 +720,7 @@ export function openStateStore(
           }
           recordQueueVersion(created);
         }
+        setIssueQueueStatus(issue.nodeId, repository, true, input.timestamp);
       }
 
       const activeAssignments = database
@@ -679,7 +729,7 @@ export function openStateStore(
            WHERE issue_repository = $repository
              AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})`,
         )
-        .all({ repository: input.repository }) as unknown as ReadonlyArray<{
+        .all({ repository }) as unknown as ReadonlyArray<{
         readonly id: string;
         readonly issue_node_id: string;
       }>;
@@ -1210,6 +1260,7 @@ export function openStateStore(
             database.exec("DELETE FROM command_receipts");
             database.exec("DELETE FROM queue_tenure_versions");
             database.exec("DELETE FROM queue_tenures");
+            database.exec("DELETE FROM issue_queue_status");
             database.exec(
               `UPDATE dispatch_state
                SET paused = 0, codex_enabled = 1,
@@ -1274,6 +1325,24 @@ export function openStateStore(
                   timestamp,
                   "repository_removed",
                   "This repository is no longer configured",
+                );
+              }
+            }
+            const statuses = database
+              .prepare(
+                "SELECT issue_node_id, issue_repository FROM issue_queue_status WHERE eligible = 1",
+              )
+              .all() as unknown as ReadonlyArray<{
+              readonly issue_node_id: string;
+              readonly issue_repository: string;
+            }>;
+            for (const status of statuses) {
+              if (!configured.has(status.issue_repository)) {
+                setIssueQueueStatus(
+                  status.issue_node_id,
+                  status.issue_repository,
+                  false,
+                  timestamp,
                 );
               }
             }

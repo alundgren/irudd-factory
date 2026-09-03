@@ -156,7 +156,7 @@ export interface GitHubService {
   readonly discoverCandidates: (
     repository: string,
   ) => Effect.Effect<ReadonlyArray<Candidate>, FactoryError>;
-  readonly revalidateIssue?: (
+  readonly revalidateIssue: (
     candidate: Candidate,
   ) => Effect.Effect<Candidate, FactoryError>;
   readonly claimIssue: (

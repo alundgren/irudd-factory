@@ -105,11 +105,15 @@ export function fixtureDependencies(
     revalidateIssue: (candidate) =>
       Effect.gen(function* () {
         controls.onRevalidate?.();
-        if (controls.revalidateFailure) {
+        const revalidateFailure =
+          typeof controls.revalidateFailure === "function"
+            ? controls.revalidateFailure()
+            : controls.revalidateFailure;
+        if (revalidateFailure) {
           return yield* Effect.fail(
             new FactoryError({
-              code: "issue_ineligible",
-              message: controls.revalidateFailure,
+              code: controls.revalidateFailureCode ?? "issue_ineligible",
+              message: revalidateFailure,
             }),
           );
         }

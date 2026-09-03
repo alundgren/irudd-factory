@@ -10,6 +10,7 @@ import type {
 } from "@irudd-factory/contracts";
 import type {
   ClaimOutcome,
+  FactoryErrorCode,
   ProviderRunResult,
 } from "@irudd-factory/application";
 
@@ -90,7 +91,8 @@ export interface FixtureControls {
   readonly onProviderRun?: () => void;
   readonly onProviderInterrupted?: () => void;
   readonly onRevalidate?: () => void;
-  readonly revalidateFailure?: string;
+  readonly revalidateFailure?: string | (() => string | null);
+  readonly revalidateFailureCode?: FactoryErrorCode;
   readonly hideClaimedCandidates?: boolean;
   readonly cleanupUncertain?: boolean;
   readonly failAfterObservation?: {

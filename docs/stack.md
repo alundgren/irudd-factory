@@ -78,9 +78,11 @@ metadata, state, fake behavior, and expectations.
 
 ## Operations
 
-The service is currently started manually and binds to loopback. systemd,
-Tailscale exposure, authentication, polling, queues, cancellation, stall
-detection, and workspace cleanup remain deferred.
+The service is currently started manually and binds to loopback. It polls each
+configured repository, persists FIFO queue tenure and dispatch controls, and
+fills the configured Codex slots. Queue pages and pause or enable controls are
+available through Effect RPC. systemd, Tailscale exposure, authentication,
+cancellation, stall detection, and workspace cleanup remain deferred.
 
 ## Eligibility labels
 

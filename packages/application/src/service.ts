@@ -52,12 +52,10 @@ export function makeApplication(options: ApplicationOptions) {
       const provider = yield* Provider;
       const clock = yield* Clock;
 
-      if (github.revalidateIssue) {
-        yield* github.revalidateIssue({
-          issue: initial.issue,
-          workflow: initial.workflow,
-        });
-      }
+      yield* github.revalidateIssue({
+        issue: initial.issue,
+        workflow: initial.workflow,
+      });
       const claim = yield* github.claimIssue(initial.issue);
       if (claim !== "confirmed") {
         const code: FactoryErrorCode =
@@ -311,17 +309,11 @@ export function makeApplication(options: ApplicationOptions) {
         const queued = yield* state.getDispatchableQueue(100);
         if (queued.length === 0) return;
         for (const queuedCandidate of queued) {
-          const current = yield* (
-            github.revalidateIssue
-              ? github.revalidateIssue(queuedCandidate)
-              : Effect.fail(
-                  new FactoryError({
-                    code: "issue_ineligible",
-                    message: "Fresh GitHub validation is unavailable",
-                  }),
-                )
-          ).pipe(Effect.either);
+          const current = yield* github
+            .revalidateIssue(queuedCandidate)
+            .pipe(Effect.either);
           if (current._tag === "Left") {
+            if (current.left.code !== "issue_ineligible") return;
             const reason = failure("issue_ineligible", current.left);
             yield* state.rejectQueueTenure(
               queuedCandidate.tenureId,
@@ -457,9 +449,7 @@ export function makeApplication(options: ApplicationOptions) {
           }),
         );
       }
-      const current = github.revalidateIssue
-        ? yield* github.revalidateIssue(candidate)
-        : candidate;
+      const current = yield* github.revalidateIssue(candidate);
       const queueTenureId = yield* state.getActiveQueueTenureId(
         current.issue.nodeId,
       );
