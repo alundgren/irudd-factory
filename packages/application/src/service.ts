@@ -207,6 +207,8 @@ export function makeApplication(options: ApplicationOptions) {
     commandId: string,
     candidates: ReadonlyArray<import("./ports.ts").Candidate>,
     allowRetry = false,
+    queueTenureId?: string,
+    source: "manual" | "automatic" = "manual",
   ): Effect.Effect<
     CommandReceipt,
     FactoryError,
@@ -256,6 +258,8 @@ export function makeApplication(options: ApplicationOptions) {
         timestamp: clock.now(),
         slots: options.slots,
         allowRetry,
+        ...(queueTenureId ? { queueTenureId } : {}),
+        source,
       });
       const receipt = admission.receipt;
       if (admission.created && receipt.result._tag === "started") {
@@ -266,6 +270,113 @@ export function makeApplication(options: ApplicationOptions) {
         fiber.addObserver(() => inFlight.delete(fiber));
       }
       return receipt;
+    });
+
+  const observeRepositories = () =>
+    Effect.gen(function* () {
+      const state = yield* StateStore;
+      const github = yield* GitHub;
+      const clock = yield* Clock;
+      const timestamp = clock.now();
+      yield* state.endQueueTenuresOutsideRepositories(
+        options.repositories.map(({ repository }) => repository),
+        timestamp,
+      );
+      yield* Effect.forEach(
+        options.repositories,
+        ({ repository }) =>
+          github.discoverCandidates(repository).pipe(
+            Effect.flatMap((candidates) =>
+              state.reconcileQueue({
+                repository,
+                candidates: candidates.map((candidate) => ({ candidate })),
+                timestamp,
+              }),
+            ),
+            Effect.catchAll(() => Effect.void),
+          ),
+        { concurrency: "unbounded" },
+      );
+    });
+
+  const dispatchQueue = () =>
+    Effect.gen(function* () {
+      const state = yield* StateStore;
+      const github = yield* GitHub;
+      const clock = yield* Clock;
+      const controls = yield* state.getDispatchState();
+      if (controls.paused || !controls.codexEnabled) return;
+
+      while (true) {
+        const queued = yield* state.getDispatchableQueue(100);
+        if (queued.length === 0) return;
+        for (const queuedCandidate of queued) {
+          const current = yield* (
+            github.revalidateIssue
+              ? github.revalidateIssue(queuedCandidate)
+              : Effect.fail(
+                  new FactoryError({
+                    code: "issue_ineligible",
+                    message: "Fresh GitHub validation is unavailable",
+                  }),
+                )
+          ).pipe(Effect.either);
+          if (current._tag === "Left") {
+            const reason = failure("issue_ineligible", current.left);
+            yield* state.rejectQueueTenure(
+              queuedCandidate.tenureId,
+              clock.now(),
+              { code: reason.code, message: reason.message },
+            );
+            continue;
+          }
+          const receipt = yield* admitCandidates(
+            `automatic:${queuedCandidate.tenureId}`,
+            [current.right],
+            true,
+            queuedCandidate.tenureId,
+            "automatic",
+          );
+          if (
+            receipt.result._tag === "provider_busy" ||
+            receipt.result._tag === "dispatch_unavailable"
+          ) {
+            return;
+          }
+          if (receipt.result._tag === "no_candidate") {
+            yield* state.rejectQueueTenure(
+              queuedCandidate.tenureId,
+              clock.now(),
+              {
+                code: "admission_rejected",
+                message: "This issue could not reserve a Codex slot",
+              },
+            );
+          }
+        }
+      }
+    });
+
+  const pollAndDispatch = () =>
+    observeRepositories().pipe(Effect.zipRight(dispatchQueue()));
+
+  const startDispatcher = () =>
+    Effect.gen(function* () {
+      const state = yield* StateStore;
+      const clock = yield* Clock;
+      yield* state.endQueueTenuresOutsideRepositories(
+        options.repositories.map(({ repository }) => repository),
+        clock.now(),
+      );
+      const fiber = yield* Effect.sleep(options.pollIntervalMs).pipe(
+        Effect.zipRight(
+          pollAndDispatch().pipe(Effect.catchAll(() => Effect.void)),
+        ),
+        Effect.forever,
+        Effect.forkDaemon,
+      );
+      inFlight.add(fiber);
+      fiber.addObserver(() => inFlight.delete(fiber));
     });
 
   const runNextEligibleIssue = (commandId: string) =>
@@ -370,6 +481,34 @@ export function makeApplication(options: ApplicationOptions) {
       };
     });
 
+  const listQueue = (input: {
+    readonly limit: number;
+    readonly cursor?: string;
+    readonly watermark?: string;
+  }) =>
+    Effect.gen(function* () {
+      const state = yield* StateStore;
+      return yield* state.listQueue(input);
+    });
+
+  const setDispatchPaused = (paused: boolean) =>
+    Effect.gen(function* () {
+      const state = yield* StateStore;
+      const clock = yield* Clock;
+      const next = yield* state.setDispatchPaused(paused, clock.now());
+      if (!paused) yield* dispatchQueue();
+      return next;
+    });
+
+  const setCodexEnabled = (enabled: boolean) =>
+    Effect.gen(function* () {
+      const state = yield* StateStore;
+      const clock = yield* Clock;
+      const next = yield* state.setCodexEnabled(enabled, clock.now());
+      if (enabled) yield* dispatchQueue();
+      return next;
+    });
+
   const shutdown = (): Effect.Effect<void> =>
     Fiber.interruptAll(Array.from(inFlight));
 
@@ -377,6 +516,11 @@ export function makeApplication(options: ApplicationOptions) {
     runNextEligibleIssue,
     startIssue,
     getSnapshot,
+    listQueue,
+    setDispatchPaused,
+    setCodexEnabled,
+    pollAndDispatch,
+    startDispatcher,
     processAssignment,
     shutdown,
   } as const;

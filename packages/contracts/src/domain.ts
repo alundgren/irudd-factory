@@ -112,11 +112,18 @@ export const SelectionAmbiguousResult = Schema.TaggedStruct(
 export const ProviderBusyResult = Schema.TaggedStruct("provider_busy", {
   assignment: Assignment,
 });
+export const DispatchUnavailableResult = Schema.TaggedStruct(
+  "dispatch_unavailable",
+  {
+    reason: Schema.Literal("dispatch_paused", "codex_disabled"),
+  },
+);
 export const CommandResult = Schema.Union(
   StartedResult,
   NoCandidateResult,
   SelectionAmbiguousResult,
   ProviderBusyResult,
+  DispatchUnavailableResult,
 );
 export type CommandResult = typeof CommandResult.Type;
 
@@ -127,11 +134,44 @@ export const CommandReceipt = Schema.Struct({
 });
 export type CommandReceipt = typeof CommandReceipt.Type;
 
+export const QueueReason = Schema.Struct({
+  code: Schema.String,
+  message: Schema.String,
+});
+export type QueueReason = typeof QueueReason.Type;
+
+export const QueueEntry = Schema.Struct({
+  tenureId: Schema.String,
+  issue: IssueRef,
+  eligibleSince: Schema.String,
+  lastObservedAt: Schema.String,
+  endedAt: Schema.NullOr(Schema.String),
+  startable: Schema.Boolean,
+  reason: Schema.NullOr(QueueReason),
+});
+export type QueueEntry = typeof QueueEntry.Type;
+
+export const QueuePage = Schema.Struct({
+  items: Schema.Array(QueueEntry),
+  watermark: Schema.String,
+  nextCursor: Schema.NullOr(Schema.String),
+});
+export type QueuePage = typeof QueuePage.Type;
+
+export const DispatchState = Schema.Struct({
+  paused: Schema.Boolean,
+  codexEnabled: Schema.Boolean,
+  updatedAt: Schema.String,
+});
+export type DispatchState = typeof DispatchState.Type;
+
 export const FactorySnapshot = Schema.Struct({
   receipt: Schema.NullOr(CommandReceipt),
   assignment: Schema.NullOr(Assignment),
   assignments: Schema.optional(Schema.Array(Assignment)),
   events: Schema.Array(AssignmentEvent),
+  dispatch: Schema.optional(DispatchState),
+  queue: Schema.optional(QueuePage),
   configuration: Schema.optional(
     Schema.Struct({
       repositories: Schema.Array(

@@ -10,7 +10,10 @@ import { openStateStore } from "@irudd-factory/state-sqlite";
 import { Effect } from "effect";
 import {
   getFactorySnapshot,
+  listQueue,
   runNextEligibleIssue,
+  setCodexEnabled,
+  setDispatchPaused,
   startIssue,
 } from "../../cli/src/client.ts";
 import { fixtureIssue } from "../fixtures/factories.ts";
@@ -676,5 +679,206 @@ describe("Factory RPC service", () => {
       expect(receipt.result.assignment.requestedModel).toBe("override-model");
       expect(receipt.result.assignment.requestedEffort).toBe("high");
     }
+  });
+
+  test("automatic dispatch fills the configured Codex slots", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-auto-fill-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 20,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 2 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const base = fixture("runnable");
+    const automaticFixture = {
+      ...base,
+      name: "automatic-fill",
+      state: {
+        ...base.state,
+        candidates: [fixtureIssue(31), fixtureIssue(32)],
+      },
+    };
+    const enterRunning = gate();
+    const finish = gate();
+    const calls = { claim: 0, workspace: 0, provider: 0 };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, automaticFixture, {
+        beforeRunning: enterRunning.wait,
+        beforeCompletion: finish.wait,
+        onClaim: () => calls.claim++,
+        onWorkspace: () => calls.workspace++,
+        onProviderRun: () => calls.provider++,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    const deadline = Date.now() + 3_000;
+    let snapshot = await getFactorySnapshot(rpcUrl);
+    while ((snapshot.assignments?.length ?? 0) !== 2 && Date.now() < deadline) {
+      await delay(20);
+      snapshot = await getFactorySnapshot(rpcUrl);
+    }
+    expect(snapshot.assignments).toHaveLength(2);
+    expect(calls).toEqual({ claim: 2, workspace: 2, provider: 2 });
+    enterRunning.release();
+    finish.release();
+  });
+
+  test("fresh validation rejects stale queue work before side effects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-auto-stale-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 50,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const calls = { claim: 0, workspace: 0, provider: 0, revalidate: 0 };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, fixture("runnable"), {
+        revalidateFailure: "The issue changed after polling",
+        onRevalidate: () => calls.revalidate++,
+        onClaim: () => calls.claim++,
+        onWorkspace: () => calls.workspace++,
+        onProviderRun: () => calls.provider++,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    const deadline = Date.now() + 3_000;
+    let queue = await listQueue(rpcUrl, { limit: 10 });
+    while (
+      !queue.items.some(({ reason }) => reason?.code === "issue_ineligible") &&
+      Date.now() < deadline
+    ) {
+      await delay(20);
+      queue = await listQueue(rpcUrl, { limit: 10 });
+    }
+    expect(queue.items.some(({ startable }) => !startable)).toBe(true);
+    expect(calls.revalidate).toBeGreaterThan(0);
+    expect(calls).toMatchObject({ claim: 0, workspace: 0, provider: 0 });
+    expect((await getFactorySnapshot(rpcUrl)).assignment).toBeNull();
+  });
+
+  test("exposes durable dispatch controls and stable queue pages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-controls-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 30_000,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const base = fixture("empty");
+    const queuedFixture = {
+      ...base,
+      name: "queued-controls",
+      state: {
+        ...base.state,
+        candidates: [fixtureIssue(41), fixtureIssue(42), fixtureIssue(43)],
+        queue: {
+          candidates: [fixtureIssue(41), fixtureIssue(42), fixtureIssue(43)],
+        },
+      },
+    };
+    const seed = openStateStore(config.databasePath);
+    await Effect.runPromise(
+      seedFixture(queuedFixture).pipe(
+        Effect.provideService(StateStore, seed.service),
+      ),
+    );
+    seed.close();
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, queuedFixture),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    expect(await setDispatchPaused(rpcUrl, true)).toMatchObject({
+      paused: true,
+      codexEnabled: true,
+    });
+    const paused = await startIssue(
+      rpcUrl,
+      "paused-start",
+      "factory/fixture",
+      41,
+    );
+    expect(paused.result).toEqual({
+      _tag: "dispatch_unavailable",
+      reason: "dispatch_paused",
+    });
+    expect(await setCodexEnabled(rpcUrl, false)).toMatchObject({
+      paused: true,
+      codexEnabled: false,
+    });
+    await setDispatchPaused(rpcUrl, false);
+    const disabled = await startIssue(
+      rpcUrl,
+      "disabled-start",
+      "factory/fixture",
+      41,
+    );
+    expect(disabled.result).toEqual({
+      _tag: "dispatch_unavailable",
+      reason: "codex_disabled",
+    });
+    expect((await getFactorySnapshot(rpcUrl)).assignment).toBeNull();
+    const first = await listQueue(rpcUrl, { limit: 1 });
+    const second = await listQueue(rpcUrl, {
+      limit: 2,
+      cursor: first.nextCursor!,
+      watermark: first.watermark,
+    });
+    expect(first.items.map(({ issue }) => issue.number)).toEqual([41]);
+    expect(second.items.map(({ issue }) => issue.number)).toEqual([42, 43]);
   });
 });

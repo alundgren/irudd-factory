@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   mkdirSync,
@@ -14,6 +15,7 @@ import type {
   AdmissionInput,
   AssignmentPatch,
   AdmissionResult,
+  QueueObservationInput,
   StateStoreService,
 } from "@irudd-factory/application";
 import { FactoryError, StateStore } from "@irudd-factory/application";
@@ -25,6 +27,8 @@ import {
   ASSIGNMENT_EVENTS,
   type CommandReceipt,
   CommandResult,
+  type DispatchState,
+  type QueueEntry,
   NormalizedError,
   PullRequest,
   WorkspacePaths,
@@ -76,6 +80,30 @@ interface ReceiptRow {
   readonly command_id: string;
   readonly result_json: string;
   readonly created_at: string;
+}
+
+interface QueueTenureRow {
+  readonly id: string;
+  readonly issue_node_id: string;
+  readonly issue_repository: string;
+  readonly issue_number: number;
+  readonly issue_url: string;
+  readonly issue_title: string;
+  readonly starting_commit: string;
+  readonly workflow_blob_id: string;
+  readonly workflow_digest: string;
+  readonly workflow_body: string;
+  readonly eligible_since: string;
+  readonly last_observed_at: string;
+  readonly ended_at: string | null;
+  readonly reason_code: string | null;
+  readonly reason_message: string | null;
+}
+
+interface DispatchStateRow {
+  readonly paused: number;
+  readonly codex_enabled: number;
+  readonly updated_at: string;
 }
 
 function storageError(error: unknown): FactoryError {
@@ -150,6 +178,35 @@ function decodeReceipt(row: ReceiptRow): CommandReceipt {
     commandId: row.command_id,
     result: decodeJson(CommandResult, row.result_json),
     createdAt: row.created_at,
+  };
+}
+
+function decodeQueueEntry(row: QueueTenureRow): QueueEntry {
+  return {
+    tenureId: row.id,
+    issue: {
+      nodeId: row.issue_node_id,
+      repository: row.issue_repository,
+      number: row.issue_number,
+      url: row.issue_url,
+      title: row.issue_title,
+    },
+    eligibleSince: row.eligible_since,
+    lastObservedAt: row.last_observed_at,
+    endedAt: row.ended_at,
+    startable: row.ended_at === null,
+    reason:
+      row.reason_code && row.reason_message
+        ? { code: row.reason_code, message: row.reason_message }
+        : null,
+  };
+}
+
+function decodeDispatchState(row: DispatchStateRow): DispatchState {
+  return {
+    paused: row.paused === 1,
+    codexEnabled: row.codex_enabled === 1,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -393,10 +450,424 @@ export function openStateStore(
       .run({ sequence, id: assignmentId });
   }
 
+  function recordQueueVersion(row: QueueTenureRow): void {
+    database
+      .prepare(
+        `INSERT INTO queue_tenure_versions(
+           tenure_id, issue_node_id, issue_repository, issue_number,
+           issue_url, issue_title, starting_commit, workflow_blob_id,
+           workflow_digest, workflow_body, eligible_since, last_observed_at,
+           ended_at, reason_code, reason_message
+         ) VALUES (
+           $tenureId, $issueNodeId, $issueRepository, $issueNumber,
+           $issueUrl, $issueTitle, $startingCommit, $workflowBlobId,
+           $workflowDigest, $workflowBody, $eligibleSince, $lastObservedAt,
+           $endedAt, $reasonCode, $reasonMessage
+         )`,
+      )
+      .run({
+        tenureId: row.id,
+        issueNodeId: row.issue_node_id,
+        issueRepository: row.issue_repository,
+        issueNumber: row.issue_number,
+        issueUrl: row.issue_url,
+        issueTitle: row.issue_title,
+        startingCommit: row.starting_commit,
+        workflowBlobId: row.workflow_blob_id,
+        workflowDigest: row.workflow_digest,
+        workflowBody: row.workflow_body,
+        eligibleSince: row.eligible_since,
+        lastObservedAt: row.last_observed_at,
+        endedAt: row.ended_at,
+        reasonCode: row.reason_code,
+        reasonMessage: row.reason_message,
+      });
+  }
+
+  function endTenure(
+    tenureId: string,
+    timestamp: string,
+    code: string,
+    message: string,
+  ): boolean {
+    const changed =
+      database
+        .prepare(
+          `UPDATE queue_tenures
+           SET ended_at = $endedAt,
+               last_observed_at = $lastObservedAt,
+               reason_code = $reasonCode,
+               reason_message = $reasonMessage
+           WHERE id = $id AND ended_at IS NULL`,
+        )
+        .run({
+          endedAt: timestamp,
+          lastObservedAt: timestamp,
+          reasonCode: code,
+          reasonMessage: message,
+          id: tenureId,
+        }).changes > 0;
+    if (changed) {
+      const row = database
+        .prepare("SELECT * FROM queue_tenures WHERE id = $id")
+        .get({ id: tenureId }) as QueueTenureRow | undefined;
+      if (!row) {
+        throw new FactoryError({
+          code: "state_store_failed",
+          message: `Queue tenure ${tenureId} disappeared after update`,
+        });
+      }
+      recordQueueVersion(row);
+    }
+    return changed;
+  }
+
+  function recordEligibilityLoss(
+    assignmentId: string,
+    issueNodeId: string,
+    timestamp: string,
+    code: string,
+    message: string,
+  ): void {
+    const prior = database
+      .prepare(
+        `SELECT eligible, reason_code, reason_message
+         FROM issue_eligibility_observations
+         WHERE assignment_id = $assignmentId
+         ORDER BY sequence DESC LIMIT 1`,
+      )
+      .get({ assignmentId }) as
+      | {
+          readonly eligible: number;
+          readonly reason_code: string | null;
+          readonly reason_message: string | null;
+        }
+      | undefined;
+    if (
+      prior?.eligible === 0 &&
+      prior.reason_code === code &&
+      prior.reason_message === message
+    ) {
+      return;
+    }
+    database
+      .prepare(
+        `INSERT INTO issue_eligibility_observations(
+           assignment_id, issue_node_id, observed_at, eligible,
+           reason_code, reason_message
+         ) VALUES (
+           $assignmentId, $issueNodeId, $observedAt, 0,
+           $reasonCode, $reasonMessage
+         )`,
+      )
+      .run({
+        assignmentId,
+        issueNodeId,
+        observedAt: timestamp,
+        reasonCode: code,
+        reasonMessage: message,
+      });
+  }
+
+  function reconcileQueueSync(input: QueueObservationInput): void {
+    immediateTransaction(database, () => {
+      const currentRows = database
+        .prepare(
+          `SELECT * FROM queue_tenures
+           WHERE issue_repository = $repository AND ended_at IS NULL`,
+        )
+        .all({
+          repository: input.repository,
+        }) as unknown as ReadonlyArray<QueueTenureRow>;
+      const currentByNode = new Map(
+        currentRows.map((row) => [row.issue_node_id, row]),
+      );
+      const observedNodes = new Set(
+        input.candidates.map(({ candidate }) => candidate.issue.nodeId),
+      );
+
+      for (const row of currentRows) {
+        if (!observedNodes.has(row.issue_node_id)) {
+          endTenure(
+            row.id,
+            input.timestamp,
+            "no_longer_eligible",
+            "GitHub no longer reports this issue as eligible",
+          );
+        }
+      }
+
+      const update = database.prepare(
+        `UPDATE queue_tenures SET
+           issue_url = $issueUrl,
+           issue_title = $issueTitle,
+           starting_commit = $startingCommit,
+           workflow_blob_id = $workflowBlobId,
+           workflow_digest = $workflowDigest,
+           workflow_body = $workflowBody,
+           last_observed_at = $lastObservedAt
+         WHERE id = $id AND ended_at IS NULL`,
+      );
+      const insert = database.prepare(
+        `INSERT INTO queue_tenures(
+           id, issue_node_id, issue_repository, issue_number, issue_url,
+           issue_title, starting_commit, workflow_blob_id, workflow_digest,
+           workflow_body, eligible_since, last_observed_at
+         ) VALUES (
+           $id, $issueNodeId, $issueRepository, $issueNumber, $issueUrl,
+           $issueTitle, $startingCommit, $workflowBlobId, $workflowDigest,
+           $workflowBody, $eligibleSince, $lastObservedAt
+         )`,
+      );
+      for (const { candidate, tenureId } of input.candidates) {
+        const issue = candidate.issue;
+        const workflow = candidate.workflow;
+        const current = currentByNode.get(issue.nodeId);
+        if (current) {
+          update.run({
+            issueUrl: issue.url,
+            issueTitle: issue.title,
+            startingCommit: workflow.startingCommit,
+            workflowBlobId: workflow.blobId,
+            workflowDigest: workflow.digest,
+            workflowBody: workflow.body,
+            lastObservedAt: input.timestamp,
+            id: current.id,
+          });
+          const updated = database
+            .prepare("SELECT * FROM queue_tenures WHERE id = $id")
+            .get({ id: current.id }) as QueueTenureRow | undefined;
+          if (!updated) {
+            throw new FactoryError({
+              code: "state_store_failed",
+              message: `Queue tenure ${current.id} disappeared after observation`,
+            });
+          }
+          recordQueueVersion(updated);
+        } else {
+          const id = tenureId ?? `tenure-${randomUUID()}`;
+          insert.run({
+            id,
+            issueNodeId: issue.nodeId,
+            issueRepository: issue.repository.toLowerCase(),
+            issueNumber: issue.number,
+            issueUrl: issue.url,
+            issueTitle: issue.title,
+            startingCommit: workflow.startingCommit,
+            workflowBlobId: workflow.blobId,
+            workflowDigest: workflow.digest,
+            workflowBody: workflow.body,
+            eligibleSince: input.timestamp,
+            lastObservedAt: input.timestamp,
+          });
+          const created = database
+            .prepare("SELECT * FROM queue_tenures WHERE id = $id")
+            .get({ id }) as QueueTenureRow | undefined;
+          if (!created) {
+            throw new FactoryError({
+              code: "state_store_failed",
+              message: `Queue tenure ${id} disappeared after creation`,
+            });
+          }
+          recordQueueVersion(created);
+        }
+      }
+
+      const activeAssignments = database
+        .prepare(
+          `SELECT id, issue_node_id FROM assignments
+           WHERE issue_repository = $repository
+             AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})`,
+        )
+        .all({ repository: input.repository }) as unknown as ReadonlyArray<{
+        readonly id: string;
+        readonly issue_node_id: string;
+      }>;
+      for (const assignment of activeAssignments) {
+        if (!observedNodes.has(assignment.issue_node_id)) {
+          recordEligibilityLoss(
+            assignment.id,
+            assignment.issue_node_id,
+            input.timestamp,
+            "no_longer_eligible",
+            "GitHub no longer reports this active issue as eligible",
+          );
+        }
+      }
+    });
+  }
+
+  function dispatchStateSync(): DispatchState {
+    const row = database
+      .prepare(
+        "SELECT paused, codex_enabled, updated_at FROM dispatch_state WHERE singleton = 1",
+      )
+      .get() as DispatchStateRow | undefined;
+    if (!row) {
+      throw new FactoryError({
+        code: "state_store_failed",
+        message: "Dispatch state is missing",
+      });
+    }
+    return decodeDispatchState(row);
+  }
+
+  function listQueueSync(input: {
+    readonly limit: number;
+    readonly cursor?: string;
+    readonly watermark?: string;
+  }) {
+    if (
+      !Number.isSafeInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 100
+    ) {
+      throw new FactoryError({
+        code: "queue_page_invalid",
+        message: "Queue page limit must be an integer from 1 through 100",
+      });
+    }
+    const offset = input.cursor === undefined ? 0 : Number(input.cursor);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new FactoryError({
+        code: "queue_page_invalid",
+        message: "Queue cursor is invalid",
+      });
+    }
+    if (offset > 0 && !input.watermark) {
+      throw new FactoryError({
+        code: "queue_page_invalid",
+        message: "Queue cursor requires its page watermark",
+      });
+    }
+    let revision: number;
+    if (input.watermark) {
+      const match = /^queue-(0|[1-9][0-9]*)$/.exec(input.watermark);
+      revision = Number(match?.[1]);
+      if (!match || !Number.isSafeInteger(revision)) {
+        throw new FactoryError({
+          code: "queue_page_invalid",
+          message: "Queue watermark is invalid",
+        });
+      }
+      const latest = database
+        .prepare("SELECT max(revision) AS revision FROM queue_tenure_versions")
+        .get() as { readonly revision: number | null };
+      if (revision > (latest.revision ?? 0)) {
+        throw new FactoryError({
+          code: "queue_page_invalid",
+          message: "Queue watermark is invalid",
+        });
+      }
+    } else {
+      const latest = database
+        .prepare("SELECT max(revision) AS revision FROM queue_tenure_versions")
+        .get() as { readonly revision: number | null };
+      revision = latest.revision ?? 0;
+    }
+    const rows = database
+      .prepare(
+        `WITH latest AS (
+           SELECT tenure_id, max(revision) AS revision
+           FROM queue_tenure_versions
+           WHERE revision <= $watermark
+           GROUP BY tenure_id
+         )
+         SELECT
+           version.tenure_id AS id,
+           version.issue_node_id,
+           version.issue_repository,
+           version.issue_number,
+           version.issue_url,
+           version.issue_title,
+           version.starting_commit,
+           version.workflow_blob_id,
+           version.workflow_digest,
+           version.workflow_body,
+           version.eligible_since,
+           version.last_observed_at,
+           version.ended_at,
+           version.reason_code,
+           version.reason_message
+         FROM latest
+         JOIN queue_tenure_versions AS version
+           ON version.revision = latest.revision
+         WHERE version.ended_at IS NULL OR version.reason_code != 'admitted'
+         ORDER BY
+           CASE WHEN version.ended_at IS NULL THEN 0 ELSE 1 END,
+           CASE WHEN version.ended_at IS NULL THEN version.eligible_since END ASC,
+           CASE WHEN version.ended_at IS NULL THEN version.issue_repository END ASC,
+           CASE WHEN version.ended_at IS NULL THEN version.issue_number END ASC,
+           CASE WHEN version.ended_at IS NULL THEN version.issue_node_id END ASC,
+           CASE WHEN version.ended_at IS NULL THEN version.tenure_id END ASC,
+           version.ended_at DESC,
+           version.tenure_id ASC
+         LIMIT $limit OFFSET $offset`,
+      )
+      .all({
+        watermark: revision,
+        limit: input.limit + 1,
+        offset,
+      }) as unknown as ReadonlyArray<QueueTenureRow>;
+    const entries = rows.map(decodeQueueEntry);
+    const items = entries.slice(0, input.limit);
+    const nextOffset = offset + items.length;
+    return {
+      items,
+      watermark: `queue-${revision}`,
+      nextCursor: entries.length > input.limit ? String(nextOffset) : null,
+    };
+  }
+
   function admitSync(input: AdmissionInput): AdmissionResult {
     return immediateTransaction(database, () => {
       const existing = getReceiptSync(input.commandId);
       if (existing) return { receipt: existing, created: false };
+
+      const controls = dispatchStateSync();
+      if (controls.paused || !controls.codexEnabled) {
+        const result: CommandResult = {
+          _tag: "dispatch_unavailable",
+          reason: controls.paused ? "dispatch_paused" : "codex_disabled",
+        };
+        return {
+          receipt:
+            input.source === "automatic"
+              ? {
+                  commandId: input.commandId,
+                  result,
+                  createdAt: input.timestamp,
+                }
+              : insertReceipt(input.commandId, result, input.timestamp),
+          created: true,
+        };
+      }
+
+      if (input.queueTenureId) {
+        const tenure = database
+          .prepare(
+            `SELECT issue_node_id FROM queue_tenures
+             WHERE id = $id AND ended_at IS NULL`,
+          )
+          .get({ id: input.queueTenureId }) as
+          | { readonly issue_node_id: string }
+          | undefined;
+        if (
+          !tenure ||
+          !input.candidates.some(
+            ({ issue }) => issue.nodeId === tenure.issue_node_id,
+          )
+        ) {
+          return {
+            receipt: insertReceipt(
+              input.commandId,
+              { _tag: "no_candidate" },
+              input.timestamp,
+            ),
+            created: true,
+          };
+        }
+      }
 
       const activeRows = database
         .prepare(
@@ -489,6 +960,20 @@ export function openStateStore(
         lastEventSequence: 0,
       };
       insertAssignment(value);
+      if (input.queueTenureId) {
+        const ended = endTenure(
+          input.queueTenureId,
+          input.timestamp,
+          "admitted",
+          "Factory reserved this issue for an attempt",
+        );
+        if (!ended) {
+          throw new FactoryError({
+            code: "admission_invariant_failed",
+            message: `Queue tenure ${input.queueTenureId} was not active during admission`,
+          });
+        }
+      }
       const sequence = insertEvent(
         value.id,
         ASSIGNMENT_EVENTS.reserved,
@@ -710,6 +1195,8 @@ export function openStateStore(
             assignment: current,
             assignments,
             events,
+            dispatch: dispatchStateSync(),
+            queue: listQueueSync({ limit: 32 }),
           };
         },
         catch: storageError,
@@ -718,11 +1205,23 @@ export function openStateStore(
       Effect.try({
         try: () => {
           immediateTransaction(database, () => {
+            database.exec("DELETE FROM issue_eligibility_observations");
             database.exec("DELETE FROM assignment_events");
             database.exec("DELETE FROM assignments");
             database.exec("DELETE FROM command_receipts");
+            database.exec("DELETE FROM queue_tenure_versions");
+            database.exec("DELETE FROM queue_tenures");
+            database.exec(
+              `UPDATE dispatch_state
+               SET paused = 0, codex_enabled = 1,
+                   updated_at = '1970-01-01T00:00:00.000Z'
+               WHERE singleton = 1`,
+            );
             database.exec(
               "DELETE FROM sqlite_sequence WHERE name = 'assignment_events'",
+            );
+            database.exec(
+              "DELETE FROM sqlite_sequence WHERE name = 'queue_tenure_versions'",
             );
           });
         },
@@ -749,6 +1248,177 @@ export function openStateStore(
             }
             setLastEventSequence(assignment.id, lastSequence);
           });
+        },
+        catch: storageError,
+      }),
+    reconcileQueue: (input) =>
+      Effect.try({ try: () => reconcileQueueSync(input), catch: storageError }),
+    endQueueTenuresOutsideRepositories: (repositories, timestamp) =>
+      Effect.try({
+        try: () => {
+          immediateTransaction(database, () => {
+            const configured = new Set(
+              repositories.map((value) => value.toLowerCase()),
+            );
+            const rows = database
+              .prepare(
+                "SELECT id, issue_repository FROM queue_tenures WHERE ended_at IS NULL",
+              )
+              .all() as unknown as ReadonlyArray<{
+              readonly id: string;
+              readonly issue_repository: string;
+            }>;
+            for (const row of rows) {
+              if (!configured.has(row.issue_repository)) {
+                endTenure(
+                  row.id,
+                  timestamp,
+                  "repository_removed",
+                  "This repository is no longer configured",
+                );
+              }
+            }
+          });
+        },
+        catch: storageError,
+      }),
+    getDispatchableQueue: (limit) =>
+      Effect.try({
+        try: () => {
+          const rows = database
+            .prepare(
+              `SELECT * FROM queue_tenures
+               WHERE ended_at IS NULL
+               ORDER BY eligible_since, issue_repository, issue_number,
+                        issue_node_id, id
+               LIMIT $limit`,
+            )
+            .all({ limit }) as unknown as ReadonlyArray<QueueTenureRow>;
+          return rows.map((row) => ({
+            tenureId: row.id,
+            eligibleSince: row.eligible_since,
+            issue: decodeQueueEntry(row).issue,
+            workflow: {
+              startingCommit: row.starting_commit,
+              blobId: row.workflow_blob_id,
+              digest: row.workflow_digest,
+              body: row.workflow_body,
+            },
+          }));
+        },
+        catch: storageError,
+      }),
+    rejectQueueTenure: (tenureId, timestamp, reason) =>
+      Effect.try({
+        try: () => {
+          immediateTransaction(database, () => {
+            const row = database
+              .prepare("SELECT issue_node_id FROM queue_tenures WHERE id = $id")
+              .get({ id: tenureId }) as
+              | { readonly issue_node_id: string }
+              | undefined;
+            if (!row) return;
+            endTenure(tenureId, timestamp, reason.code, reason.message);
+            const assignments = database
+              .prepare(
+                `SELECT id FROM assignments
+                 WHERE issue_node_id = $issueNodeId
+                   AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})`,
+              )
+              .all({
+                issueNodeId: row.issue_node_id,
+              }) as unknown as ReadonlyArray<{
+              readonly id: string;
+            }>;
+            for (const assignment of assignments) {
+              recordEligibilityLoss(
+                assignment.id,
+                row.issue_node_id,
+                timestamp,
+                reason.code,
+                reason.message,
+              );
+            }
+          });
+        },
+        catch: storageError,
+      }),
+    listQueue: (input) =>
+      Effect.try({ try: () => listQueueSync(input), catch: storageError }),
+    getDispatchState: () =>
+      Effect.try({ try: dispatchStateSync, catch: storageError }),
+    setDispatchPaused: (paused, timestamp) =>
+      Effect.try({
+        try: () => {
+          database
+            .prepare(
+              `UPDATE dispatch_state
+               SET paused = $paused, updated_at = $updatedAt
+               WHERE singleton = 1`,
+            )
+            .run({ paused: paused ? 1 : 0, updatedAt: timestamp });
+          return dispatchStateSync();
+        },
+        catch: storageError,
+      }),
+    setCodexEnabled: (enabled, timestamp) =>
+      Effect.try({
+        try: () => {
+          database
+            .prepare(
+              `UPDATE dispatch_state
+               SET codex_enabled = $enabled, updated_at = $updatedAt
+               WHERE singleton = 1`,
+            )
+            .run({ enabled: enabled ? 1 : 0, updatedAt: timestamp });
+          return dispatchStateSync();
+        },
+        catch: storageError,
+      }),
+    getLatestEligibilityObservation: (assignmentId) =>
+      Effect.try({
+        try: () => {
+          const row = database
+            .prepare(
+              `SELECT sequence, assignment_id, issue_node_id, observed_at,
+                      eligible, reason_code, reason_message
+               FROM issue_eligibility_observations
+               WHERE assignment_id = $assignmentId
+               ORDER BY sequence DESC LIMIT 1`,
+            )
+            .get({ assignmentId }) as
+            | {
+                readonly sequence: number;
+                readonly assignment_id: string;
+                readonly issue_node_id: string;
+                readonly observed_at: string;
+                readonly eligible: number;
+                readonly reason_code: string | null;
+                readonly reason_message: string | null;
+              }
+            | undefined;
+          if (!row) return null;
+          if (
+            row.eligible !== 0 ||
+            row.reason_code === null ||
+            row.reason_message === null
+          ) {
+            throw new FactoryError({
+              code: "state_store_failed",
+              message: `Eligibility observation ${row.sequence} is invalid`,
+            });
+          }
+          return {
+            sequence: row.sequence,
+            assignmentId: row.assignment_id,
+            issueNodeId: row.issue_node_id,
+            observedAt: row.observed_at,
+            eligible: false as const,
+            reason: {
+              code: row.reason_code,
+              message: row.reason_message,
+            },
+          };
         },
         catch: storageError,
       }),

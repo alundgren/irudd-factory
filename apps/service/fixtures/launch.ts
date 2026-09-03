@@ -27,13 +27,19 @@ export async function launchFixture(
   ]) {
     await rm(path, { force: true });
   }
+  const repositories = Array.from(
+    new Set([
+      FIXTURE_REPOSITORY,
+      ...fixture.state.candidates.map(({ repository }) => repository),
+      ...(fixture.state.queue?.candidates.map(({ repository }) => repository) ??
+        []),
+    ]),
+  );
   const config: FactoryConfig = {
-    repositories: [
-      {
-        repository: FIXTURE_REPOSITORY,
-        codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT },
-      },
-    ],
+    repositories: repositories.map((repository) => ({
+      repository,
+      codex: { model: FIXTURE_MODEL, reasoningEffort: FIXTURE_EFFORT },
+    })),
     databasePath,
     workspaceRoot: resolve(root, "workspaces"),
     bindHost: "127.0.0.1",

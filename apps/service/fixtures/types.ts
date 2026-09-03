@@ -26,6 +26,14 @@ export interface FixtureState {
   readonly candidates: ReadonlyArray<IssueRef>;
   readonly assignment: Assignment | null;
   readonly events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>;
+  readonly queue?: {
+    readonly candidates: ReadonlyArray<IssueRef>;
+    readonly stale?: boolean;
+  };
+  readonly dispatch?: {
+    readonly paused: boolean;
+    readonly codexEnabled: boolean;
+  };
 }
 
 export interface FixtureBehavior {
@@ -81,6 +89,8 @@ export interface FixtureControls {
   readonly onWorkspace?: () => void;
   readonly onProviderRun?: () => void;
   readonly onProviderInterrupted?: () => void;
+  readonly onRevalidate?: () => void;
+  readonly revalidateFailure?: string;
   readonly cleanupUncertain?: boolean;
   readonly failAfterObservation?: {
     readonly model?: string;

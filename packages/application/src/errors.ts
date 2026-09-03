@@ -52,6 +52,7 @@ export const FACTORY_ERROR_CODES = [
   "provider_timeout_invalid",
   "pull_request_unverified",
   "pull_request_verification_failed",
+  "queue_page_invalid",
   "repository_invalid",
   "repository_not_configured",
   "issue_ineligible",

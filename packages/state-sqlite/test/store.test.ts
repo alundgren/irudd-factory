@@ -23,13 +23,17 @@ async function databasePath(): Promise<string> {
   return join(root, "factory.db");
 }
 
-function candidate(nodeId = "I_1", number = 1): Candidate {
+function candidate(
+  nodeId = "I_1",
+  number = 1,
+  repository = "owner/repository",
+): Candidate {
   return {
     issue: {
       nodeId,
-      repository: "owner/repository",
+      repository,
       number,
-      url: `https://github.com/owner/repository/issues/${number}`,
+      url: `https://github.com/${repository}/issues/${number}`,
       title: `Issue ${number}`,
     },
     workflow: {
@@ -98,7 +102,7 @@ describe("SQLite state store", () => {
           .prepare("SELECT version FROM schema_migrations")
           .get() as { version: number } | undefined
       )?.version,
-    ).toBe(2);
+    ).toBe(3);
     opened.close();
   });
 
@@ -401,6 +405,255 @@ describe("SQLite state store", () => {
       ),
     );
     expect(busy.receipt.result._tag).toBe("provider_busy");
+    opened.close();
+  });
+
+  test("orders matching observations by repository, issue, and node ID", async () => {
+    const opened = openStateStore(await databasePath());
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "zeta/repository",
+        candidates: [{ candidate: candidate("I_z", 7, "zeta/repository") }],
+        timestamp,
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "alpha/repository",
+        candidates: [
+          { candidate: candidate("I_b", 7, "alpha/repository") },
+          { candidate: candidate("I_a", 7, "alpha/repository") },
+          { candidate: candidate("I_early", 3, "alpha/repository") },
+        ],
+        timestamp,
+      }),
+    );
+    const queue = await Effect.runPromise(
+      opened.service.listQueue({ limit: 10 }),
+    );
+    expect(queue.items.map(({ issue }) => issue.nodeId)).toEqual([
+      "I_early",
+      "I_a",
+      "I_b",
+      "I_z",
+    ]);
+    opened.close();
+  });
+
+  test("persists queue tenure and dispatch controls across restart", async () => {
+    const path = await databasePath();
+    const first = openStateStore(path);
+    await Effect.runPromise(
+      first.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: candidate() }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      first.service.setDispatchPaused(true, "2026-01-01T00:00:01.000Z"),
+    );
+    await Effect.runPromise(
+      first.service.setCodexEnabled(false, "2026-01-01T00:00:02.000Z"),
+    );
+    first.close();
+
+    const second = openStateStore(path);
+    const queue = await Effect.runPromise(
+      second.service.listQueue({ limit: 10 }),
+    );
+    expect(queue.items).toHaveLength(1);
+    expect(queue.items[0]?.eligibleSince).toBe("2026-01-01T00:00:00.000Z");
+    expect(await Effect.runPromise(second.service.getDispatchState())).toEqual({
+      paused: true,
+      codexEnabled: false,
+      updatedAt: "2026-01-01T00:00:02.000Z",
+    });
+    second.close();
+  });
+
+  test("ends and recreates tenure after eligibility loss", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: candidate() }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [],
+        timestamp: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: candidate() }],
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    const queue = await Effect.runPromise(
+      opened.service.listQueue({ limit: 10 }),
+    );
+    expect(queue.items).toHaveLength(2);
+    expect(queue.items[0]).toMatchObject({
+      startable: true,
+      eligibleSince: "2026-01-01T00:02:00.000Z",
+    });
+    expect(queue.items[1]).toMatchObject({
+      startable: false,
+      reason: { code: "no_longer_eligible" },
+    });
+    opened.close();
+  });
+
+  test("keeps a queue traversal stable while observations change", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [
+          { candidate: candidate("I_1", 1) },
+          { candidate: candidate("I_2", 2) },
+          { candidate: candidate("I_3", 3) },
+        ],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const first = await Effect.runPromise(
+      opened.service.listQueue({ limit: 1 }),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: candidate("I_1", 1) }],
+        timestamp: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    const second = await Effect.runPromise(
+      opened.service.listQueue({
+        limit: 2,
+        cursor: first.nextCursor!,
+        watermark: first.watermark,
+      }),
+    );
+    expect(second.items.map(({ issue }) => issue.number)).toEqual([2, 3]);
+    opened.close();
+  });
+
+  test("records eligibility loss for an active issue", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [],
+        timestamp: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    expect(
+      opened.database
+        .prepare(
+          `SELECT eligible, reason_code FROM issue_eligibility_observations
+           WHERE assignment_id = $assignmentId`,
+        )
+        .get({ assignmentId: "assignment-1" }),
+    ).toEqual({ eligible: 0, reason_code: "no_longer_eligible" });
+    expect(
+      await Effect.runPromise(
+        opened.service.getLatestEligibilityObservation("assignment-1"),
+      ),
+    ).toMatchObject({
+      assignmentId: "assignment-1",
+      issueNodeId: "I_1",
+      eligible: false,
+      reason: { code: "no_longer_eligible" },
+    });
+    opened.close();
+  });
+
+  test("ends tenure for a removed repository and creates new tenure after re-addition", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: candidate() }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.endQueueTenuresOutsideRepositories(
+        ["another/repository"],
+        "2026-01-01T00:01:00.000Z",
+      ),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: candidate() }],
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    const page = await Effect.runPromise(
+      opened.service.listQueue({ limit: 10 }),
+    );
+    expect(page.items).toHaveLength(2);
+    expect(page.items[0]).toMatchObject({
+      startable: true,
+      eligibleSince: "2026-01-01T00:02:00.000Z",
+    });
+    expect(page.items[1]).toMatchObject({
+      startable: false,
+      reason: { code: "repository_removed" },
+    });
+    opened.close();
+  });
+
+  test("admits one caller from a queue tenure and rejects a racing reservation", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: candidate() }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const [tenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    expect(tenure).toBeDefined();
+    const [first, second] = await Promise.all([
+      Effect.runPromise(
+        opened.service.admit({
+          ...admission("first", "assignment-1", [candidate()]),
+          queueTenureId: tenure!.tenureId,
+          slots: 2,
+          allowRetry: true,
+        }),
+      ),
+      Effect.runPromise(
+        opened.service.admit({
+          ...admission("second", "assignment-2", [candidate()]),
+          queueTenureId: tenure!.tenureId,
+          slots: 2,
+          allowRetry: true,
+        }),
+      ),
+    ]);
+    expect(
+      [first.receipt.result._tag, second.receipt.result._tag].sort(),
+    ).toEqual(["no_candidate", "started"]);
+    expect(
+      opened.database
+        .prepare("SELECT count(*) AS count FROM assignments")
+        .get(),
+    ).toEqual({ count: 1 });
     opened.close();
   });
 });

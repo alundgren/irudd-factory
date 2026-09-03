@@ -34,6 +34,50 @@ export function seedFixture(fixture: FixtureDefinition) {
         fixture.state.events,
       );
     }
+    if (fixture.state.queue) {
+      const repositories = new Map<
+        string,
+        typeof fixture.state.queue.candidates
+      >();
+      for (const issue of fixture.state.queue.candidates) {
+        repositories.set(issue.repository, [
+          ...(repositories.get(issue.repository) ?? []),
+          issue,
+        ]);
+      }
+      for (const [repository, issues] of repositories) {
+        yield* store.reconcileQueue({
+          repository,
+          candidates: issues.map((issue, index) => ({
+            tenureId: `fixture-tenure-${repository.replace("/", "-")}-${index + 1}`,
+            candidate: {
+              issue,
+              workflow: fixture.behavior.candidateWorkflow,
+            },
+          })),
+          timestamp: fixture.state.now,
+        });
+      }
+      if (fixture.state.queue.stale) {
+        const tenures = yield* store.getDispatchableQueue(100);
+        for (const tenure of tenures) {
+          yield* store.rejectQueueTenure(tenure.tenureId, fixture.state.now, {
+            code: "issue_ineligible",
+            message: "Fresh validation rejected this fixture issue",
+          });
+        }
+      }
+    }
+    if (fixture.state.dispatch) {
+      yield* store.setDispatchPaused(
+        fixture.state.dispatch.paused,
+        fixture.state.now,
+      );
+      yield* store.setCodexEnabled(
+        fixture.state.dispatch.codexEnabled,
+        fixture.state.now,
+      );
+    }
   });
 }
 
@@ -54,7 +98,19 @@ export function fixtureDependencies(
           (candidate) => candidate.issue.repository === repository,
         ),
       ),
-    revalidateIssue: (candidate) => Effect.succeed(candidate),
+    revalidateIssue: (candidate) =>
+      Effect.gen(function* () {
+        controls.onRevalidate?.();
+        if (controls.revalidateFailure) {
+          return yield* Effect.fail(
+            new FactoryError({
+              code: "issue_ineligible",
+              message: controls.revalidateFailure,
+            }),
+          );
+        }
+        return candidate;
+      }),
     claimIssue: () =>
       Effect.sync(() => {
         controls.onClaim?.();

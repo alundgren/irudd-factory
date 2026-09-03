@@ -60,6 +60,7 @@ function handlerLayer(
       const context = yield* Effect.context<
         StateStore | GitHub | Workspaces | Provider | Clock | IdGenerator
       >();
+      yield* application.startDispatcher().pipe(Effect.provide(context));
       return {
         RunNextEligibleIssue: ({ commandId }) =>
           application.runNextEligibleIssue(commandId).pipe(
@@ -73,6 +74,27 @@ function handlerLayer(
           ),
         GetFactorySnapshot: () =>
           application.getSnapshot().pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ListQueue: ({ limit, cursor, watermark }) =>
+          application
+            .listQueue({
+              limit,
+              ...(cursor ? { cursor } : {}),
+              ...(watermark ? { watermark } : {}),
+            })
+            .pipe(
+              Effect.provide(context),
+              Effect.mapError((error) => `${error.code}: ${error.message}`),
+            ),
+        SetDispatchPaused: ({ paused }) =>
+          application.setDispatchPaused(paused).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        SetCodexEnabled: ({ enabled }) =>
+          application.setCodexEnabled(enabled).pipe(
             Effect.provide(context),
             Effect.mapError((error) => `${error.code}: ${error.message}`),
           ),

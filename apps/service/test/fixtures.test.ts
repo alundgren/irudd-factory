@@ -127,6 +127,11 @@ describe("fixture catalog", () => {
       "failed-long",
       "completed-ready",
       "completed-draft",
+      "queue-ready",
+      "queue-stale",
+      "queue-paused",
+      "queue-disabled",
+      "queue-multi-repository",
     ]);
     for (const fixture of FIXTURE_REGISTRY) {
       expect(fixture.summary.length).toBeGreaterThan(0);

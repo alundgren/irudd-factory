@@ -1,6 +1,11 @@
 import { FetchHttpClient } from "@effect/platform";
 import { RpcClient, RpcSerialization } from "@effect/rpc";
-import type { CommandReceipt, FactorySnapshot } from "@irudd-factory/contracts";
+import type {
+  CommandReceipt,
+  DispatchState,
+  FactorySnapshot,
+  QueuePage,
+} from "@irudd-factory/contracts";
 import { FactoryRpcs } from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
 
@@ -36,5 +41,39 @@ export function getFactorySnapshot(url: string): Promise<FactorySnapshot> {
   return Effect.gen(function* () {
     const client = yield* RpcClient.make(FactoryRpcs);
     return yield* client.GetFactorySnapshot();
+  }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
+}
+
+export function listQueue(
+  url: string,
+  input: {
+    readonly limit: number;
+    readonly cursor?: string;
+    readonly watermark?: string;
+  },
+): Promise<QueuePage> {
+  return Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.ListQueue(input);
+  }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
+}
+
+export function setDispatchPaused(
+  url: string,
+  paused: boolean,
+): Promise<DispatchState> {
+  return Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.SetDispatchPaused({ paused });
+  }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
+}
+
+export function setCodexEnabled(
+  url: string,
+  enabled: boolean,
+): Promise<DispatchState> {
+  return Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.SetCodexEnabled({ enabled });
   }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
 }
