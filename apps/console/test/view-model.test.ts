@@ -12,14 +12,10 @@ describe("console state labels", () => {
     const outcomes: CommandResult[] = [
       { _tag: "no_candidate" },
       { _tag: "selection_ambiguous", issueLinks: [] },
-      { _tag: "dispatch_unavailable", reason: "dispatch_paused" },
-      { _tag: "dispatch_unavailable", reason: "codex_disabled" },
     ];
     expect(outcomes.map(resultTitle)).toEqual([
       "No eligible issue",
       "Choose one issue first",
-      "Dispatch is paused",
-      "Codex is disabled",
     ]);
   });
 

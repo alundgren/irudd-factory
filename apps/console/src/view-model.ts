@@ -24,10 +24,6 @@ export function resultTitle(result: CommandResult): string {
       return "Choose one issue first";
     case "provider_busy":
       return "Codex is already working";
-    case "dispatch_unavailable":
-      return result.reason === "dispatch_paused"
-        ? "Dispatch is paused"
-        : "Codex is disabled";
   }
 }
 

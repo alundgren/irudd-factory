@@ -100,13 +100,6 @@ function CommandOutcome({ receipt }: { receipt: CommandReceipt }) {
           was created.
         </p>
       ) : null}
-      {result._tag === "dispatch_unavailable" ? (
-        <p className="measure">
-          {result.reason === "dispatch_paused"
-            ? "Resume dispatch before starting another issue."
-            : "Enable Codex before starting another issue."}
-        </p>
-      ) : null}
     </section>
   );
 }
