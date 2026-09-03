@@ -101,8 +101,7 @@ wait "$service_pid"
 
 Automatic work uses persisted FIFO tenure. A manual `start` or `run-next`
 request uses the same slot and active-issue checks. Paused dispatch or disabled
-Codex returns a durable `dispatch_unavailable` receipt. A full provider returns
-`provider_busy`.
+Codex rejects new admission. A full provider returns `provider_busy`.
 
 ## Live integration command
 

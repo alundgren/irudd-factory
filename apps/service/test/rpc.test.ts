@@ -711,17 +711,18 @@ describe("Factory RPC service", () => {
       name: "automatic-fill",
       state: {
         ...base.state,
-        candidates: [fixtureIssue(31), fixtureIssue(32)],
+        candidates: [fixtureIssue(31), fixtureIssue(32), fixtureIssue(33)],
       },
     };
-    const enterRunning = gate();
-    const finish = gate();
+    const firstFinishes = gate();
+    const neverFinishes = gate();
     const calls = { claim: 0, workspace: 0, provider: 0 };
     const service = await startFactoryService(
       config,
       fixtureDependencies(config, automaticFixture, {
-        beforeRunning: enterRunning.wait,
-        beforeCompletion: finish.wait,
+        beforeCompletion: (issueNumber) =>
+          issueNumber === 31 ? firstFinishes.wait() : neverFinishes.wait(),
+        hideClaimedCandidates: true,
         onClaim: () => calls.claim++,
         onWorkspace: () => calls.workspace++,
         onProviderRun: () => calls.provider++,
@@ -731,14 +732,24 @@ describe("Factory RPC service", () => {
     const rpcUrl = `${service.url}/rpc`;
     const deadline = Date.now() + 3_000;
     let snapshot = await getFactorySnapshot(rpcUrl);
-    while ((snapshot.assignments?.length ?? 0) !== 2 && Date.now() < deadline) {
+    while (
+      ((snapshot.assignments?.length ?? 0) !== 2 || calls.provider !== 2) &&
+      Date.now() < deadline
+    ) {
       await delay(20);
       snapshot = await getFactorySnapshot(rpcUrl);
     }
     expect(snapshot.assignments).toHaveLength(2);
     expect(calls).toEqual({ claim: 2, workspace: 2, provider: 2 });
-    enterRunning.release();
-    finish.release();
+    firstFinishes.release();
+    while (calls.provider !== 3 && Date.now() < deadline) {
+      await delay(20);
+    }
+    expect(calls).toEqual({ claim: 3, workspace: 3, provider: 3 });
+    snapshot = await getFactorySnapshot(rpcUrl);
+    expect(
+      snapshot.assignments?.map(({ issue }) => issue.number).sort(),
+    ).toEqual([32, 33]);
   });
 
   test("fresh validation rejects stale queue work before side effects", async () => {
@@ -846,31 +857,17 @@ describe("Factory RPC service", () => {
       paused: true,
       codexEnabled: true,
     });
-    const paused = await startIssue(
-      rpcUrl,
-      "paused-start",
-      "factory/fixture",
-      41,
-    );
-    expect(paused.result).toEqual({
-      _tag: "dispatch_unavailable",
-      reason: "dispatch_paused",
-    });
+    await expect(
+      startIssue(rpcUrl, "paused-start", "factory/fixture", 41),
+    ).rejects.toThrow("dispatch_paused: Dispatch is paused");
     expect(await setCodexEnabled(rpcUrl, false)).toMatchObject({
       paused: true,
       codexEnabled: false,
     });
     await setDispatchPaused(rpcUrl, false);
-    const disabled = await startIssue(
-      rpcUrl,
-      "disabled-start",
-      "factory/fixture",
-      41,
-    );
-    expect(disabled.result).toEqual({
-      _tag: "dispatch_unavailable",
-      reason: "codex_disabled",
-    });
+    await expect(
+      startIssue(rpcUrl, "disabled-start", "factory/fixture", 41),
+    ).rejects.toThrow("codex_disabled: Codex is disabled");
     expect((await getFactorySnapshot(rpcUrl)).assignment).toBeNull();
     const first = await listQueue(rpcUrl, { limit: 1 });
     const second = await listQueue(rpcUrl, {
@@ -880,5 +877,68 @@ describe("Factory RPC service", () => {
     });
     expect(first.items.map(({ issue }) => issue.number)).toEqual([41]);
     expect(second.items.map(({ issue }) => issue.number)).toEqual([42, 43]);
+  });
+
+  test("manual start consumes an existing queue tenure during admission", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-manual-queue-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 30_000,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const issue = fixtureIssue(51);
+    const base = fixture("runnable");
+    const queuedFixture = {
+      ...base,
+      name: "manual-queue",
+      state: {
+        ...base.state,
+        candidates: [issue],
+        queue: { candidates: [issue] },
+      },
+    };
+    const seed = openStateStore(config.databasePath);
+    await Effect.runPromise(
+      seedFixture(queuedFixture).pipe(
+        Effect.provideService(StateStore, seed.service),
+      ),
+    );
+    seed.close();
+    const beforeRunning = gate();
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, queuedFixture, {
+        beforeRunning: beforeRunning.wait,
+        hideClaimedCandidates: true,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    const receipt = await startIssue(
+      rpcUrl,
+      "manual-queue-start",
+      issue.repository,
+      issue.number,
+    );
+    expect(receipt.result._tag).toBe("started");
+    expect((await listQueue(rpcUrl, { limit: 10 })).items).toEqual([]);
+    beforeRunning.release();
   });
 });

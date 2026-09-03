@@ -112,18 +112,11 @@ export const SelectionAmbiguousResult = Schema.TaggedStruct(
 export const ProviderBusyResult = Schema.TaggedStruct("provider_busy", {
   assignment: Assignment,
 });
-export const DispatchUnavailableResult = Schema.TaggedStruct(
-  "dispatch_unavailable",
-  {
-    reason: Schema.Literal("dispatch_paused", "codex_disabled"),
-  },
-);
 export const CommandResult = Schema.Union(
   StartedResult,
   NoCandidateResult,
   SelectionAmbiguousResult,
   ProviderBusyResult,
-  DispatchUnavailableResult,
 );
 export type CommandResult = typeof CommandResult.Type;
 

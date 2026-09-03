@@ -58,6 +58,8 @@ export const FACTORY_ERROR_CODES = [
   "issue_ineligible",
   "database_in_use",
   "database_reset_required",
+  "dispatch_paused",
+  "codex_disabled",
   "schema_generation_failed",
   "service_start_failed",
   "service_shutdown",

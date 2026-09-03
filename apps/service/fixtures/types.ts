@@ -84,13 +84,14 @@ export interface FixtureDefinition<Name extends string = string> {
 
 export interface FixtureControls {
   readonly beforeRunning?: () => Promise<void>;
-  readonly beforeCompletion?: () => Promise<void>;
+  readonly beforeCompletion?: (issueNumber: number) => Promise<void>;
   readonly onClaim?: () => void;
   readonly onWorkspace?: () => void;
   readonly onProviderRun?: () => void;
   readonly onProviderInterrupted?: () => void;
   readonly onRevalidate?: () => void;
   readonly revalidateFailure?: string;
+  readonly hideClaimedCandidates?: boolean;
   readonly cleanupUncertain?: boolean;
   readonly failAfterObservation?: {
     readonly model?: string;

@@ -337,10 +337,7 @@ export function makeApplication(options: ApplicationOptions) {
             queuedCandidate.tenureId,
             "automatic",
           );
-          if (
-            receipt.result._tag === "provider_busy" ||
-            receipt.result._tag === "dispatch_unavailable"
-          ) {
+          if (receipt.result._tag === "provider_busy") {
             return;
           }
           if (receipt.result._tag === "no_candidate") {
@@ -399,7 +396,16 @@ export function makeApplication(options: ApplicationOptions) {
         ),
         { concurrency: "unbounded" },
       )).flat();
-      return yield* admitCandidates(commandId, candidates);
+      const queueTenureId =
+        candidates.length === 1 && candidates[0]
+          ? yield* state.getActiveQueueTenureId(candidates[0].issue.nodeId)
+          : null;
+      return yield* admitCandidates(
+        commandId,
+        candidates,
+        false,
+        queueTenureId ?? undefined,
+      );
     });
 
   const startIssue = (
@@ -454,7 +460,15 @@ export function makeApplication(options: ApplicationOptions) {
       const current = github.revalidateIssue
         ? yield* github.revalidateIssue(candidate)
         : candidate;
-      return yield* admitCandidates(commandId, [current], true);
+      const queueTenureId = yield* state.getActiveQueueTenureId(
+        current.issue.nodeId,
+      );
+      return yield* admitCandidates(
+        commandId,
+        [current],
+        true,
+        queueTenureId ?? undefined,
+      );
     });
 
   const getSnapshot = (): Effect.Effect<

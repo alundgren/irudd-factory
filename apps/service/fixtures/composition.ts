@@ -87,6 +87,7 @@ export function fixtureDependencies(
   controls: FixtureControls = {},
 ): FactoryDependencies {
   let assignmentSequence = 0;
+  const claimedNodes = new Set<string>();
   const candidates: Candidate[] = fixture.state.candidates.map((issue) => ({
     issue,
     workflow: fixture.behavior.candidateWorkflow,
@@ -95,7 +96,10 @@ export function fixtureDependencies(
     discoverCandidates: (repository) =>
       Effect.succeed(
         candidates.filter(
-          (candidate) => candidate.issue.repository === repository,
+          (candidate) =>
+            candidate.issue.repository === repository &&
+            (!controls.hideClaimedCandidates ||
+              !claimedNodes.has(candidate.issue.nodeId)),
         ),
       ),
     revalidateIssue: (candidate) =>
@@ -111,9 +115,10 @@ export function fixtureDependencies(
         }
         return candidate;
       }),
-    claimIssue: () =>
+    claimIssue: (issue) =>
       Effect.sync(() => {
         controls.onClaim?.();
+        if (controls.hideClaimedCandidates) claimedNodes.add(issue.nodeId);
         return fixture.behavior.claimOutcome;
       }),
     verifyPullRequest: () => Effect.succeed(fixture.behavior.pullRequest),
@@ -196,7 +201,9 @@ export function fixtureDependencies(
           },
         });
         yield* controls.beforeCompletion
-          ? Effect.promise(controls.beforeCompletion)
+          ? Effect.promise(() =>
+              controls.beforeCompletion!(input.assignment.issue.number),
+            )
           : Effect.sleep(
               `${fixture.behavior.provider.completionDelayMs} millis`,
             );

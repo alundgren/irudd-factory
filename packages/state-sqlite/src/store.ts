@@ -825,22 +825,17 @@ export function openStateStore(
       if (existing) return { receipt: existing, created: false };
 
       const controls = dispatchStateSync();
-      if (controls.paused || !controls.codexEnabled) {
-        const result: CommandResult = {
-          _tag: "dispatch_unavailable",
-          reason: controls.paused ? "dispatch_paused" : "codex_disabled",
-        };
-        return {
-          receipt:
-            input.source === "automatic"
-              ? {
-                  commandId: input.commandId,
-                  result,
-                  createdAt: input.timestamp,
-                }
-              : insertReceipt(input.commandId, result, input.timestamp),
-          created: true,
-        };
+      if (controls.paused) {
+        throw new FactoryError({
+          code: "dispatch_paused",
+          message: "Dispatch is paused",
+        });
+      }
+      if (!controls.codexEnabled) {
+        throw new FactoryError({
+          code: "codex_disabled",
+          message: "Codex is disabled",
+        });
       }
 
       if (input.queueTenureId) {
@@ -881,15 +876,19 @@ export function openStateStore(
         }) as unknown as ReadonlyArray<AssignmentRow>;
       if (activeRows.length >= (input.slots ?? 1)) {
         const activeRow = activeRows[0]!;
+        const result: CommandResult = {
+          _tag: "provider_busy",
+          assignment: decodeAssignment(activeRow),
+        };
         return {
-          receipt: insertReceipt(
-            input.commandId,
-            {
-              _tag: "provider_busy",
-              assignment: decodeAssignment(activeRow),
-            },
-            input.timestamp,
-          ),
+          receipt:
+            input.source === "automatic"
+              ? {
+                  commandId: input.commandId,
+                  result,
+                  createdAt: input.timestamp,
+                }
+              : insertReceipt(input.commandId, result, input.timestamp),
           created: true,
         };
       }
@@ -1305,6 +1304,19 @@ export function openStateStore(
               body: row.workflow_body,
             },
           }));
+        },
+        catch: storageError,
+      }),
+    getActiveQueueTenureId: (issueNodeId) =>
+      Effect.try({
+        try: () => {
+          const row = database
+            .prepare(
+              `SELECT id FROM queue_tenures
+               WHERE issue_node_id = $issueNodeId AND ended_at IS NULL`,
+            )
+            .get({ issueNodeId }) as { readonly id: string } | undefined;
+          return row?.id ?? null;
         },
         catch: storageError,
       }),

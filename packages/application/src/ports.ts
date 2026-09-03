@@ -119,6 +119,9 @@ export interface StateStoreService {
   readonly getDispatchableQueue: (
     limit: number,
   ) => Effect.Effect<ReadonlyArray<QueueTenureCandidate>, FactoryError>;
+  readonly getActiveQueueTenureId: (
+    issueNodeId: string,
+  ) => Effect.Effect<string | null, FactoryError>;
   readonly rejectQueueTenure: (
     tenureId: string,
     timestamp: string,
