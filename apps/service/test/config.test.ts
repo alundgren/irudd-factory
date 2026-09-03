@@ -2,6 +2,7 @@ import { describe, expect, test } from "vite-plus/test";
 import {
   configPathFromArgs,
   DEFAULT_CODEX_SLOTS,
+  DEFAULT_MAX_RETAINED_TEXT_BYTES,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_PORT,
   DEFAULT_PROVIDER_TIMEOUTS,
@@ -72,6 +73,31 @@ describe("factory configuration", () => {
     expect(config.timeouts).toEqual(DEFAULT_PROVIDER_TIMEOUTS);
     expect(config.codex.slots).toBe(DEFAULT_CODEX_SLOTS);
     expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
+    expect(config.retention).toEqual({
+      sensitivePatterns: [],
+      maxTextBytes: DEFAULT_MAX_RETAINED_TEXT_BYTES,
+    });
+  });
+
+  test("validates retained-text redaction and byte limits", () => {
+    expect(
+      validateConfig({
+        ...valid,
+        retention: {
+          sensitivePatterns: ["token-[0-9]+"],
+          maxTextBytes: 512,
+        },
+      }).retention,
+    ).toEqual({ sensitivePatterns: ["token-[0-9]+"], maxTextBytes: 512 });
+    expect(() =>
+      validateConfig({
+        ...valid,
+        retention: { sensitivePatterns: ["["] },
+      }),
+    ).toThrow("invalid regular expression");
+    expect(() =>
+      validateConfig({ ...valid, retention: { maxTextBytes: 255 } }),
+    ).toThrow("retention.maxTextBytes");
   });
 
   test("merges partial timeout overrides over the defaults", () => {

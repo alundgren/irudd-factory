@@ -5,6 +5,7 @@ import type {
   CommandResult,
   IssueRef,
   PullRequest,
+  RetainedProviderRecord,
   WorkflowRevision,
   WorkspacePaths,
 } from "@irudd-factory/contracts";
@@ -26,6 +27,11 @@ export interface FixtureState {
   readonly candidates: ReadonlyArray<IssueRef>;
   readonly assignment: Assignment | null;
   readonly events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>;
+  readonly history?: ReadonlyArray<{
+    readonly assignment: Assignment;
+    readonly events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>;
+    readonly providerRecords: ReadonlyArray<RetainedProviderRecord>;
+  }>;
 }
 
 export interface FixtureBehavior {

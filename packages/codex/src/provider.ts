@@ -8,7 +8,10 @@ import type {
   TokenUsageBreakdown,
 } from "@irudd-factory/application";
 import { FactoryError, Provider } from "@irudd-factory/application";
-import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
+import {
+  ASSIGNMENT_EVENTS,
+  type RetainedProviderRecord,
+} from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
 import {
   runManagedCommand,
@@ -303,6 +306,7 @@ export function makeCodexProvider(
           let finalResponse = "";
           let tokenUsage: ProviderTokenUsage | null = null;
           const itemSummaries: Array<Readonly<Record<string, unknown>>> = [];
+          const retainedRecords: RetainedProviderRecord[] = [];
           let terminalFailure: FactoryError | null = null;
           let resolveTerminal!: (error: FactoryError) => void;
           const terminalSignal = new Promise<FactoryError>((resolve) => {
@@ -425,7 +429,20 @@ export function makeCodexProvider(
               message.method === APP_SERVER_METHODS.itemStarted ||
               message.method === APP_SERVER_METHODS.itemCompleted
             ) {
-              itemSummaries.push(normalizedItem(message));
+              const summary = normalizedItem(message);
+              itemSummaries.push(summary);
+              retainedRecords.push({
+                kind: "item",
+                timestamp: new Date().toISOString(),
+                phase: summary.phase === "started" ? "started" : "completed",
+                ...(typeof summary.id === "string" ? { id: summary.id } : {}),
+                ...(typeof summary.type === "string"
+                  ? { itemType: summary.type }
+                  : {}),
+                ...(typeof summary.status === "string"
+                  ? { status: summary.status }
+                  : {}),
+              });
             }
             if (message.method === APP_SERVER_METHODS.itemCompleted) {
               const item = message.params?.item as
@@ -436,10 +453,20 @@ export function makeCodexProvider(
                 typeof item.text === "string"
               ) {
                 finalResponse = item.text;
+                retainedRecords.push({
+                  kind: "transcript",
+                  timestamp: new Date().toISOString(),
+                  text: item.text,
+                });
               }
             }
             if (message.method === APP_SERVER_METHODS.threadTokenUsageUpdated) {
               tokenUsage = normalizeTokenUsage(message.params?.tokenUsage);
+              retainedRecords.push({
+                kind: "usage",
+                timestamp: new Date().toISOString(),
+                usage: tokenUsage,
+              });
             }
           });
           rpc.start();
@@ -693,12 +720,6 @@ export function makeCodexProvider(
                 message: `Requested ${reasoningEffort}, observed ${observedEffort}`,
               });
             }
-            if (!tokenUsage) {
-              throw new FactoryError({
-                code: "token_usage_missing",
-                message: "Codex completed without token usage",
-              });
-            }
             throwIfTerminal();
             cleanupDeadline = Date.now() + options.timeouts.shutdownMs;
             rpc.expectProcessExit();
@@ -717,6 +738,13 @@ export function makeCodexProvider(
             }
             await guardTerminal(() => rpc.drainOutput());
             throwIfTerminal();
+            retainedRecords.push({
+              kind: "process_exit",
+              timestamp: new Date().toISOString(),
+              code: processExit.code,
+              signal: processExit.signal,
+              cleanupTimedOut: processExit.cleanupTimedOut,
+            });
             const result: ProviderRunResult = {
               codexVersion,
               threadId,
@@ -732,6 +760,7 @@ export function makeCodexProvider(
                 signal: processExit.signal,
                 schemaDigest,
               },
+              records: retainedRecords,
             };
             throwIfTerminal();
             return result;
@@ -786,6 +815,32 @@ export function makeCodexProvider(
                     finalResponse,
                     processExit,
                   },
+                  records: [
+                    ...retainedRecords,
+                    {
+                      kind: "error" as const,
+                      timestamp: new Date().toISOString(),
+                      code:
+                        primary instanceof FactoryError
+                          ? primary.code
+                          : "provider_failed",
+                      message:
+                        primary instanceof FactoryError
+                          ? primary.message
+                          : "Codex provider failed unexpectedly",
+                    },
+                    ...(processExit
+                      ? [
+                          {
+                            kind: "process_exit" as const,
+                            timestamp: new Date().toISOString(),
+                            code: processExit.code,
+                            signal: processExit.signal,
+                            cleanupTimedOut: processExit.cleanupTimedOut,
+                          },
+                        ]
+                      : []),
+                  ],
                   ...(processExit.cleanupTimedOut
                     ? { patch: { state: "ownership_uncertain" as const } }
                     : {}),

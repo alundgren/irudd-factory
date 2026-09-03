@@ -8,6 +8,7 @@ import { completedReadyFixture } from "./completed-ready/fixture.ts";
 import { emptyFixture } from "./empty/fixture.ts";
 import { failedLongFixture } from "./failed-long/fixture.ts";
 import { runnableFixture } from "./runnable/fixture.ts";
+import { retainedHistoryFixture } from "./retained-history/fixture.ts";
 import type { FixtureDefinition } from "./types.ts";
 
 const TAG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -66,6 +67,7 @@ export const FIXTURE_REGISTRY = validateFixtureRegistry([
   failedLongFixture,
   completedReadyFixture,
   completedDraftFixture,
+  retainedHistoryFixture,
 ] as const);
 
 export type FixtureName = (typeof FIXTURE_REGISTRY)[number]["name"];

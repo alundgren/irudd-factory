@@ -379,4 +379,52 @@ describe("GitHub adapter", () => {
     expect(pull.number).toBe(8);
     expect(runner.calls[1]?.args).toContain("cursor=closing-page-2");
   });
+
+  test("leaves ambiguous pull request evidence unknown during recovery", async () => {
+    const closingIssuesReferences = {
+      nodes: [
+        {
+          number: 1,
+          repository: { nameWithOwner: "owner/repository" },
+        },
+      ],
+      pageInfo: lastPage,
+    };
+    const runner = new FakeRunner([
+      ok({
+        data: {
+          repository: {
+            pullRequests: {
+              nodes: [
+                {
+                  id: "PR_7",
+                  number: 7,
+                  url: "https://github.com/owner/repository/pull/7",
+                  isDraft: false,
+                  headRefName: "factory/assignment-1",
+                  closingIssuesReferences,
+                },
+                {
+                  id: "PR_8",
+                  number: 8,
+                  url: "https://github.com/owner/repository/pull/8",
+                  isDraft: true,
+                  headRefName: "factory/assignment-1",
+                  closingIssuesReferences,
+                },
+              ],
+              pageInfo: lastPage,
+            },
+          },
+        },
+      }),
+    ]);
+    const lookup = makeGitHubService(runner).lookupPullRequest;
+    expect(lookup).toBeDefined();
+    expect(
+      await Effect.runPromise(
+        lookup!("owner/repository", "factory/assignment-1", 1),
+      ),
+    ).toBeNull();
+  });
 });

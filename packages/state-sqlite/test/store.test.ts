@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AdmissionInput, Candidate } from "@irudd-factory/application";
+import { RETAINED_TEXT_TRUNCATION_MARKER } from "@irudd-factory/contracts";
 import { Effect } from "effect";
 import { openStateStore } from "../src/index.ts";
 
@@ -98,7 +99,7 @@ describe("SQLite state store", () => {
           .prepare("SELECT version FROM schema_migrations")
           .get() as { version: number } | undefined
       )?.version,
-    ).toBe(2);
+    ).toBe(3);
     opened.close();
   });
 
@@ -251,6 +252,140 @@ describe("SQLite state store", () => {
       }),
     );
     expect(retry.receipt.result._tag).toBe("started");
+    const issues = await Effect.runPromise(opened.service.readIssues({}));
+    const attempts = await Effect.runPromise(opened.service.readAttempts({}));
+    expect(issues.items).toHaveLength(1);
+    expect(attempts.items.map(({ id }) => id)).toEqual([
+      "assignment-2",
+      "assignment-1",
+    ]);
+    opened.close();
+  });
+
+  test("retains only projected provider data with redaction and byte limits", async () => {
+    const opened = openStateStore(await databasePath(), {
+      sensitivePatterns: ["secret-[0-9]+"],
+      maxTextBytes: 256,
+    });
+    await Effect.runPromise(
+      opened.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    expect(
+      (await Effect.runPromise(opened.service.readUsage({}))).items,
+    ).toEqual([]);
+    await Effect.runPromise(
+      opened.service.appendProviderRecords("assignment-1", [
+        {
+          kind: "transcript",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          text: `secret-123 ${"x".repeat(400)}`,
+        },
+        {
+          kind: "item",
+          timestamp: "2026-01-01T00:00:02.000Z",
+          phase: "completed",
+          id: "item-1",
+          itemType: "agentMessage",
+          status: "completed",
+          headers: { authorization: "secret-999" },
+          environment: { TOKEN: "secret-456" },
+          protocol: { arbitrary: true },
+        } as never,
+        {
+          kind: "usage",
+          timestamp: "2026-01-01T00:00:03.000Z",
+          usage: {
+            total: {
+              inputTokens: 10,
+              cachedInputTokens: 2,
+              outputTokens: 4,
+              reasoningOutputTokens: 1,
+              totalTokens: 14,
+            },
+            last: {
+              inputTokens: 5,
+              cachedInputTokens: 1,
+              outputTokens: 2,
+              reasoningOutputTokens: 1,
+              totalTokens: 7,
+            },
+            modelContextWindow: null,
+          },
+        },
+      ]),
+    );
+    const transcript = await Effect.runPromise(
+      opened.service.readTranscript("assignment-1", {}),
+    );
+    expect(transcript.items[0]?.text).not.toContain("secret-123");
+    expect(
+      transcript.items[0]?.text.endsWith(RETAINED_TEXT_TRUNCATION_MARKER),
+    ).toBe(true);
+    expect(
+      Buffer.byteLength(transcript.items[0]?.text ?? ""),
+    ).toBeLessThanOrEqual(256);
+    const events = await Effect.runPromise(
+      opened.service.readEvents("assignment-1", {}),
+    );
+    const item = events.items.find(({ type }) => type === "item.completed");
+    expect(item?.detail).toEqual({
+      id: "item-1",
+      itemType: "agentMessage",
+      status: "completed",
+    });
+    expect(JSON.stringify(events)).not.toContain("authorization");
+    expect(JSON.stringify(events)).not.toContain("TOKEN");
+    expect(
+      (await Effect.runPromise(opened.service.readUsage({}))).items[0]?.total
+        .totalTokens,
+    ).toBe(14);
+    opened.close();
+  });
+
+  test("keeps a paginated traversal fixed while newer attempts arrive", async () => {
+    const opened = openStateStore(await databasePath());
+    for (const [index, id] of ["assignment-1", "assignment-2"].entries()) {
+      await Effect.runPromise(
+        opened.service.admit(
+          admission(`command-${index}`, id, [
+            candidate(`I_${index}`, index + 1),
+          ]),
+        ),
+      );
+      await Effect.runPromise(
+        opened.service.appendEvent(
+          id,
+          {
+            type: "assignment.failed",
+            timestamp: `2026-01-01T00:0${index}:10.000Z`,
+            detail: {},
+          },
+          { state: "failed" },
+        ),
+      );
+    }
+    const first = await Effect.runPromise(
+      opened.service.readAttempts({ limit: 1 }),
+    );
+    await Effect.runPromise(
+      opened.service.admit(
+        admission("command-3", "assignment-3", [candidate("I_3", 3)]),
+      ),
+    );
+    const second = await Effect.runPromise(
+      opened.service.readAttempts({
+        limit: 1,
+        cursor: first.nextCursor ?? 0,
+        watermark: first.watermark,
+      }),
+    );
+    expect([...first.items, ...second.items].map(({ id }) => id)).toEqual([
+      "assignment-2",
+      "assignment-1",
+    ]);
+    expect(
+      (await Effect.runPromise(opened.service.readAttempts({}))).items,
+    ).toHaveLength(3);
     opened.close();
   });
 
@@ -282,6 +417,73 @@ describe("SQLite state store", () => {
       recovered.service.getAssignment("assignment-1"),
     );
     expect(assignment?.state).toBe("interrupted");
+    recovered.close();
+  });
+
+  test("records one pull request reconciliation without resuming an interrupted attempt", async () => {
+    const path = await databasePath();
+    const first = openStateStore(path);
+    await Effect.runPromise(
+      first.service.admit(admission("first", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      first.service.appendEvent(
+        "assignment-1",
+        {
+          type: "workspace.created",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          detail: { branch: "factory/assignment-1" },
+        },
+        {
+          workspace: {
+            clonePath: "/tmp/clone",
+            worktreePath: "/tmp/worktree",
+            worktreeGitDir: "/tmp/clone/.git/worktrees/assignment-1",
+            commonGitDir: "/tmp/clone/.git",
+            branch: "factory/assignment-1",
+          },
+        },
+      ),
+    );
+    first.close();
+
+    const recovered = openStateStore(path, { recover: true });
+    expect(
+      (
+        await Effect.runPromise(
+          recovered.service.pullRequestRecoveryCandidates(),
+        )
+      ).map(({ id }) => id),
+    ).toEqual(["assignment-1"]);
+    await Effect.runPromise(
+      recovered.service.appendEvent(
+        "assignment-1",
+        {
+          type: "pull_request.reconciled",
+          timestamp: "2026-01-01T00:00:02.000Z",
+          detail: {
+            evidence: "verified",
+            pullRequestUrl: "https://github.com/owner/repository/pull/2",
+          },
+        },
+        {
+          pullRequest: {
+            url: "https://github.com/owner/repository/pull/2",
+            number: 2,
+            draft: false,
+          },
+        },
+      ),
+    );
+    expect(
+      await Effect.runPromise(
+        recovered.service.pullRequestRecoveryCandidates(),
+      ),
+    ).toEqual([]);
+    expect(
+      (await Effect.runPromise(recovered.service.getAssignment("assignment-1")))
+        ?.state,
+    ).toBe("interrupted");
     recovered.close();
   });
 

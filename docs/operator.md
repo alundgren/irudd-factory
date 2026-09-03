@@ -36,6 +36,24 @@ Every supplied port or timeout must be a positive integer. Ports must be at
 most `65535`. Normal startup still requires `repository`, `databasePath`,
 `workspaceRoot`, `bindHost`, `codex.model`, and `codex.reasoningEffort`.
 
+Retained free text defaults to 65,536 bytes per entry. Configure regular
+expressions to replace known credentials or machine-specific secrets before
+Factory writes transcript and error text:
+
+```json
+{
+  "retention": {
+    "sensitivePatterns": ["ghp_[A-Za-z0-9]+", "internal-host-[0-9]+"],
+    "maxTextBytes": 65536
+  }
+}
+```
+
+Factory appends `[truncated]` when an entry exceeds the byte limit. These
+filters reduce accidental retention, but they cannot make transcripts public.
+Agent messages may repeat any repository or machine file the agent could read.
+Treat the database, transcripts, branches, and worktrees as sensitive data.
+
 ## Start and inspect Factory
 
 ```sh
@@ -164,6 +182,11 @@ Factory keeps the bare clone, linked worktree, linked-worktree Git directory,
 shared Git directory, branch, and SQLite records. It does not delete a retained
 workspace automatically. The console shows the absolute paths for inspection.
 
+The RPC API provides paginated reads for issues, attempts, transcripts,
+lifecycle and provider events, authoritative usage, and timeline entries. Keep
+the first page's watermark on every later request. That watermark fixes the
+records, values, and ordering even if a new attempt arrives during traversal.
+
 After a failed or completed run, remove files only after preserving anything
 needed for diagnosis. The current release has no cleanup command.
 
@@ -210,8 +233,8 @@ to confirm that another command receives a durable `provider_busy` result.
 
 ## Current recovery limits
 
-Receipt replay and terminal assignments survive restart. Factory does not yet
-resume or reconcile an assignment left in reserved, starting, or running after
-the process exits. Inspect the retained database and workspace before manual
-intervention. Polling, cancellation, queues, stall detection, authentication,
+Receipt replay and all attempts survive restart. Factory interrupts unfinished
+attempts and does not resume or retry them. If provider process ownership is
+uncertain, the attempt continues to consume capacity until an operator can
+resolve it. Polling, cancellation, queues, stall detection, authentication,
 remote access, and automatic cleanup are deferred.

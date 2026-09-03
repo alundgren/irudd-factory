@@ -2,11 +2,20 @@ import type {
   Assignment,
   AssignmentEvent,
   AssignmentEventType,
+  AttemptPage,
+  AttemptUsage,
   CommandReceipt,
+  EventPage,
   FactorySnapshot,
+  IssuePage,
   IssueRef,
   NormalizedError,
+  PageRequest,
   PullRequest,
+  RetainedProviderRecord,
+  TimelinePage,
+  TranscriptPage,
+  UsagePage,
   WorkflowRevision,
   WorkspacePaths,
 } from "@irudd-factory/contracts";
@@ -81,6 +90,34 @@ export interface StateStoreService {
     assignment: Assignment,
     events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>,
   ) => Effect.Effect<void, FactoryError>;
+  readonly appendProviderRecords: (
+    attemptId: string,
+    records: ReadonlyArray<RetainedProviderRecord>,
+  ) => Effect.Effect<void, FactoryError>;
+  readonly readIssues: (
+    request: PageRequest,
+  ) => Effect.Effect<IssuePage, FactoryError>;
+  readonly readAttempts: (
+    request: PageRequest,
+  ) => Effect.Effect<AttemptPage, FactoryError>;
+  readonly readTranscript: (
+    attemptId: string,
+    request: PageRequest,
+  ) => Effect.Effect<TranscriptPage, FactoryError>;
+  readonly readEvents: (
+    attemptId: string,
+    request: PageRequest,
+  ) => Effect.Effect<EventPage, FactoryError>;
+  readonly readUsage: (
+    request: PageRequest,
+  ) => Effect.Effect<UsagePage, FactoryError>;
+  readonly readTimeline: (
+    request: PageRequest,
+  ) => Effect.Effect<TimelinePage, FactoryError>;
+  readonly pullRequestRecoveryCandidates: () => Effect.Effect<
+    ReadonlyArray<Assignment>,
+    FactoryError
+  >;
 }
 
 export class StateStore extends Context.Tag(
@@ -104,6 +141,11 @@ export interface GitHubService {
     branch: string,
     issueNumber: number,
   ) => Effect.Effect<PullRequest, FactoryError>;
+  readonly lookupPullRequest?: (
+    repository: string,
+    branch: string,
+    issueNumber: number,
+  ) => Effect.Effect<PullRequest | null, FactoryError>;
 }
 
 export class GitHub extends Context.Tag("@irudd-factory/application/GitHub")<
@@ -128,22 +170,11 @@ export interface ProviderEvent {
   readonly timestamp: string;
   readonly detail: Readonly<Record<string, unknown>>;
   readonly patch?: AssignmentPatch;
+  readonly records?: ReadonlyArray<RetainedProviderRecord>;
 }
 
-export interface TokenUsageBreakdown {
-  readonly inputTokens: number;
-  readonly cachedInputTokens: number;
-  readonly outputTokens: number;
-  readonly reasoningOutputTokens: number;
-  readonly totalTokens: number;
-  readonly cacheWriteInputTokens?: number;
-}
-
-export interface ProviderTokenUsage {
-  readonly total: TokenUsageBreakdown;
-  readonly last: TokenUsageBreakdown;
-  readonly modelContextWindow: number | null;
-}
+export type TokenUsageBreakdown = AttemptUsage["total"];
+export type ProviderTokenUsage = Omit<AttemptUsage, "attemptId" | "timestamp">;
 
 export interface ProviderRunResult {
   readonly codexVersion: string;
@@ -153,7 +184,8 @@ export interface ProviderRunResult {
   readonly observedEffort: string;
   readonly finalResponse: string;
   readonly itemSummaries: ReadonlyArray<Readonly<Record<string, unknown>>>;
-  readonly tokenUsage: ProviderTokenUsage;
+  readonly tokenUsage: ProviderTokenUsage | null;
+  readonly records?: ReadonlyArray<RetainedProviderRecord>;
   readonly approvalCount: number;
   readonly processExit: Readonly<Record<string, unknown>>;
 }

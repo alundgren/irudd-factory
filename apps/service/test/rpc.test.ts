@@ -10,6 +10,12 @@ import { openStateStore } from "@irudd-factory/state-sqlite";
 import { Effect } from "effect";
 import {
   getFactorySnapshot,
+  readAttempts,
+  readEvents,
+  readIssues,
+  readTimeline,
+  readTranscript,
+  readUsage,
   runNextEligibleIssue,
   startIssue,
 } from "../../cli/src/client.ts";
@@ -490,6 +496,68 @@ describe("Factory RPC service", () => {
       }
       await service.stop();
     }
+  });
+
+  test("serves bounded retained history pages over RPC", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-history-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
+      retention: {
+        sensitivePatterns: ["fixture-secret-[0-9]+"],
+        maxTextBytes: 512,
+      },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const definition = fixture("retained-history");
+    const store = openStateStore(config.databasePath, config.retention);
+    await Effect.runPromise(
+      seedFixture(definition).pipe(
+        Effect.provideService(StateStore, store.service),
+      ),
+    );
+    store.close();
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, definition),
+    );
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+
+    const first = await readAttempts(rpcUrl, { limit: 2 });
+    const second = await readAttempts(rpcUrl, {
+      limit: 2,
+      cursor: first.nextCursor ?? 0,
+      watermark: first.watermark,
+    });
+    expect([...first.items, ...second.items]).toHaveLength(3);
+    expect((await readIssues(rpcUrl)).items).toHaveLength(1);
+    expect((await readTimeline(rpcUrl)).items).toHaveLength(3);
+    expect((await readUsage(rpcUrl)).items).toHaveLength(1);
+    const transcript = await readTranscript(rpcUrl, "attempt-history-failed");
+    expect(transcript.items[0]?.truncated).toBe(true);
+    expect(transcript.items[0]?.text).not.toContain("fixture-secret-123");
+    expect(
+      (await readEvents(rpcUrl, "attempt-history-failed")).items.length,
+    ).toBeGreaterThan(1);
+    await service.stop();
   });
 
   test("starts issues from two repositories with effective Codex settings", async () => {

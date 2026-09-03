@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   closeSync,
@@ -19,14 +20,25 @@ import type {
 import { FactoryError, StateStore } from "@irudd-factory/application";
 import {
   ACTIVE_ASSIGNMENT_STATES,
-  type Assignment,
+  Assignment,
   AssignmentState,
   AssignmentEvent,
   ASSIGNMENT_EVENTS,
+  AttemptUsage,
   type CommandReceipt,
   CommandResult,
+  DEFAULT_PAGE_LIMIT,
+  type EventPage,
+  IssueRef,
+  MAX_PAGE_LIMIT,
   NormalizedError,
+  type Page,
+  type PageRequest,
   PullRequest,
+  RETAINED_TEXT_TRUNCATION_MARKER,
+  type RetainedProviderRecord,
+  RetainedProviderEvent,
+  TranscriptEntry,
   WorkspacePaths,
 } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
@@ -76,6 +88,31 @@ interface ReceiptRow {
   readonly command_id: string;
   readonly result_json: string;
   readonly created_at: string;
+}
+
+interface TranscriptRow {
+  readonly sequence: number;
+  readonly attempt_id: string;
+  readonly timestamp: string;
+  readonly role: "agent";
+  readonly text: string;
+  readonly truncated: number;
+}
+
+interface ProviderEventRow {
+  readonly sequence: number;
+  readonly attempt_id: string;
+  readonly timestamp: string;
+  readonly type: RetainedProviderEvent["type"];
+  readonly detail_json: string;
+}
+
+interface UsageRow {
+  readonly attempt_id: string;
+  readonly timestamp: string;
+  readonly total_json: string;
+  readonly last_json: string;
+  readonly model_context_window: number | null;
 }
 
 function storageError(error: unknown): FactoryError {
@@ -153,6 +190,37 @@ function decodeReceipt(row: ReceiptRow): CommandReceipt {
   };
 }
 
+function decodeTranscript(row: TranscriptRow): TranscriptEntry {
+  return {
+    sequence: row.sequence,
+    attemptId: row.attempt_id,
+    timestamp: row.timestamp,
+    role: row.role,
+    text: row.text,
+    truncated: row.truncated === 1,
+  };
+}
+
+function decodeProviderEvent(row: ProviderEventRow): RetainedProviderEvent {
+  return {
+    sequence: row.sequence,
+    attemptId: row.attempt_id,
+    timestamp: row.timestamp,
+    type: row.type,
+    detail: decodeJson(RetainedProviderEvent.fields.detail, row.detail_json),
+  };
+}
+
+function decodeUsage(row: UsageRow): AttemptUsage {
+  return {
+    attemptId: row.attempt_id,
+    timestamp: row.timestamp,
+    total: decodeJson(AttemptUsage.fields.total, row.total_json),
+    last: decodeJson(AttemptUsage.fields.last, row.last_json),
+    modelContextWindow: row.model_context_window,
+  };
+}
+
 export interface OpenStateStore {
   readonly database: DatabaseSync;
   readonly service: StateStoreService;
@@ -161,6 +229,8 @@ export interface OpenStateStore {
 
 export interface StateStoreOptions {
   readonly recover?: boolean;
+  readonly sensitivePatterns?: ReadonlyArray<string>;
+  readonly maxTextBytes?: number;
 }
 
 interface DatabaseLease {
@@ -257,6 +327,25 @@ export function openStateStore(
   path: string,
   options: StateStoreOptions = {},
 ): OpenStateStore {
+  const maxTextBytes = options.maxTextBytes ?? 64 * 1024;
+  if (!Number.isSafeInteger(maxTextBytes) || maxTextBytes < 256) {
+    throw new FactoryError({
+      code: "retention_config_invalid",
+      message: "maxTextBytes must be an integer of at least 256 bytes",
+    });
+  }
+  let sensitivePatterns: ReadonlyArray<RegExp>;
+  try {
+    sensitivePatterns = (options.sensitivePatterns ?? []).map(
+      (pattern) => new RegExp(pattern, "gu"),
+    );
+  } catch (error) {
+    throw new FactoryError({
+      code: "retention_config_invalid",
+      message: "A retained-text redaction pattern is invalid",
+      detail: String(error),
+    });
+  }
   mkdirSync(dirname(resolve(path)), { recursive: true });
   const databasePath = canonicalDatabasePath(path);
   const lease = acquireDatabaseLease(databasePath);
@@ -285,6 +374,115 @@ export function openStateStore(
     "SELECT * FROM assignments WHERE id = $id",
   );
 
+  function retainText(source: string): { text: string; truncated: boolean } {
+    let text = source;
+    for (const pattern of sensitivePatterns)
+      text = text.replace(pattern, "[redacted]");
+    if (Buffer.byteLength(text, "utf8") <= maxTextBytes) {
+      return { text, truncated: false };
+    }
+    const available =
+      maxTextBytes - Buffer.byteLength(RETAINED_TEXT_TRUNCATION_MARKER);
+    let retained = Buffer.from(text, "utf8")
+      .subarray(0, available)
+      .toString("utf8");
+    while (
+      Buffer.byteLength(retained + RETAINED_TEXT_TRUNCATION_MARKER) >
+      maxTextBytes
+    ) {
+      retained = retained.slice(0, -1);
+    }
+    return {
+      text: `${retained}${RETAINED_TEXT_TRUNCATION_MARKER}`,
+      truncated: true,
+    };
+  }
+
+  function shortText(source: unknown): string | undefined {
+    return typeof source === "string" ? retainText(source).text : undefined;
+  }
+
+  function projectEventDetail(
+    type: string,
+    source: unknown,
+  ): Record<string, unknown> {
+    const detail =
+      source && typeof source === "object"
+        ? (source as Record<string, unknown>)
+        : {};
+    switch (type) {
+      case ASSIGNMENT_EVENTS.workspaceCreated:
+        return shortText(detail.branch)
+          ? { branch: shortText(detail.branch) }
+          : {};
+      case ASSIGNMENT_EVENTS.providerProcessStarted:
+        return {
+          ...(typeof detail.pid === "number" ? { pid: detail.pid } : {}),
+          ...(shortText(detail.processStartIdentity)
+            ? { processStartIdentity: shortText(detail.processStartIdentity) }
+            : {}),
+          ...(shortText(detail.schemaDigest)
+            ? { schemaDigest: shortText(detail.schemaDigest) }
+            : {}),
+        };
+      case ASSIGNMENT_EVENTS.providerSettingsObserved:
+        return {
+          ...(shortText(detail.threadId)
+            ? { threadId: shortText(detail.threadId) }
+            : {}),
+          ...(shortText(detail.observedModel)
+            ? { observedModel: shortText(detail.observedModel) }
+            : {}),
+          ...(shortText(detail.observedEffort)
+            ? { observedEffort: shortText(detail.observedEffort) }
+            : {}),
+        };
+      case ASSIGNMENT_EVENTS.providerThreadStarted:
+        return {
+          ...(shortText(detail.threadId)
+            ? { threadId: shortText(detail.threadId) }
+            : {}),
+          ...(shortText(detail.schemaDigest)
+            ? { schemaDigest: shortText(detail.schemaDigest) }
+            : {}),
+        };
+      case ASSIGNMENT_EVENTS.providerTurnStarted:
+        return shortText(detail.turnId)
+          ? { turnId: shortText(detail.turnId) }
+          : {};
+      case ASSIGNMENT_EVENTS.providerFailed:
+      case ASSIGNMENT_EVENTS.failed:
+        return {
+          ...(shortText(detail.code) ? { code: shortText(detail.code) } : {}),
+          ...(shortText(detail.message)
+            ? { message: shortText(detail.message) }
+            : {}),
+        };
+      case ASSIGNMENT_EVENTS.completed:
+        return {
+          ...(shortText(detail.pullRequestUrl)
+            ? { pullRequestUrl: shortText(detail.pullRequestUrl) }
+            : {}),
+          ...(typeof detail.draft === "boolean" ? { draft: detail.draft } : {}),
+        };
+      case ASSIGNMENT_EVENTS.pullRequestReconciled:
+        return {
+          ...(shortText(detail.evidence)
+            ? { evidence: shortText(detail.evidence) }
+            : {}),
+          ...(shortText(detail.pullRequestUrl)
+            ? { pullRequestUrl: shortText(detail.pullRequestUrl) }
+            : {}),
+        };
+      case ASSIGNMENT_EVENTS.interrupted:
+        return shortText(detail.processReconciliation)
+          ? { processReconciliation: shortText(detail.processReconciliation) }
+          : {};
+      default:
+        return {};
+    }
+  }
+
   function getReceiptSync(commandId: string) {
     const row = receiptQuery.get({ commandId }) as ReceiptRow | undefined;
     return row ? decodeReceipt(row) : null;
@@ -309,6 +507,26 @@ export function openStateStore(
   }
 
   function insertAssignment(value: Assignment): void {
+    database
+      .prepare(
+        `INSERT INTO issues(node_id, repository, number, url, title, created_at, updated_at)
+       VALUES ($nodeId, $repository, $number, $url, $title, $createdAt, $updatedAt)
+       ON CONFLICT(node_id) DO UPDATE SET
+         repository = excluded.repository,
+         number = excluded.number,
+         url = excluded.url,
+         title = excluded.title,
+         updated_at = excluded.updated_at`,
+      )
+      .run({
+        nodeId: value.issue.nodeId,
+        repository: value.issue.repository,
+        number: value.issue.number,
+        url: value.issue.url,
+        title: value.issue.title,
+        createdAt: value.createdAt,
+        updatedAt: value.updatedAt,
+      });
     database
       .prepare(
         `INSERT INTO assignments(
@@ -380,7 +598,7 @@ export function openStateStore(
         assignmentId,
         type,
         timestamp,
-        detailJson: JSON.stringify(detail),
+        detailJson: JSON.stringify(projectEventDetail(type, detail)),
       });
     return Number(result.lastInsertRowid);
   }
@@ -527,6 +745,20 @@ export function openStateStore(
       const next: Assignment = {
         ...current,
         ...patch,
+        ...(patch.error
+          ? {
+              error: {
+                code: retainText(patch.error.code).text,
+                message: retainText(patch.error.message).text,
+                ...(patch.error.stage
+                  ? { stage: retainText(patch.error.stage).text }
+                  : {}),
+                ...(patch.error.detail
+                  ? { detail: retainText(patch.error.detail).text }
+                  : {}),
+              },
+            }
+          : {}),
         updatedAt: event.timestamp,
       };
       const sequence = insertEvent(
@@ -648,6 +880,222 @@ export function openStateStore(
     }
   }
 
+  function appendProviderRecordsSync(
+    attemptId: string,
+    records: ReadonlyArray<RetainedProviderRecord>,
+  ): void {
+    const tokenBreakdown = (
+      value: RetainedProviderRecord & { kind: "usage" },
+      which: "total" | "last",
+    ) => {
+      const source = value.usage[which];
+      for (const field of [
+        "inputTokens",
+        "cachedInputTokens",
+        "outputTokens",
+        "reasoningOutputTokens",
+        "totalTokens",
+      ] as const) {
+        if (!Number.isSafeInteger(source[field]) || source[field] < 0) {
+          throw new FactoryError({
+            code: "retained_record_invalid",
+            message: `Provider usage has an invalid ${field}`,
+          });
+        }
+      }
+      return {
+        inputTokens: source.inputTokens,
+        cachedInputTokens: source.cachedInputTokens,
+        outputTokens: source.outputTokens,
+        reasoningOutputTokens: source.reasoningOutputTokens,
+        totalTokens: source.totalTokens,
+        ...(source.cacheWriteInputTokens === undefined
+          ? {}
+          : { cacheWriteInputTokens: source.cacheWriteInputTokens }),
+      };
+    };
+    immediateTransaction(database, () => {
+      if (!assignmentQuery.get({ id: attemptId })) {
+        throw new FactoryError({
+          code: "assignment_not_found",
+          message: `Assignment ${attemptId} was not found`,
+        });
+      }
+      for (const record of records) {
+        if (record.kind === "transcript") {
+          const retained = retainText(record.text);
+          database
+            .prepare(
+              `INSERT INTO attempt_transcript(attempt_id, timestamp, role, text, truncated)
+             VALUES ($attemptId, $timestamp, $role, $text, $truncated)`,
+            )
+            .run({
+              attemptId,
+              timestamp: record.timestamp,
+              role: "agent",
+              text: retained.text,
+              truncated: retained.truncated ? 1 : 0,
+            });
+          continue;
+        }
+        let type: RetainedProviderEvent["type"];
+        let detail: Record<string, unknown>;
+        if (record.kind === "item") {
+          type = record.phase === "started" ? "item.started" : "item.completed";
+          detail = {
+            ...(record.id ? { id: retainText(record.id).text } : {}),
+            ...(record.itemType
+              ? { itemType: retainText(record.itemType).text }
+              : {}),
+            ...(record.status
+              ? { status: retainText(record.status).text }
+              : {}),
+          };
+        } else if (record.kind === "usage") {
+          type = "usage.updated";
+          detail = {};
+          const total = tokenBreakdown(record, "total");
+          const last = tokenBreakdown(record, "last");
+          database
+            .prepare(
+              `INSERT INTO attempt_usage(attempt_id, timestamp, total_json, last_json, model_context_window)
+             VALUES ($attemptId, $timestamp, $totalJson, $lastJson, $modelContextWindow)
+             ON CONFLICT(attempt_id) DO UPDATE SET
+               timestamp = excluded.timestamp,
+               total_json = excluded.total_json,
+               last_json = excluded.last_json,
+               model_context_window = excluded.model_context_window`,
+            )
+            .run({
+              attemptId,
+              timestamp: record.timestamp,
+              totalJson: JSON.stringify(total),
+              lastJson: JSON.stringify(last),
+              modelContextWindow: record.usage.modelContextWindow,
+            });
+        } else if (record.kind === "error") {
+          type = "provider.error";
+          detail = {
+            code: retainText(record.code).text,
+            message: retainText(record.message).text,
+          };
+        } else {
+          type = "process.exited";
+          detail = {
+            code: record.code,
+            signal: record.signal,
+            cleanupTimedOut: record.cleanupTimedOut,
+          };
+        }
+        database
+          .prepare(
+            `INSERT INTO retained_provider_events(attempt_id, timestamp, type, detail_json)
+           VALUES ($attemptId, $timestamp, $type, $detailJson)`,
+          )
+          .run({
+            attemptId,
+            timestamp: record.timestamp,
+            type,
+            detailJson: JSON.stringify(detail),
+          });
+      }
+    });
+  }
+
+  function pageRequest<A>(
+    kind: string,
+    scope: string,
+    request: PageRequest,
+    schema: Schema.Schema<A>,
+    load: () => ReadonlyArray<A>,
+  ): Page<A> {
+    const limit = request.limit ?? DEFAULT_PAGE_LIMIT;
+    const cursor = request.cursor ?? 0;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) {
+      throw new FactoryError({
+        code: "page_invalid",
+        message: `limit must be from 1 through ${MAX_PAGE_LIMIT}`,
+      });
+    }
+    if (!Number.isSafeInteger(cursor) || cursor < 0) {
+      throw new FactoryError({
+        code: "page_invalid",
+        message: "cursor must be a nonnegative integer",
+      });
+    }
+    let watermark = request.watermark;
+    let values: ReadonlyArray<A>;
+    if (watermark) {
+      const row = database
+        .prepare(
+          "SELECT kind, scope, values_json FROM read_snapshots WHERE watermark = $watermark",
+        )
+        .get({ watermark }) as
+        | { kind: string; scope: string; values_json: string }
+        | undefined;
+      if (!row || row.kind !== kind || row.scope !== scope) {
+        throw new FactoryError({
+          code: "page_watermark_invalid",
+          message: "The page watermark does not match this read",
+        });
+      }
+      values = decodeJson(Schema.Array(schema), row.values_json);
+    } else {
+      watermark = randomUUID();
+      values = load();
+      database
+        .prepare(
+          `INSERT INTO read_snapshots(watermark, kind, scope, values_json, created_at)
+         VALUES ($watermark, $kind, $scope, $valuesJson, $createdAt)`,
+        )
+        .run({
+          watermark,
+          kind,
+          scope,
+          valuesJson: JSON.stringify(values),
+          createdAt: new Date().toISOString(),
+        });
+    }
+    const items = values.slice(cursor, cursor + limit);
+    const next = cursor + items.length;
+    return { items, nextCursor: next < values.length ? next : null, watermark };
+  }
+
+  function issueRows(): ReadonlyArray<typeof IssueRef.Type> {
+    return (
+      database
+        .prepare(
+          "SELECT node_id, repository, number, url, title FROM issues ORDER BY created_at, repository, number, node_id",
+        )
+        .all() as unknown as ReadonlyArray<{
+        node_id: string;
+        repository: string;
+        number: number;
+        url: string;
+        title: string;
+      }>
+    ).map((row) => ({
+      nodeId: row.node_id,
+      repository: row.repository,
+      number: row.number,
+      url: row.url,
+      title: row.title,
+    }));
+  }
+
+  function assignmentRows(
+    order: "history" | "timeline",
+  ): ReadonlyArray<Assignment> {
+    const direction = order === "history" ? "DESC" : "ASC";
+    return (
+      database
+        .prepare(
+          `SELECT * FROM assignments ORDER BY created_at ${direction}, id ${direction}`,
+        )
+        .all() as unknown as ReadonlyArray<AssignmentRow>
+    ).map(decodeAssignment);
+  }
+
   const service: StateStoreService = {
     getReceipt: (commandId) =>
       Effect.try({
@@ -718,11 +1166,16 @@ export function openStateStore(
       Effect.try({
         try: () => {
           immediateTransaction(database, () => {
+            database.exec("DELETE FROM read_snapshots");
+            database.exec("DELETE FROM attempt_usage");
+            database.exec("DELETE FROM retained_provider_events");
+            database.exec("DELETE FROM attempt_transcript");
             database.exec("DELETE FROM assignment_events");
             database.exec("DELETE FROM assignments");
+            database.exec("DELETE FROM issues");
             database.exec("DELETE FROM command_receipts");
             database.exec(
-              "DELETE FROM sqlite_sequence WHERE name = 'assignment_events'",
+              "DELETE FROM sqlite_sequence WHERE name IN ('assignment_events', 'attempt_transcript', 'retained_provider_events')",
             );
           });
         },
@@ -750,6 +1203,115 @@ export function openStateStore(
             setLastEventSequence(assignment.id, lastSequence);
           });
         },
+        catch: storageError,
+      }),
+    appendProviderRecords: (attemptId, records) =>
+      Effect.try({
+        try: () => appendProviderRecordsSync(attemptId, records),
+        catch: storageError,
+      }),
+    readIssues: (request) =>
+      Effect.try({
+        try: () => pageRequest("issues", "", request, IssueRef, issueRows),
+        catch: storageError,
+      }),
+    readAttempts: (request) =>
+      Effect.try({
+        try: () =>
+          pageRequest("attempts", "", request, Assignment, () =>
+            assignmentRows("history"),
+          ),
+        catch: storageError,
+      }),
+    readTranscript: (attemptId, request) =>
+      Effect.try({
+        try: () =>
+          pageRequest("transcript", attemptId, request, TranscriptEntry, () =>
+            (
+              database
+                .prepare(
+                  "SELECT sequence, attempt_id, timestamp, role, text, truncated FROM attempt_transcript WHERE attempt_id = $attemptId ORDER BY sequence",
+                )
+                .all({ attemptId }) as unknown as ReadonlyArray<TranscriptRow>
+            ).map(decodeTranscript),
+          ),
+        catch: storageError,
+      }),
+    readEvents: (attemptId, request) =>
+      Effect.try({
+        try: (): EventPage =>
+          pageRequest(
+            "events",
+            attemptId,
+            request,
+            Schema.Union(AssignmentEvent, RetainedProviderEvent),
+            () => {
+              const lifecycle = (
+                database
+                  .prepare(
+                    "SELECT sequence, assignment_id, type, timestamp, detail_json FROM assignment_events WHERE assignment_id = $attemptId ORDER BY sequence",
+                  )
+                  .all({ attemptId }) as unknown as ReadonlyArray<EventRow>
+              ).map(decodeEvent);
+              const provider = (
+                database
+                  .prepare(
+                    "SELECT sequence, attempt_id, timestamp, type, detail_json FROM retained_provider_events WHERE attempt_id = $attemptId ORDER BY sequence",
+                  )
+                  .all({
+                    attemptId,
+                  }) as unknown as ReadonlyArray<ProviderEventRow>
+              ).map(decodeProviderEvent);
+              return [...lifecycle, ...provider].sort((left, right) =>
+                left.timestamp.localeCompare(right.timestamp),
+              );
+            },
+          ),
+        catch: storageError,
+      }),
+    readUsage: (request) =>
+      Effect.try({
+        try: () =>
+          pageRequest("usage", "", request, AttemptUsage, () =>
+            (
+              database
+                .prepare(
+                  "SELECT attempt_id, timestamp, total_json, last_json, model_context_window FROM attempt_usage ORDER BY timestamp, attempt_id",
+                )
+                .all() as unknown as ReadonlyArray<UsageRow>
+            ).map(decodeUsage),
+          ),
+        catch: storageError,
+      }),
+    readTimeline: (request) =>
+      Effect.try({
+        try: () =>
+          pageRequest("timeline", "", request, Assignment, () =>
+            assignmentRows("timeline"),
+          ),
+        catch: storageError,
+      }),
+    pullRequestRecoveryCandidates: () =>
+      Effect.try({
+        try: () =>
+          (
+            database
+              .prepare(
+                `SELECT * FROM assignments
+         WHERE state = $state
+           AND workspace_json IS NOT NULL
+           AND pull_request_json IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM assignment_events
+             WHERE assignment_id = assignments.id AND type = $eventType
+           )
+         ORDER BY created_at`,
+              )
+              .all({
+                state: "interrupted",
+                eventType: ASSIGNMENT_EVENTS.pullRequestReconciled,
+              }) as unknown as ReadonlyArray<AssignmentRow>
+          ).map(decodeAssignment),
         catch: storageError,
       }),
   };

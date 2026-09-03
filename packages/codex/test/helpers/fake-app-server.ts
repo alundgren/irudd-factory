@@ -243,30 +243,32 @@ async function handle(line: string): Promise<void> {
         },
       },
     });
-    send({
-      method: "thread/tokenUsage/updated",
-      params: {
-        threadId: ASSIGNMENT_THREAD_ID,
-        turnId: ASSIGNMENT_TURN_ID,
-        tokenUsage: {
-          total: {
-            inputTokens: 12,
-            cachedInputTokens: 2,
-            outputTokens: 7,
-            reasoningOutputTokens: 3,
-            totalTokens: 19,
+    if (mode !== "no-usage") {
+      send({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: ASSIGNMENT_THREAD_ID,
+          turnId: ASSIGNMENT_TURN_ID,
+          tokenUsage: {
+            total: {
+              inputTokens: 12,
+              cachedInputTokens: 2,
+              outputTokens: 7,
+              reasoningOutputTokens: 3,
+              totalTokens: 19,
+            },
+            last: {
+              inputTokens: 4,
+              cachedInputTokens: 1,
+              outputTokens: 2,
+              reasoningOutputTokens: 1,
+              totalTokens: 6,
+            },
+            modelContextWindow: 114000,
           },
-          last: {
-            inputTokens: 4,
-            cachedInputTokens: 1,
-            outputTokens: 2,
-            reasoningOutputTokens: 1,
-            totalTokens: 6,
-          },
-          modelContextWindow: 114000,
         },
-      },
-    });
+      });
+    }
     send({
       method: "turn/completed",
       params: {
