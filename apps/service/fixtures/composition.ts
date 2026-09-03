@@ -61,10 +61,14 @@ export function seedFixture(fixture: FixtureDefinition) {
       if (fixture.state.queue.stale) {
         const tenures = yield* store.getDispatchableQueue(100);
         for (const tenure of tenures) {
-          yield* store.rejectQueueTenure(tenure.tenureId, fixture.state.now, {
-            code: "issue_ineligible",
-            message: "Fresh validation rejected this fixture issue",
-          });
+          yield* store.markQueueTenureIneligible(
+            tenure.tenureId,
+            fixture.state.now,
+            {
+              code: "issue_ineligible",
+              message: "Fresh validation rejected this fixture issue",
+            },
+          );
         }
       }
     }

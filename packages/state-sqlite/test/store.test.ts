@@ -715,4 +715,131 @@ describe("SQLite state store", () => {
     expect(secondTenure?.tenureId).not.toBe(firstTenure?.tenureId);
     opened.close();
   });
+
+  test("creates a new tenure after fresh validation records ineligibility", async () => {
+    const opened = openStateStore(await databasePath());
+    const firstCandidate = candidate();
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: firstCandidate }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const [firstTenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    await Effect.runPromise(
+      opened.service.markQueueTenureIneligible(
+        firstTenure!.tenureId,
+        "2026-01-01T00:01:00.000Z",
+        { code: "issue_ineligible", message: "Workflow revision changed" },
+      ),
+    );
+    const updatedCandidate = {
+      ...firstCandidate,
+      workflow: {
+        ...firstCandidate.workflow,
+        digest: "d".repeat(64),
+        body: "Implement the updated workflow.",
+      },
+    };
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: updatedCandidate }],
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    const [secondTenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    expect(secondTenure).toMatchObject({
+      eligibleSince: "2026-01-01T00:02:00.000Z",
+      workflow: {
+        digest: "d".repeat(64),
+        body: "Implement the updated workflow.",
+      },
+    });
+    expect(secondTenure?.tenureId).not.toBe(firstTenure?.tenureId);
+    opened.close();
+  });
+
+  test("records each distinct eligibility-loss cycle for an active issue", async () => {
+    const opened = openStateStore(await databasePath());
+    const observed = candidate();
+    await Effect.runPromise(
+      opened.service.admit(admission("first", "assignment-1", [observed])),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [],
+        timestamp: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [],
+        timestamp: "2026-01-01T00:03:00.000Z",
+      }),
+    );
+    expect(
+      opened.database
+        .prepare(
+          `SELECT observed_at FROM issue_eligibility_observations
+           WHERE assignment_id = $assignmentId ORDER BY sequence`,
+        )
+        .all({ assignmentId: "assignment-1" }),
+    ).toEqual([
+      { observed_at: "2026-01-01T00:01:00.000Z" },
+      { observed_at: "2026-01-01T00:03:00.000Z" },
+    ]);
+    opened.close();
+  });
+
+  test("does not record eligibility loss when a racing tenure is already admitted", async () => {
+    const opened = openStateStore(await databasePath());
+    const observed = candidate();
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const [tenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    await Effect.runPromise(
+      opened.service.admit({
+        ...admission("manual", "assignment-1", [observed]),
+        queueTenureId: tenure!.tenureId,
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.endQueueTenure(
+        tenure!.tenureId,
+        "2026-01-01T00:01:00.000Z",
+        {
+          code: "admission_rejected",
+          message: "Another command admitted this issue first",
+        },
+      ),
+    );
+    expect(
+      opened.database
+        .prepare("SELECT count(*) AS count FROM issue_eligibility_observations")
+        .get(),
+    ).toEqual({ count: 0 });
+    opened.close();
+  });
 });

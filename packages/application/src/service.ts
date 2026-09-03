@@ -315,7 +315,7 @@ export function makeApplication(options: ApplicationOptions) {
           if (current._tag === "Left") {
             if (current.left.code !== "issue_ineligible") return;
             const reason = failure("issue_ineligible", current.left);
-            yield* state.rejectQueueTenure(
+            yield* state.markQueueTenureIneligible(
               queuedCandidate.tenureId,
               clock.now(),
               { code: reason.code, message: reason.message },
@@ -333,14 +333,10 @@ export function makeApplication(options: ApplicationOptions) {
             return;
           }
           if (receipt.result._tag === "no_candidate") {
-            yield* state.rejectQueueTenure(
-              queuedCandidate.tenureId,
-              clock.now(),
-              {
-                code: "admission_rejected",
-                message: "This issue could not reserve a Codex slot",
-              },
-            );
+            yield* state.endQueueTenure(queuedCandidate.tenureId, clock.now(), {
+              code: "admission_rejected",
+              message: "This issue could not reserve a Codex slot",
+            });
           }
         }
       }

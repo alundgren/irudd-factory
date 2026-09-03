@@ -534,27 +534,6 @@ export function openStateStore(
     code: string,
     message: string,
   ): void {
-    const prior = database
-      .prepare(
-        `SELECT eligible, reason_code, reason_message
-         FROM issue_eligibility_observations
-         WHERE assignment_id = $assignmentId
-         ORDER BY sequence DESC LIMIT 1`,
-      )
-      .get({ assignmentId }) as
-      | {
-          readonly eligible: number;
-          readonly reason_code: string | null;
-          readonly reason_message: string | null;
-        }
-      | undefined;
-    if (
-      prior?.eligible === 0 &&
-      prior.reason_code === code &&
-      prior.reason_message === message
-    ) {
-      return;
-    }
     database
       .prepare(
         `INSERT INTO issue_eligibility_observations(
@@ -572,6 +551,32 @@ export function openStateStore(
         reasonCode: code,
         reasonMessage: message,
       });
+  }
+
+  function recordActiveEligibilityLosses(
+    issueNodeId: string,
+    timestamp: string,
+    code: string,
+    message: string,
+  ): void {
+    const assignments = database
+      .prepare(
+        `SELECT id FROM assignments
+         WHERE issue_node_id = $issueNodeId
+           AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})`,
+      )
+      .all({ issueNodeId }) as unknown as ReadonlyArray<{
+      readonly id: string;
+    }>;
+    for (const assignment of assignments) {
+      recordEligibilityLoss(
+        assignment.id,
+        issueNodeId,
+        timestamp,
+        code,
+        message,
+      );
+    }
   }
 
   function setIssueQueueStatus(
@@ -624,6 +629,7 @@ export function openStateStore(
       const observedNodes = new Set(
         input.candidates.map(({ candidate }) => candidate.issue.nodeId),
       );
+      const newlyIneligibleNodes = new Set<string>();
 
       for (const row of currentRows) {
         if (!observedNodes.has(row.issue_node_id)) {
@@ -643,6 +649,7 @@ export function openStateStore(
             false,
             input.timestamp,
           );
+          newlyIneligibleNodes.add(status.issue_node_id);
         }
       }
 
@@ -723,26 +730,13 @@ export function openStateStore(
         setIssueQueueStatus(issue.nodeId, repository, true, input.timestamp);
       }
 
-      const activeAssignments = database
-        .prepare(
-          `SELECT id, issue_node_id FROM assignments
-           WHERE issue_repository = $repository
-             AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})`,
-        )
-        .all({ repository }) as unknown as ReadonlyArray<{
-        readonly id: string;
-        readonly issue_node_id: string;
-      }>;
-      for (const assignment of activeAssignments) {
-        if (!observedNodes.has(assignment.issue_node_id)) {
-          recordEligibilityLoss(
-            assignment.id,
-            assignment.issue_node_id,
-            input.timestamp,
-            "no_longer_eligible",
-            "GitHub no longer reports this active issue as eligible",
-          );
-        }
+      for (const issueNodeId of newlyIneligibleNodes) {
+        recordActiveEligibilityLosses(
+          issueNodeId,
+          input.timestamp,
+          "no_longer_eligible",
+          "GitHub no longer reports this active issue as eligible",
+        );
       }
     });
   }
@@ -1009,6 +1003,12 @@ export function openStateStore(
         lastEventSequence: 0,
       };
       insertAssignment(value);
+      setIssueQueueStatus(
+        candidate.issue.nodeId,
+        candidate.issue.repository.toLowerCase(),
+        true,
+        input.timestamp,
+      );
       if (input.queueTenureId) {
         const ended = endTenure(
           input.queueTenureId,
@@ -1344,6 +1344,12 @@ export function openStateStore(
                   false,
                   timestamp,
                 );
+                recordActiveEligibilityLosses(
+                  status.issue_node_id,
+                  timestamp,
+                  "repository_removed",
+                  "This repository is no longer configured",
+                );
               }
             }
           });
@@ -1389,37 +1395,55 @@ export function openStateStore(
         },
         catch: storageError,
       }),
-    rejectQueueTenure: (tenureId, timestamp, reason) =>
+    markQueueTenureIneligible: (tenureId, timestamp, reason) =>
       Effect.try({
         try: () => {
           immediateTransaction(database, () => {
             const row = database
-              .prepare("SELECT issue_node_id FROM queue_tenures WHERE id = $id")
+              .prepare(
+                `SELECT issue_node_id, issue_repository FROM queue_tenures
+                 WHERE id = $id AND ended_at IS NULL`,
+              )
               .get({ id: tenureId }) as
-              | { readonly issue_node_id: string }
+              | {
+                  readonly issue_node_id: string;
+                  readonly issue_repository: string;
+                }
               | undefined;
             if (!row) return;
-            endTenure(tenureId, timestamp, reason.code, reason.message);
-            const assignments = database
+            const prior = database
               .prepare(
-                `SELECT id FROM assignments
-                 WHERE issue_node_id = $issueNodeId
-                   AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})`,
+                "SELECT eligible FROM issue_queue_status WHERE issue_node_id = $issueNodeId",
               )
-              .all({
+              .get({
                 issueNodeId: row.issue_node_id,
-              }) as unknown as ReadonlyArray<{
-              readonly id: string;
-            }>;
-            for (const assignment of assignments) {
-              recordEligibilityLoss(
-                assignment.id,
+              }) as { readonly eligible: number } | undefined;
+            if (!endTenure(tenureId, timestamp, reason.code, reason.message)) {
+              return;
+            }
+            if (prior?.eligible === 1) {
+              setIssueQueueStatus(
+                row.issue_node_id,
+                row.issue_repository,
+                false,
+                timestamp,
+              );
+              recordActiveEligibilityLosses(
                 row.issue_node_id,
                 timestamp,
                 reason.code,
                 reason.message,
               );
             }
+          });
+        },
+        catch: storageError,
+      }),
+    endQueueTenure: (tenureId, timestamp, reason) =>
+      Effect.try({
+        try: () => {
+          immediateTransaction(database, () => {
+            endTenure(tenureId, timestamp, reason.code, reason.message);
           });
         },
         catch: storageError,

@@ -122,7 +122,12 @@ export interface StateStoreService {
   readonly getActiveQueueTenureId: (
     issueNodeId: string,
   ) => Effect.Effect<string | null, FactoryError>;
-  readonly rejectQueueTenure: (
+  readonly markQueueTenureIneligible: (
+    tenureId: string,
+    timestamp: string,
+    reason: QueueReason,
+  ) => Effect.Effect<void, FactoryError>;
+  readonly endQueueTenure: (
     tenureId: string,
     timestamp: string,
     reason: QueueReason,

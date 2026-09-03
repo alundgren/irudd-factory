@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -846,6 +847,120 @@ describe("Factory RPC service", () => {
     await waitForAssignmentState(rpcUrl, "failed");
     await delay(120);
     expect(claimCalls).toBe(1);
+  });
+
+  test("does not enqueue a manual pre-poll start while it remains eligible", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-manual-tenure-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 60,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const base = fixture("runnable");
+    const manualFixture = {
+      ...base,
+      name: "manual-pre-poll",
+      behavior: { ...base.behavior, claimOutcome: "unclaimed" as const },
+    };
+    let claimCalls = 0;
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, manualFixture, {
+        onClaim: () => claimCalls++,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    const issue = base.state.candidates[0]!;
+    const receipt = await startIssue(
+      rpcUrl,
+      "manual-before-poll",
+      issue.repository,
+      issue.number,
+    );
+    expect(receipt.result._tag).toBe("started");
+    await waitForAssignmentState(rpcUrl, "failed");
+    await delay(220);
+    expect(claimCalls).toBe(1);
+    expect((await listQueue(rpcUrl, { limit: 10 })).items).toEqual([]);
+
+    await service.stop();
+    stops.pop();
+    const database = new DatabaseSync(config.databasePath);
+    expect(
+      database.prepare("SELECT count(*) AS count FROM assignments").get(),
+    ).toEqual({ count: 1 });
+    database.close();
+  });
+
+  test("dispatches a new tenure after fresh validation recovers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-stale-recovery-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 40,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    let rejectNextValidation = true;
+    const completion = gate();
+    const calls = { claim: 0, workspace: 0, provider: 0 };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, fixture("runnable"), {
+        revalidateFailure: () => {
+          if (!rejectNextValidation) return null;
+          rejectNextValidation = false;
+          return "The queued workflow revision is stale";
+        },
+        beforeCompletion: () => completion.wait(),
+        onClaim: () => calls.claim++,
+        onWorkspace: () => calls.workspace++,
+        onProviderRun: () => calls.provider++,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForAssignmentState(rpcUrl, "running");
+    expect(calls).toEqual({ claim: 1, workspace: 1, provider: 1 });
+    const database = new DatabaseSync(config.databasePath);
+    expect(
+      database.prepare("SELECT count(*) AS count FROM queue_tenures").get(),
+    ).toEqual({ count: 2 });
+    database.close();
+    completion.release();
   });
 
   test("preserves queue tenure across an operational validation failure", async () => {
