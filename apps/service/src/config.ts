@@ -22,6 +22,7 @@ export const MAX_CODEX_SLOTS = 32;
 export const DEFAULT_POLL_INTERVAL_MS = 30_000;
 export const MIN_POLL_INTERVAL_MS = 1_000;
 export const MAX_POLL_INTERVAL_MS = 3_600_000;
+export const DEFAULT_MAX_RETAINED_TEXT_BYTES = 64 * 1024;
 export const DEFAULT_PROVIDER_TIMEOUTS: ProviderTimeouts = Object.freeze({
   childStartupMs: 10_000,
   initializationMs: 10_000,
@@ -63,6 +64,11 @@ const RawAccess = Schema.Union(
   }),
 );
 
+const RawRetention = Schema.Struct({
+  sensitivePatterns: Schema.optional(Schema.Array(Schema.String)),
+  maxTextBytes: Schema.optional(Schema.Number),
+});
+
 const RawConfig = Schema.Struct({
   repositories: Schema.Array(RawRepository),
   databasePath: Schema.String,
@@ -73,6 +79,7 @@ const RawConfig = Schema.Struct({
   pollIntervalMs: Schema.optional(Schema.Number),
   codex: RawCodex,
   timeouts: Schema.optional(RawTimeouts),
+  retention: Schema.optional(RawRetention),
 });
 
 const RawIntegrationConfig = Schema.Struct({
@@ -106,6 +113,10 @@ export interface FactoryConfig {
     readonly slots: number;
   };
   readonly timeouts: ProviderTimeouts;
+  readonly retention?: {
+    readonly sensitivePatterns: ReadonlyArray<string>;
+    readonly maxTextBytes: number;
+  };
 }
 
 export interface IntegrationConfig {
@@ -289,6 +300,24 @@ export function validateConfig(
       message: "access.localCliPort must differ from port",
     });
   }
+  const maxTextBytes = boundedInteger(
+    raw.retention?.maxTextBytes ?? DEFAULT_MAX_RETAINED_TEXT_BYTES,
+    "retention.maxTextBytes",
+    256,
+    16 * 1024 * 1024,
+  );
+  for (const pattern of raw.retention?.sensitivePatterns ?? []) {
+    try {
+      new RegExp(pattern, "u");
+    } catch (error) {
+      throw new FactoryError({
+        code: "config_invalid",
+        message:
+          "retention.sensitivePatterns contains an invalid regular expression",
+        detail: String(error),
+      });
+    }
+  }
   return {
     repositories,
     databasePath: resolve(configDirectory, raw.databasePath),
@@ -299,6 +328,10 @@ export function validateConfig(
     pollIntervalMs,
     codex: { ...raw.codex, slots },
     timeouts: resolveTimeouts(raw.timeouts),
+    retention: {
+      sensitivePatterns: raw.retention?.sensitivePatterns ?? [],
+      maxTextBytes,
+    },
   };
 }
 

@@ -12,6 +12,8 @@ export const ASSIGNMENT_EVENTS = {
   providerTurnStarted: "provider.turn.started",
   providerTurnFinished: "provider.turn.finished",
   providerFailed: "provider.failed",
+  pullRequestLookupStarted: "pull_request.lookup_started",
+  pullRequestReconciled: "pull_request.reconciled",
 } as const;
 
 export type AssignmentEventType =

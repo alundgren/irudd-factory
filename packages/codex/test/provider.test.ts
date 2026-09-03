@@ -134,7 +134,48 @@ describe("Codex provider", () => {
       },
     });
     expect(result.itemSummaries).toHaveLength(2);
+    expect(result.records?.map(({ kind }) => kind)).toEqual([
+      "item",
+      "item",
+      "transcript",
+      "usage",
+      "process_exit",
+    ]);
     expect(result.processExit).toMatchObject({ signal: "SIGTERM" });
+  });
+
+  test("leaves token totals unknown when Codex does not report them", async () => {
+    const { provider, assignment, workspace } = await fixture("no-usage");
+    const result = await Effect.runPromise(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        () => Effect.void,
+      ),
+    );
+    expect(result.tokenUsage).toBeNull();
+    expect(result.records?.some(({ kind }) => kind === "usage")).toBe(false);
+  });
+
+  test("persists observed records before a running turn is interrupted", async () => {
+    const { provider, assignment, workspace } = await fixture(
+      "retention-pause",
+      { turnMs: 5_000 },
+    );
+    const retained: string[] = [];
+    const fiber = Effect.runFork(
+      provider.run(
+        { assignment, workspace, prompt: "Implement it." },
+        () => Effect.void,
+        (records) =>
+          Effect.sync(() => retained.push(...records.map(({ kind }) => kind))),
+      ),
+    );
+    const deadline = Date.now() + 2_000;
+    while (!retained.includes("usage") && Date.now() < deadline) {
+      await delay(10);
+    }
+    expect(retained).toEqual(["item", "item", "transcript", "usage"]);
+    await Effect.runPromise(Fiber.interrupt(fiber));
   });
 
   test("ignores everything a subagent thread reports", async () => {
@@ -169,7 +210,7 @@ describe("Codex provider", () => {
       turnId: "turn-1",
       finalResponse: "Pull request opened.",
     });
-    expect(result.tokenUsage.total.totalTokens).toBe(19);
+    expect(result.tokenUsage?.total.totalTokens).toBe(19);
   });
 
   for (const [mode, code] of [

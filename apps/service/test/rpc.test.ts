@@ -17,6 +17,12 @@ import { openStateStore } from "@irudd-factory/state-sqlite";
 import { Effect, Layer } from "effect";
 import {
   getFactorySnapshot,
+  readAttempts,
+  readEvents,
+  readIssues,
+  readTimeline,
+  readTranscript,
+  readUsage,
   runNextEligibleIssue,
   startIssue,
 } from "../../cli/src/client.ts";
@@ -712,6 +718,34 @@ describe("Factory RPC service", () => {
         onProviderInterrupted: () => {
           interrupted = true;
         },
+        providerRecordsBeforeCompletion: [
+          {
+            kind: "transcript",
+            timestamp: "2026-01-15T12:00:01.000Z",
+            text: "Durable text observed before interruption.",
+          },
+          {
+            kind: "usage",
+            timestamp: "2026-01-15T12:00:02.000Z",
+            usage: {
+              total: {
+                inputTokens: 10,
+                cachedInputTokens: 1,
+                outputTokens: 5,
+                reasoningOutputTokens: 2,
+                totalTokens: 15,
+              },
+              last: {
+                inputTokens: 10,
+                cachedInputTokens: 1,
+                outputTokens: 5,
+                reasoningOutputTokens: 2,
+                totalTokens: 15,
+              },
+              modelContextWindow: null,
+            },
+          },
+        ],
       }),
     );
     const rpcUrl = `${service.url}/rpc`;
@@ -729,6 +763,16 @@ describe("Factory RPC service", () => {
       }),
     ]);
     expect(interrupted).toBe(true);
+    const retained = openStateStore(config.databasePath);
+    const transcript = await Effect.runPromise(
+      retained.service.readTranscript("assignment-runnable-1", {}),
+    );
+    const usage = await Effect.runPromise(retained.service.readUsage({}));
+    expect(transcript.items[0]?.text).toBe(
+      "Durable text observed before interruption.",
+    );
+    expect(usage.items[0]?.total.totalTokens).toBe(15);
+    retained.close();
   });
 
   test("returns every command result through the same RPC", async () => {
@@ -786,6 +830,116 @@ describe("Factory RPC service", () => {
       }
       await service.stop();
     }
+  });
+
+  test("serves bounded retained history pages over RPC", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-history-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      pollIntervalMs: 30_000,
+      retention: {
+        sensitivePatterns: ["fixture-secret-[0-9]+"],
+        maxTextBytes: 512,
+      },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const definition = fixture("retained-history");
+    const store = openStateStore(config.databasePath, config.retention);
+    await Effect.runPromise(
+      seedFixture(definition).pipe(
+        Effect.provideService(StateStore, store.service),
+      ),
+    );
+    const interrupted = definition.state.history?.find(
+      ({ assignment }) => assignment.id === "attempt-history-interrupted",
+    )?.assignment;
+    if (!interrupted?.workspace)
+      throw new Error("History fixture lacks its interrupted workspace");
+    await Effect.runPromise(
+      store.service.appendEvent(interrupted.id, {
+        type: "pull_request.lookup_started",
+        timestamp: "2026-01-13T12:11:00.000Z",
+        detail: {},
+      }),
+    );
+    await Effect.runPromise(
+      store.service.seedAssignment(
+        {
+          ...interrupted,
+          id: "attempt-history-lookup",
+          workspace: {
+            ...interrupted.workspace,
+            branch: "factory/attempt-history-lookup",
+          },
+          createdAt: "2026-01-13T13:00:00.000Z",
+          updatedAt: "2026-01-13T13:10:00.000Z",
+        },
+        [
+          {
+            assignmentId: "attempt-history-lookup",
+            type: "assignment.interrupted",
+            timestamp: "2026-01-13T13:10:00.000Z",
+            detail: { processReconciliation: "exited" },
+          },
+        ],
+      ),
+    );
+    store.close();
+    let pullRequestLookups = 0;
+    const controls = {
+      onPullRequestLookup: () => {
+        pullRequestLookups += 1;
+      },
+    };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, definition, controls),
+    );
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+
+    const first = await readAttempts(rpcUrl, { limit: 2 });
+    const second = await readAttempts(rpcUrl, {
+      limit: 2,
+      cursor: first.nextCursor ?? 0,
+      watermark: first.watermark,
+    });
+    expect([...first.items, ...second.items]).toHaveLength(4);
+    expect((await readIssues(rpcUrl)).items).toHaveLength(1);
+    expect((await readTimeline(rpcUrl)).items).toHaveLength(4);
+    expect((await readUsage(rpcUrl)).items).toHaveLength(1);
+    const transcript = await readTranscript(rpcUrl, "attempt-history-failed");
+    expect(transcript.items[0]?.truncated).toBe(true);
+    expect(transcript.items[0]?.text).not.toContain("fixture-secret-123");
+    expect(
+      (await readEvents(rpcUrl, "attempt-history-failed")).items.length,
+    ).toBeGreaterThan(1);
+    expect(pullRequestLookups).toBe(1);
+    await service.stop();
+    const restarted = await startFactoryService(
+      config,
+      fixtureDependencies(config, definition, controls),
+    );
+    await waitForRpc(`${restarted.url}/rpc`);
+    expect(pullRequestLookups).toBe(1);
+    await restarted.stop();
   });
 
   test("starts issues from two repositories with effective Codex settings", async () => {

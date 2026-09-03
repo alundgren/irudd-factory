@@ -3,6 +3,7 @@ import {
   configPathFromArgs,
   DEFAULT_CODEX_SLOTS,
   DEFAULT_LOCAL_CLI_PORT,
+  DEFAULT_MAX_RETAINED_TEXT_BYTES,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_PORT,
   DEFAULT_PROVIDER_TIMEOUTS,
@@ -74,6 +75,31 @@ describe("factory configuration", () => {
     expect(config.codex.slots).toBe(DEFAULT_CODEX_SLOTS);
     expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
     expect(config.access).toEqual({ mode: "local" });
+    expect(config.retention).toEqual({
+      sensitivePatterns: [],
+      maxTextBytes: DEFAULT_MAX_RETAINED_TEXT_BYTES,
+    });
+  });
+
+  test("validates retained-text redaction and byte limits", () => {
+    expect(
+      validateConfig({
+        ...valid,
+        retention: {
+          sensitivePatterns: ["token-[0-9]+"],
+          maxTextBytes: 512,
+        },
+      }).retention,
+    ).toEqual({ sensitivePatterns: ["token-[0-9]+"], maxTextBytes: 512 });
+    expect(() =>
+      validateConfig({
+        ...valid,
+        retention: { sensitivePatterns: ["["] },
+      }),
+    ).toThrow("invalid regular expression");
+    expect(() =>
+      validateConfig({ ...valid, retention: { maxTextBytes: 255 } }),
+    ).toThrow("retention.maxTextBytes");
   });
 
   test("accepts explicit local access", () => {

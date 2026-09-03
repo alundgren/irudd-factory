@@ -47,7 +47,15 @@ export function productionDependencies(
   github?: GitHubService,
 ): FactoryDependencies {
   return Layer.mergeAll(
-    layerStateStore(config.databasePath),
+    layerStateStore(config.databasePath, {
+      recover: true,
+      ...(config.retention
+        ? {
+            sensitivePatterns: config.retention.sensitivePatterns,
+            maxTextBytes: config.retention.maxTextBytes,
+          }
+        : {}),
+    }),
     github ? Layer.succeed(GitHub, github) : layerGitHub(),
     layerWorkspaces({ root: config.workspaceRoot }),
     layerCodexProvider({
@@ -70,6 +78,9 @@ function handlerLayer(
       const context = yield* Effect.context<
         StateStore | GitHub | Workspaces | Provider | Clock | IdGenerator
       >();
+      yield* application
+        .recoverInterruptedAttempts()
+        .pipe(Effect.provide(context));
       return {
         RunNextEligibleIssue: ({ commandId }) =>
           application.runNextEligibleIssue(commandId).pipe(
@@ -83,6 +94,36 @@ function handlerLayer(
           ),
         GetFactorySnapshot: () =>
           application.getSnapshot().pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ReadIssues: ({ page }) =>
+          application.readIssues(page).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ReadAttempts: ({ page }) =>
+          application.readAttempts(page).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ReadTranscript: ({ attemptId, page }) =>
+          application.readTranscript(attemptId, page).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ReadEvents: ({ attemptId, page }) =>
+          application.readEvents(attemptId, page).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ReadUsage: ({ page }) =>
+          application.readUsage(page).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ReadTimeline: ({ page }) =>
+          application.readTimeline(page).pipe(
             Effect.provide(context),
             Effect.mapError((error) => `${error.code}: ${error.message}`),
           ),
@@ -113,9 +154,8 @@ export async function startFactoryService(
     slots: config.codex.slots,
     pollIntervalMs: config.pollIntervalMs,
   });
-  const RpcLive = RpcServer.layer(FactoryRpcs).pipe(
-    Layer.provide(handlerLayer(dependencies, application)),
-  );
+  const HandlerLive = handlerLayer(dependencies, application);
+  const RpcLive = RpcServer.layer(FactoryRpcs).pipe(Layer.provide(HandlerLive));
   const ProtocolLive = RpcServer.layerProtocolHttp({ path: RPC_PATH }).pipe(
     Layer.provide(RpcSerialization.layerJson),
   );
@@ -161,7 +201,7 @@ export async function startFactoryService(
   let LocalCli: Layer.Layer<never, unknown, never> | null = null;
   if (access.mode === TAILSCALE_ACCESS_MODE) {
     const LocalCliRpcLive = RpcServer.layer(FactoryRpcs).pipe(
-      Layer.provide(handlerLayer(dependencies, application)),
+      Layer.provide(HandlerLive),
     );
     const LocalCliProtocolLive = RpcServer.layerProtocolHttp({
       path: RPC_PATH,

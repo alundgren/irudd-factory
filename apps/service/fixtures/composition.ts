@@ -28,7 +28,19 @@ export function seedFixture(fixture: FixtureDefinition) {
   return Effect.gen(function* () {
     const store = yield* StateStore;
     yield* store.reset();
-    if (fixture.state.assignment) {
+    for (const retained of fixture.state.history ?? []) {
+      yield* store.seedAssignment(retained.assignment, retained.events);
+      yield* store.appendProviderRecords(
+        retained.assignment.id,
+        retained.providerRecords,
+      );
+    }
+    if (
+      fixture.state.assignment &&
+      !(fixture.state.history ?? []).some(
+        ({ assignment }) => assignment.id === fixture.state.assignment?.id,
+      )
+    ) {
       yield* store.seedAssignment(
         fixture.state.assignment,
         fixture.state.events,
@@ -61,6 +73,11 @@ export function fixtureDependencies(
         return fixture.behavior.claimOutcome;
       }),
     verifyPullRequest: () => Effect.succeed(fixture.behavior.pullRequest),
+    lookupPullRequest: () =>
+      Effect.sync(() => {
+        controls.onPullRequestLookup?.();
+        return fixture.behavior.pullRequest;
+      }),
   };
   const workspaces: WorkspaceService = {
     create: ({ assignmentId }) =>
@@ -86,7 +103,7 @@ export function fixtureDependencies(
       }),
   };
   const provider: ProviderService = {
-    run: (input, emit) =>
+    run: (input, emit, retain) =>
       Effect.gen(function* () {
         controls.onProviderRun?.();
         if (controls.cleanupUncertain) {
@@ -139,6 +156,9 @@ export function fixtureDependencies(
             observedEffort: input.assignment.requestedEffort,
           },
         });
+        if (controls.providerRecordsBeforeCompletion && retain) {
+          yield* retain(controls.providerRecordsBeforeCompletion);
+        }
         yield* controls.beforeCompletion
           ? Effect.promise(controls.beforeCompletion)
           : Effect.sleep(
@@ -156,7 +176,10 @@ export function fixtureDependencies(
       ),
   };
   return Layer.mergeAll(
-    layerStateStore(config.databasePath, { recover: false }),
+    layerStateStore(config.databasePath, {
+      recover: false,
+      ...config.retention,
+    }),
     Layer.succeed(GitHub, github),
     Layer.succeed(Workspaces, workspaces),
     Layer.succeed(Provider, provider),
