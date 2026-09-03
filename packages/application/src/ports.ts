@@ -18,13 +18,16 @@ export interface Candidate {
   readonly workflow: WorkflowRevision;
 }
 
+export interface AdmissionCandidate extends Candidate {
+  readonly requestedModel: string;
+  readonly requestedEffort: string;
+}
+
 export interface AdmissionInput {
   readonly commandId: string;
   readonly provider: string;
-  readonly candidates: ReadonlyArray<Candidate>;
+  readonly candidates: ReadonlyArray<AdmissionCandidate>;
   readonly assignmentId: string;
-  readonly requestedModel: string;
-  readonly requestedEffort: string;
   readonly timestamp: string;
   readonly slots?: number;
   readonly allowRetry?: boolean;

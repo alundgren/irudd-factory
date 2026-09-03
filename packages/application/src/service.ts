@@ -178,6 +178,12 @@ export function makeApplication(options: ApplicationOptions) {
           const state = yield* StateStore;
           const clock = yield* Clock;
           const normalized = failure("assignment_failed", error);
+          const current = yield* state.getAssignment(initial.id);
+          const ownershipUncertain =
+            current?.state === "ownership_uncertain" ||
+            normalized.detail === "cleanup_timeout" ||
+            (current?.processStartPending === true &&
+              normalized.code === "process_identity_changed");
           yield* state.appendEvent(
             initial.id,
             {
@@ -186,9 +192,11 @@ export function makeApplication(options: ApplicationOptions) {
               detail: { code: normalized.code, message: normalized.message },
             },
             {
-              state: "failed",
+              state: ownershipUncertain ? "ownership_uncertain" : "failed",
               error: normalized,
-              processStartPending: false,
+              processStartPending: ownershipUncertain
+                ? (current?.processStartPending ?? true)
+                : false,
             },
           );
         }).pipe(Effect.catchAll(() => Effect.void)),
@@ -219,20 +227,32 @@ export function makeApplication(options: ApplicationOptions) {
 
       const clock = yield* Clock;
       const ids = yield* IdGenerator;
-      const selected = candidates.length === 1 ? candidates[0] : undefined;
-      const settings = selected
-        ? options.repositories.find(
+      const configuredCandidates = yield* Effect.forEach(
+        candidates,
+        (candidate) => {
+          const settings = options.repositories.find(
             ({ repository }) =>
-              repository === selected.issue.repository.toLowerCase(),
-          )
-        : undefined;
+              repository === candidate.issue.repository.toLowerCase(),
+          );
+          return settings
+            ? Effect.succeed({
+                ...candidate,
+                requestedModel: settings.model,
+                requestedEffort: settings.reasoningEffort,
+              })
+            : Effect.fail(
+                new FactoryError({
+                  code: "repository_not_configured",
+                  message: `Repository ${candidate.issue.repository} is not configured`,
+                }),
+              );
+        },
+      );
       const admission = yield* state.admit({
         commandId,
         provider: options.provider,
-        candidates,
+        candidates: configuredCandidates,
         assignmentId: ids.assignmentId(),
-        requestedModel: settings?.model ?? "",
-        requestedEffort: settings?.reasoningEffort ?? "",
         timestamp: clock.now(),
         slots: options.slots,
         allowRetry,

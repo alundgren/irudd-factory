@@ -81,6 +81,7 @@ export interface FixtureControls {
   readonly onWorkspace?: () => void;
   readonly onProviderRun?: () => void;
   readonly onProviderInterrupted?: () => void;
+  readonly cleanupUncertain?: boolean;
   readonly failAfterObservation?: {
     readonly model?: string;
     readonly effort?: string;

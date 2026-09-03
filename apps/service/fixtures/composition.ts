@@ -89,6 +89,20 @@ export function fixtureDependencies(
     run: (input, emit) =>
       Effect.gen(function* () {
         controls.onProviderRun?.();
+        if (controls.cleanupUncertain) {
+          yield* emit({
+            type: ASSIGNMENT_EVENTS.providerFailed,
+            timestamp: fixture.state.now,
+            detail: { processExit: { cleanupTimedOut: true } },
+            patch: { state: "ownership_uncertain" },
+          });
+          return yield* Effect.fail(
+            new FactoryError({
+              code: "cleanup_timeout",
+              message: "Fixture could not confirm provider exit",
+            }),
+          );
+        }
         if (controls.failAfterObservation) {
           const observed = controls.failAfterObservation;
           yield* emit({

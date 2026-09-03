@@ -778,6 +778,9 @@ export function makeCodexProvider(
                     finalResponse,
                     processExit,
                   },
+                  ...(processExit.cleanupTimedOut
+                    ? { patch: { state: "ownership_uncertain" as const } }
+                    : {}),
                 }),
               );
             } catch {

@@ -161,10 +161,14 @@ export async function runManagedCommand(options: {
     delay(options.timeoutMs).then(() => ({ _tag: "timeout" as const })),
   ]);
   if (result._tag === "timeout") {
-    await terminateOwnedGroup(child, Math.min(options.timeoutMs, 1_000));
+    const cleanup = await terminateOwnedGroup(
+      child,
+      Math.min(options.timeoutMs, 1_000),
+    );
     throw new FactoryError({
       code: options.timeoutCode,
       message: `Provider command exceeded ${options.timeoutMs} ms`,
+      ...(cleanup.cleanupTimedOut ? { detail: "cleanup_timeout" } : {}),
     });
   }
   const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);

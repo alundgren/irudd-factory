@@ -49,10 +49,12 @@ function admission(
   return {
     commandId,
     provider: "codex",
-    candidates,
+    candidates: candidates.map((value) => ({
+      ...value,
+      requestedModel: "gpt-5.6-luna",
+      requestedEffort: "low",
+    })),
     assignmentId,
-    requestedModel: "gpt-5.6-luna",
-    requestedEffort: "low",
     timestamp: "2026-01-01T00:00:00.000Z",
   };
 }

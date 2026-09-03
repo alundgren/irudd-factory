@@ -65,7 +65,13 @@ function gate() {
 
 async function waitForAssignmentState(
   url: string,
-  state: "reserved" | "starting" | "running" | "completed" | "failed",
+  state:
+    | "reserved"
+    | "starting"
+    | "running"
+    | "completed"
+    | "failed"
+    | "ownership_uncertain",
 ): Promise<Awaited<ReturnType<typeof getFactorySnapshot>>> {
   const deadline = Date.now() + 3_000;
   let snapshot = await getFactorySnapshot(url);
@@ -560,5 +566,115 @@ describe("Factory RPC service", () => {
       codexSlots: 2,
       pollIntervalMs: 30_000,
     });
+  });
+
+  test("keeps a slot occupied when provider cleanup is unconfirmed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-cleanup-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "factory/fixture",
+          codex: { model: "gpt-5.6-luna", reasoningEffort: "low" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 30_000,
+      codex: { model: "gpt-5.6-luna", reasoningEffort: "low", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, fixture("runnable"), {
+        cleanupUncertain: true,
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+    await runNextEligibleIssue(rpcUrl, "cleanup-first");
+    const uncertain = await waitForAssignmentState(
+      rpcUrl,
+      "ownership_uncertain",
+    );
+    expect(uncertain.assignment?.error).toMatchObject({
+      code: "cleanup_timeout",
+    });
+    const second = await runNextEligibleIssue(rpcUrl, "cleanup-second");
+    expect(second.result._tag).toBe("provider_busy");
+  });
+
+  test("run-next keeps the selected candidate's repository settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-next-settings-"));
+    roots.push(root);
+    const config: FactoryConfig = {
+      repositories: [
+        {
+          repository: "owner/one",
+          codex: { model: "global-model", reasoningEffort: "medium" },
+        },
+        {
+          repository: "owner/two",
+          codex: { model: "override-model", reasoningEffort: "high" },
+        },
+      ],
+      databasePath: join(root, "factory.db"),
+      workspaceRoot: join(root, "workspaces"),
+      bindHost: "127.0.0.1",
+      port: 0,
+      pollIntervalMs: 30_000,
+      codex: { model: "global-model", reasoningEffort: "medium", slots: 1 },
+      timeouts: {
+        childStartupMs: 1_000,
+        initializationMs: 1_000,
+        modelSchemaMs: 1_000,
+        turnMs: 5_000,
+        shutdownMs: 1_000,
+      },
+    };
+    const issueOne = { ...fixtureIssue(11), repository: "owner/one" };
+    const issueTwo = { ...fixtureIssue(22), repository: "owner/two" };
+    const seed = openStateStore(config.databasePath);
+    await Effect.runPromise(
+      seed.service.seedAssignment(
+        {
+          ...fixture("completed-ready").state.assignment!,
+          id: "historical-attempt",
+          issue: issueOne,
+        },
+        [],
+      ),
+    );
+    seed.close();
+    const base = fixture("runnable");
+    const poolFixture = {
+      ...base,
+      name: "run-next-settings",
+      state: { ...base.state, candidates: [issueOne, issueTwo] },
+    };
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, poolFixture),
+    );
+    stops.push(service.stop);
+    const receipt = await runNextEligibleIssue(
+      `${service.url}/rpc`,
+      "run-next-settings",
+    );
+    expect(receipt.result._tag).toBe("started");
+    if (receipt.result._tag === "started") {
+      expect(receipt.result.assignment.issue.repository).toBe("owner/two");
+      expect(receipt.result.assignment.requestedModel).toBe("override-model");
+      expect(receipt.result.assignment.requestedEffort).toBe("high");
+    }
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vite-plus/test";
 import type { Assignment, CommandResult } from "@irudd-factory/contracts";
 import {
   assignmentIsBusy,
+  codexCapacityFull,
   resultTitle,
   stateLabel,
 } from "../src/view-model.ts";
@@ -24,6 +25,8 @@ describe("console state labels", () => {
     expect(assignmentIsBusy(assignment("reserved"))).toBe(true);
     expect(assignmentIsBusy(assignment("starting"))).toBe(true);
     expect(assignmentIsBusy(assignment("running"))).toBe(true);
+    expect(assignmentIsBusy(assignment("ownership_uncertain"))).toBe(true);
+    expect(assignmentIsBusy(assignment("interrupted"))).toBe(false);
     expect(assignmentIsBusy(assignment("completed"))).toBe(false);
     expect(assignmentIsBusy(assignment("failed"))).toBe(false);
     expect(assignmentIsBusy(null)).toBe(false);
@@ -31,9 +34,35 @@ describe("console state labels", () => {
 
   test("names all visible assignment states", () => {
     expect(
-      ["reserved", "starting", "running", "completed", "failed"].map((state) =>
-        stateLabel(state as Assignment["state"]),
+      [
+        "reserved",
+        "starting",
+        "running",
+        "completed",
+        "failed",
+        "interrupted",
+        "ownership_uncertain",
+      ].map((state) => stateLabel(state as Assignment["state"])),
+    ).toEqual([
+      "Reserved",
+      "Starting",
+      "Running",
+      "Completed",
+      "Failed",
+      "Interrupted",
+      "Process ownership uncertain",
+    ]);
+  });
+
+  test("disables admission only when all Codex slots are occupied", () => {
+    const assignment = (state: Assignment["state"]) =>
+      ({ state }) as Assignment;
+    expect(codexCapacityFull([assignment("running")], 2)).toBe(false);
+    expect(
+      codexCapacityFull(
+        [assignment("running"), assignment("ownership_uncertain")],
+        2,
       ),
-    ).toEqual(["Reserved", "Starting", "Running", "Completed", "Failed"]);
+    ).toBe(true);
   });
 });

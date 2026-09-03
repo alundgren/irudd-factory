@@ -346,6 +346,7 @@ describe("Codex provider", () => {
     const { assignment, workspace } = await fixture("interrupt-timeout");
     let captured: ManagedProcess | undefined;
     let terminationReturnedAt = 0;
+    const patches: Array<string | undefined> = [];
     const provider = makeCodexProvider({
       commandPrefix: [process.execPath, fakeServer, "interrupt-timeout"],
       runtimeRoot: join(dirname(workspace.worktreePath), "deadline-runtime"),
@@ -374,7 +375,10 @@ describe("Codex provider", () => {
         Effect.either(
           provider.run(
             { assignment, workspace, prompt: "Implement it." },
-            () => Effect.void,
+            (event) =>
+              Effect.sync(() => {
+                patches.push(event.patch?.state);
+              }),
           ),
         ),
       );
@@ -382,6 +386,7 @@ describe("Codex provider", () => {
       expect(Either.isLeft(outcome)).toBe(true);
       expect(afterFailureMs).toBeLessThan(75);
       expect(captured).toBeDefined();
+      expect(patches).toContain("ownership_uncertain");
     } finally {
       if (captured) await terminateOwnedGroup(captured, 500);
     }

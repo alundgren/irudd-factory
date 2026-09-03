@@ -472,8 +472,8 @@ export function openStateStore(
         state: "reserved",
         workflow: candidate.workflow,
         workspace: null,
-        requestedModel: input.requestedModel,
-        requestedEffort: input.requestedEffort,
+        requestedModel: candidate.requestedModel,
+        requestedEffort: candidate.requestedEffort,
         observedModel: null,
         observedEffort: null,
         codexVersion: null,
@@ -684,7 +684,11 @@ export function openStateStore(
             .get() as AssignmentRow | undefined;
           const assignments = (
             database
-              .prepare("SELECT * FROM assignments ORDER BY rowid")
+              .prepare(
+                `SELECT * FROM assignments
+                 WHERE state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
+                 ORDER BY rowid LIMIT 32`,
+              )
               .all() as unknown as ReadonlyArray<AssignmentRow>
           ).map(decodeAssignment);
           const current = assignmentRow
