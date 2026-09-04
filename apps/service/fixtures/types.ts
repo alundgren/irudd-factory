@@ -59,7 +59,7 @@ export interface FixtureExpectations {
   readonly initial: {
     readonly candidateCount: number;
     readonly assignment: Assignment | null;
-    readonly activeAssignmentCount: 0 | 1;
+    readonly activeAssignmentCount: number;
     readonly eventTypes: ReadonlyArray<string>;
   };
   readonly command?: {

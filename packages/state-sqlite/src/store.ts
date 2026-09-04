@@ -20,7 +20,11 @@ import type {
   StateStoreService,
   LifecycleCommandInput,
 } from "@irudd-factory/application";
-import { FactoryError, StateStore } from "@irudd-factory/application";
+import {
+  CODEX_PROVIDER,
+  FactoryError,
+  StateStore,
+} from "@irudd-factory/application";
 import {
   ACTIVE_ASSIGNMENT_STATES,
   Assignment,
@@ -51,6 +55,7 @@ import {
   LifecycleCommandPhase,
   LifecycleConsequence,
   type OperationsOverview,
+  TimelineAttempt,
 } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { migrate } from "./migrations.ts";
@@ -330,6 +335,7 @@ export interface StateStoreOptions {
   readonly recover?: boolean;
   readonly sensitivePatterns?: ReadonlyArray<string>;
   readonly maxTextBytes?: number;
+  readonly now?: () => string;
 }
 
 interface DatabaseLease {
@@ -1981,7 +1987,7 @@ export function openStateStore(
           kind,
           scope,
           valuesJson: JSON.stringify(values),
-          createdAt: new Date().toISOString(),
+          createdAt: options.now?.() ?? new Date().toISOString(),
         });
     }
     const items = values.slice(cursor, cursor + limit);
@@ -2015,21 +2021,59 @@ export function openStateStore(
     order: "history" | "timeline",
     includeArchived = false,
     issueNodeId?: string,
+    provider?: string,
   ): ReadonlyArray<Assignment> {
     const direction = order === "timeline" ? "ASC" : "DESC";
     const archivedFilter = includeArchived ? "" : "AND archived_at IS NULL";
     const issueFilter = issueNodeId ? "AND issue_node_id = $issueNodeId" : "";
+    const providerFilter = provider ? "AND provider = $provider" : "";
     return (
       database
         .prepare(
           `SELECT * FROM assignments
-           WHERE 1 = 1 ${archivedFilter} ${issueFilter}
+           WHERE 1 = 1 ${archivedFilter} ${issueFilter} ${providerFilter}
            ORDER BY created_at ${direction}, id ${direction}`,
         )
-        .all(
-          issueNodeId ? { issueNodeId } : {},
-        ) as unknown as ReadonlyArray<AssignmentRow>
+        .all({
+          ...(issueNodeId ? { issueNodeId } : {}),
+          ...(provider ? { provider } : {}),
+        }) as unknown as ReadonlyArray<AssignmentRow>
     ).map(decodeAssignment);
+  }
+
+  function timelineRows(): ReadonlyArray<typeof TimelineAttempt.Type> {
+    const terminalTimestamp = database.prepare(
+      `SELECT MIN(timestamp) AS ended_at
+       FROM assignment_events
+       WHERE assignment_id = $assignmentId
+         AND type IN ($completed, $failed, $interrupted, $stopped)`,
+    );
+    return assignmentRows("timeline", true, undefined, CODEX_PROVIDER)
+      .map((assignment) => {
+        const row = terminalTimestamp.get({
+          assignmentId: assignment.id,
+          completed: ASSIGNMENT_EVENTS.completed,
+          failed: ASSIGNMENT_EVENTS.failed,
+          interrupted: ASSIGNMENT_EVENTS.interrupted,
+          stopped: ASSIGNMENT_EVENTS.stopped,
+        }) as { ended_at: string | null };
+        const terminal =
+          assignment.state === "completed" ||
+          assignment.state === "failed" ||
+          assignment.state === "interrupted" ||
+          assignment.state === "stopped";
+        return {
+          ...assignment,
+          startedAt: assignment.createdAt,
+          endedAt: row.ended_at ?? (terminal ? assignment.updatedAt : null),
+        };
+      })
+      .sort(
+        (left, right) =>
+          left.startedAt.localeCompare(right.startedAt) ||
+          (left.endedAt ?? "\uffff").localeCompare(right.endedAt ?? "\uffff") ||
+          left.id.localeCompare(right.id),
+      );
   }
 
   function recentAssignmentRows(): ReadonlyArray<Assignment> {
@@ -2533,10 +2577,29 @@ export function openStateStore(
       }),
     readTimeline: (request) =>
       Effect.try({
-        try: () =>
-          pageRequest("timeline", "", request, Assignment, () =>
-            assignmentRows("timeline"),
-          ),
+        try: () => {
+          const page = pageRequest(
+            "timeline",
+            CODEX_PROVIDER,
+            request,
+            TimelineAttempt,
+            timelineRows,
+          );
+          const snapshot = database
+            .prepare(
+              "SELECT created_at FROM read_snapshots WHERE watermark = $watermark",
+            )
+            .get({ watermark: page.watermark }) as
+            | { created_at: string }
+            | undefined;
+          if (!snapshot) {
+            throw new FactoryError({
+              code: "page_watermark_invalid",
+              message: "The timeline read timestamp is unavailable",
+            });
+          }
+          return { ...page, readAt: snapshot.created_at };
+        },
         catch: storageError,
       }),
     getOperationsOverview: () =>

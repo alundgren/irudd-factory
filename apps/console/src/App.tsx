@@ -29,6 +29,7 @@ import {
   type CommandPhase,
 } from "./view-model.ts";
 import AttemptInspector from "./AttemptInspector.tsx";
+import Timeline from "./Timeline.tsx";
 
 const QUEUE_PAGE_SIZE = 6;
 const REFRESH_INTERVAL_MS = 5_000;
@@ -193,7 +194,7 @@ function QueueRow({
   );
 }
 
-export default function App() {
+function Overview() {
   const [snapshot, setSnapshot] = useState<FactorySnapshot>(emptySnapshot);
   const [usage, setUsage] = useState<ReadonlyArray<AttemptUsage>>([]);
   const [activity, setActivity] = useState<ReadonlyArray<Assignment>>([]);
@@ -468,6 +469,10 @@ export default function App() {
           <a className="nav-current" href="/">
             <span aria-hidden="true">▦</span>
             Overview
+          </a>
+          <a href="/?view=timeline">
+            <span aria-hidden="true">↔</span>
+            Timeline
           </a>
         </nav>
         <div
@@ -821,5 +826,14 @@ export default function App() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return new URLSearchParams(window.location.search).get("view") ===
+    "timeline" ? (
+    <Timeline />
+  ) : (
+    <Overview />
   );
 }

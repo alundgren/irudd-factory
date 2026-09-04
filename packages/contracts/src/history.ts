@@ -152,7 +152,16 @@ export const EventPage = pageSchema(
 export type EventPage = typeof EventPage.Type;
 export const UsagePage = pageSchema(AttemptUsage);
 export type UsagePage = typeof UsagePage.Type;
-export const TimelinePage = pageSchema(Assignment);
+export const TimelineAttempt = Schema.Struct({
+  ...Assignment.fields,
+  startedAt: Schema.String,
+  endedAt: Schema.NullOr(Schema.String),
+});
+export type TimelineAttempt = typeof TimelineAttempt.Type;
+export const TimelinePage = Schema.Struct({
+  ...pageSchema(TimelineAttempt).fields,
+  readAt: Schema.String,
+});
 export type TimelinePage = typeof TimelinePage.Type;
 export const LifecycleCommandPage = pageSchema(LifecycleCommand);
 export type LifecycleCommandPage = typeof LifecycleCommandPage.Type;
