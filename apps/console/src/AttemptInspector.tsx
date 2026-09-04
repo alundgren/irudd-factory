@@ -180,6 +180,7 @@ export default function AttemptInspector({
   const [usage, setUsage] = useState<ReadonlyArray<AttemptUsage>>([]);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [siblingError, setSiblingError] = useState<string | null>(null);
+  const [siblingLoading, setSiblingLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [eventError, setEventError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -191,14 +192,20 @@ export default function AttemptInspector({
   const [commandSubmitting, setCommandSubmitting] = useState(false);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const confirmationCancel = useRef<HTMLButtonElement>(null);
+  const confirmationTrigger = useRef<HTMLButtonElement | null>(null);
+  const confirmationRef = useRef(confirmation);
   const returnFocus = useRef<HTMLElement | null>(null);
   const detailGeneration = useRef(0);
   const stateRefreshGeneration = useRef(0);
   const listGeneration = useRef(0);
+  const siblingRequestGeneration = useRef(0);
+  const siblingRequestPending = useRef(false);
   const selectedAttemptIdRef = useRef(selectedAttemptId);
   const attemptRef = useRef(attempt);
   selectedAttemptIdRef.current = selectedAttemptId;
   attemptRef.current = attempt;
+  confirmationRef.current = confirmation;
 
   const loadList = useCallback(
     async (position: PagePosition = {}, resetHistory = false) => {
@@ -233,6 +240,9 @@ export default function AttemptInspector({
     const generation = detailGeneration.current + 1;
     detailGeneration.current = generation;
     stateRefreshGeneration.current += 1;
+    siblingRequestGeneration.current += 1;
+    siblingRequestPending.current = false;
+    setSiblingLoading(false);
     setStateRefreshing(false);
     setDetailLoading(true);
     setDetailError(null);
@@ -348,6 +358,11 @@ export default function AttemptInspector({
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (confirmationRef.current) {
+          setConfirmation(null);
+          window.setTimeout(() => confirmationTrigger.current?.focus(), 0);
+          return;
+        }
         onSelect(null);
         window.setTimeout(() => returnFocus.current?.focus(), 0);
         return;
@@ -453,9 +468,15 @@ export default function AttemptInspector({
   }
 
   async function loadMoreSiblings() {
-    if (!attempt || !siblingPage?.nextCursor) return;
+    if (!attempt || !siblingPage?.nextCursor || siblingRequestPending.current) {
+      return;
+    }
     const generation = detailGeneration.current;
     const attemptId = attempt.id;
+    const requestGeneration = siblingRequestGeneration.current + 1;
+    siblingRequestGeneration.current = requestGeneration;
+    siblingRequestPending.current = true;
+    setSiblingLoading(true);
     try {
       const next = await listAttempts({
         limit: SIBLING_LIMIT,
@@ -466,7 +487,8 @@ export default function AttemptInspector({
       });
       if (
         detailGeneration.current !== generation ||
-        selectedAttemptIdRef.current !== attemptId
+        selectedAttemptIdRef.current !== attemptId ||
+        siblingRequestGeneration.current !== requestGeneration
       ) {
         return;
       }
@@ -476,9 +498,15 @@ export default function AttemptInspector({
     } catch (error) {
       if (
         detailGeneration.current === generation &&
-        selectedAttemptIdRef.current === attemptId
+        selectedAttemptIdRef.current === attemptId &&
+        siblingRequestGeneration.current === requestGeneration
       ) {
         setSiblingError(loadErrorMessage(error));
+      }
+    } finally {
+      if (siblingRequestGeneration.current === requestGeneration) {
+        siblingRequestPending.current = false;
+        setSiblingLoading(false);
       }
     }
   }
@@ -563,10 +591,25 @@ export default function AttemptInspector({
   }
 
   async function copyPath(path: string, label: string) {
+    if (!attempt) return;
+    const generation = detailGeneration.current;
+    const attemptId = attempt.id;
     try {
       await navigator.clipboard.writeText(path);
+      if (
+        detailGeneration.current !== generation ||
+        selectedAttemptIdRef.current !== attemptId
+      ) {
+        return;
+      }
       setCopyNotice(`${label} copied.`);
     } catch {
+      if (
+        detailGeneration.current !== generation ||
+        selectedAttemptIdRef.current !== attemptId
+      ) {
+        return;
+      }
       setCopyNotice(
         `${label} could not be copied. Select the path and copy it manually.`,
       );
@@ -608,6 +651,11 @@ export default function AttemptInspector({
     setConfirmation(null);
     closeButton.current?.focus();
   }, [actions, confirmation]);
+
+  useEffect(() => {
+    if (!confirmation) return;
+    confirmationCancel.current?.focus();
+  }, [confirmation]);
 
   return (
     <>
@@ -827,6 +875,7 @@ export default function AttemptInspector({
                   {siblingPage?.nextCursor ? (
                     <button
                       className="text-action"
+                      disabled={siblingLoading}
                       onClick={() => void loadMoreSiblings()}
                     >
                       Load more attempts
@@ -1010,11 +1059,14 @@ export default function AttemptInspector({
                             : "secondary-action"
                         }
                         disabled={controlsUnavailable}
-                        onClick={() =>
-                          needsConfirmation(kind)
-                            ? setConfirmation(kind)
-                            : void runControl(kind)
-                        }
+                        onClick={(event) => {
+                          if (needsConfirmation(kind)) {
+                            confirmationTrigger.current = event.currentTarget;
+                            setConfirmation(kind);
+                          } else {
+                            void runControl(kind);
+                          }
+                        }}
                       >
                         {actionLabel(kind)}
                       </button>
@@ -1037,8 +1089,12 @@ export default function AttemptInspector({
                       </p>
                       <div>
                         <button
+                          ref={confirmationCancel}
                           className="text-action"
-                          onClick={() => setConfirmation(null)}
+                          onClick={() => {
+                            setConfirmation(null);
+                            confirmationTrigger.current?.focus();
+                          }}
                         >
                           Cancel
                         </button>

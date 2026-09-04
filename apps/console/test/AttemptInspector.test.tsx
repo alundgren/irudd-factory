@@ -519,6 +519,43 @@ describe("Attempt inspector", () => {
     );
   });
 
+  test("allows only one sibling continuation request at a time", async () => {
+    const continuation = deferred<AttemptPage>();
+    let continuationCalls = 0;
+    vi.mocked(client.listAttempts).mockImplementation(async (request) => {
+      if (!request.issueNodeId) {
+        return { items: [failed], watermark: "attempts-1", nextCursor: null };
+      }
+      if (request.cursor === 2) {
+        continuationCalls += 1;
+        return continuation.promise;
+      }
+      return {
+        items: [failed, completed],
+        watermark: "siblings-fixed",
+        nextCursor: 2,
+      };
+    });
+    const container = await renderInspector(failed.id);
+    const more = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Load more attempts")!;
+    await act(async () => more.click());
+    expect(more.disabled).toBe(true);
+    more.click();
+    expect(continuationCalls).toBe(1);
+
+    continuation.resolve({
+      items: [archived],
+      watermark: "siblings-fixed",
+      nextCursor: null,
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(container.querySelectorAll(".sibling-list button")).toHaveLength(3);
+  });
+
   test("removes stale controls while a sibling detail request is pending", async () => {
     const pendingCompleted = deferred<Attempt | null>();
     vi.mocked(client.loadAttempt).mockImplementation((id) =>
@@ -961,6 +998,15 @@ describe("Attempt inspector", () => {
     )!;
     await act(async () => restart.click());
     expect(container.textContent).toContain("Confirm restart attempt");
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).not.toContain("Confirm restart attempt");
+    expect(container.querySelector(".attempt-inspector")).not.toBeNull();
+    expect(document.activeElement).toBe(restart);
+    await act(async () => restart.click());
 
     const confirm = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Confirm",
@@ -1153,6 +1199,32 @@ describe("Attempt inspector", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("could not be copied");
+  });
+
+  test("ignores clipboard feedback after selecting a sibling", async () => {
+    const clipboardWrite = deferred<void>();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => clipboardWrite.promise },
+    });
+    const container = await renderSelectableInspector(failed.id);
+    const copy = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Copy",
+    )!;
+    await act(async () => copy.click());
+    const completedSibling = [
+      ...container.querySelectorAll<HTMLButtonElement>(".sibling-list button"),
+    ].find((button) => button.textContent?.includes("Completed"))!;
+    await act(async () => {
+      completedSibling.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    clipboardWrite.resolve();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(container.textContent).toContain("Open pull request #70");
+    expect(container.textContent).not.toContain("Branch copied");
   });
 
   test("appends later transcript pages at the original watermark", async () => {
