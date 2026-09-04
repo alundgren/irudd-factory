@@ -1,14 +1,18 @@
 import { defaultBehavior, emptyState, fixtureIssue } from "../factories.ts";
 import type { FixtureDefinition } from "../types.ts";
 
-const issue = fixtureIssue(31);
+const issue = {
+  ...fixtureIssue(36),
+  title:
+    "Keep an unusually long ready issue title readable when repository names and status explanations also need room",
+};
 const state = { ...emptyState([issue]), queue: { candidates: [issue] } };
 
-export const queueReadyFixture = {
-  name: "queue-ready",
-  summary: "One issue has durable FIFO tenure and is ready to start.",
-  tags: ["queue", "ready"],
-  purpose: "Inspect a startable queue entry before admission.",
+export const longTitleFixture = {
+  name: "long-title",
+  summary: "A ready issue has a long title that must wrap on narrow screens.",
+  tags: ["console", "queue", "responsive"],
+  purpose: "Inspect queue text at desktop and narrow viewport widths.",
   state,
   behavior: defaultBehavior(),
   expectations: {

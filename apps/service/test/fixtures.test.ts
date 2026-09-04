@@ -113,6 +113,8 @@ describe("fixture catalog", () => {
     expect(validateFixtureRegistry(FIXTURE_REGISTRY)).toBe(FIXTURE_REGISTRY);
     expect(FIXTURE_REGISTRY.map(({ name }) => name)).toEqual([
       "empty",
+      "disconnected",
+      "delayed",
       "ambiguous",
       "busy-reserved",
       "busy-starting",
@@ -120,6 +122,8 @@ describe("fixture catalog", () => {
       "stop-uncertain",
       "runnable",
       "failed-long",
+      "full-capacity",
+      "uncertain-capacity",
       "completed-ready",
       "completed-draft",
       "queue-ready",
@@ -127,6 +131,8 @@ describe("fixture catalog", () => {
       "queue-paused",
       "queue-disabled",
       "queue-multi-repository",
+      "long-title",
+      "pagination",
       "retained-history",
     ]);
     for (const fixture of FIXTURE_REGISTRY) {

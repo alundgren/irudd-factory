@@ -171,6 +171,11 @@ function handlerLayer(
             Effect.provide(context),
             Effect.mapError((error) => `${error.code}: ${error.message}`),
           ),
+        GetOperationsOverview: () =>
+          application.getOperationsOverview().pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
       };
     }),
   ).pipe(Layer.provide(dependencies));
@@ -197,6 +202,10 @@ export async function startFactoryService(
     provider: CODEX_PROVIDER,
     slots: config.codex.slots,
     pollIntervalMs: config.pollIntervalMs,
+    access:
+      config.access?.mode === TAILSCALE_ACCESS_MODE
+        ? "Tailscale"
+        : "Local only",
   });
   const HandlerLive = handlerLayer(dependencies, application);
   const RpcLive = RpcServer.layer(FactoryRpcs).pipe(Layer.provide(HandlerLive));

@@ -14,6 +14,7 @@ import {
   IssuePage,
   PageRequest,
   TimelinePage,
+  OperationsOverview,
   TranscriptPage,
   UsagePage,
   LifecycleCommandPage,
@@ -108,6 +109,10 @@ export class FactoryRpcs extends RpcGroup.make(
   Rpc.make("ReadTimeline", {
     payload: { page: PageRequest },
     success: TimelinePage,
+    error: Schema.String,
+  }),
+  Rpc.make("GetOperationsOverview", {
+    success: OperationsOverview,
     error: Schema.String,
   }),
 ) {}

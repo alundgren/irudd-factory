@@ -6,7 +6,10 @@ import "@fontsource/ibm-plex-sans/latin-600.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
+import { installFixtureNetworkMode } from "./fixture-network.ts";
 import "./styles.css";
+
+installFixtureNetworkMode();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

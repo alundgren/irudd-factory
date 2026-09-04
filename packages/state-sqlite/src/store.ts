@@ -50,6 +50,7 @@ import {
   LifecycleCommandKind,
   LifecycleCommandPhase,
   LifecycleConsequence,
+  type OperationsOverview,
 } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { migrate } from "./migrations.ts";
@@ -2013,13 +2014,26 @@ export function openStateStore(
   function assignmentRows(
     order: "history" | "timeline",
   ): ReadonlyArray<Assignment> {
-    const direction = order === "history" ? "DESC" : "ASC";
+    const direction = order === "timeline" ? "ASC" : "DESC";
     return (
       database
         .prepare(
           `SELECT * FROM assignments
            WHERE archived_at IS NULL
            ORDER BY created_at ${direction}, id ${direction}`,
+        )
+        .all() as unknown as ReadonlyArray<AssignmentRow>
+    ).map(decodeAssignment);
+  }
+
+  function recentAssignmentRows(): ReadonlyArray<Assignment> {
+    return (
+      database
+        .prepare(
+          `SELECT * FROM assignments
+           WHERE archived_at IS NULL
+           ORDER BY updated_at DESC, id DESC
+           LIMIT 8`,
         )
         .all() as unknown as ReadonlyArray<AssignmentRow>
     ).map(decodeAssignment);
@@ -2498,6 +2512,32 @@ export function openStateStore(
           pageRequest("timeline", "", request, Assignment, () =>
             assignmentRows("timeline"),
           ),
+        catch: storageError,
+      }),
+    getOperationsOverview: () =>
+      Effect.try({
+        try: (): OperationsOverview => ({
+          usage: (
+            database
+              .prepare(
+                `SELECT usage.attempt_id, usage.timestamp, usage.total_json,
+                        usage.last_json, usage.model_context_window
+                 FROM attempt_usage AS usage
+                 INNER JOIN assignments ON assignments.id = usage.attempt_id
+                 WHERE assignments.state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
+                 ORDER BY usage.attempt_id`,
+              )
+              .all() as unknown as ReadonlyArray<UsageRow>
+          ).map(decodeUsage),
+          recentActivity: recentAssignmentRows(),
+          lifecycleCommands: (
+            database
+              .prepare(
+                "SELECT * FROM lifecycle_commands ORDER BY created_at DESC, command_id DESC LIMIT 5",
+              )
+              .all() as unknown as ReadonlyArray<LifecycleCommandRow>
+          ).map(decodeLifecycleCommand),
+        }),
         catch: storageError,
       }),
     readLifecycleCommands: (request) =>
