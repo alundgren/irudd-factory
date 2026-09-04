@@ -1,9 +1,16 @@
 const FIXTURE_NETWORK_PARAMETER = "fixture-network";
 
 export function installFixtureNetworkMode(): void {
-  const mode = new URLSearchParams(window.location.search).get(
-    FIXTURE_NETWORK_PARAMETER,
-  );
+  const parameters = new URLSearchParams(window.location.search);
+  if (parameters.get("fixture-clipboard") === "failure") {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: () => Promise.reject(new Error("Fixture clipboard failure")),
+      },
+    });
+  }
+  const mode = parameters.get(FIXTURE_NETWORK_PARAMETER);
   if (mode !== "disconnected" && mode !== "delayed") return;
 
   const originalFetch = globalThis.fetch.bind(globalThis);

@@ -930,8 +930,16 @@ describe("Factory RPC service", () => {
     });
     expect([...first.items, ...second.items]).toHaveLength(4);
     expect((await readIssues(rpcUrl)).items).toHaveLength(1);
-    expect((await readTimeline(rpcUrl)).items).toHaveLength(4);
+    expect((await readTimeline(rpcUrl)).items).toHaveLength(9);
     expect((await readUsage(rpcUrl)).items).toHaveLength(1);
+    expect(
+      (
+        await readUsage(rpcUrl, { attemptId: "attempt-history-completed" })
+      ).items.map(({ attemptId }) => attemptId),
+    ).toEqual(["attempt-history-completed"]);
+    expect(
+      (await readUsage(rpcUrl, { attemptId: "missing-attempt" })).items,
+    ).toEqual([]);
     const transcript = await readTranscript(rpcUrl, "attempt-history-failed");
     expect(transcript.items[0]?.truncated).toBe(true);
     expect(transcript.items[0]?.text).not.toContain("fixture-secret-123");
@@ -1026,6 +1034,14 @@ describe("Factory RPC service", () => {
     expect(
       (await readAttempts(rpcUrl)).items.some(({ id }) => id === completed.id),
     ).toBe(false);
+    expect(
+      (
+        await readAttempts(rpcUrl, {
+          includeArchived: true,
+          issueNodeId: completed.issue.nodeId,
+        })
+      ).items.some(({ id }) => id === completed.id),
+    ).toBe(true);
     const restored = await controlAttempt(rpcUrl, {
       commandId: "restore-history",
       kind: "restore",
@@ -1038,6 +1054,14 @@ describe("Factory RPC service", () => {
       (await readAttempts(rpcUrl)).items.some(({ id }) => id === completed.id),
     ).toBe(true);
     expect((await readLifecycleCommands(rpcUrl)).items).toHaveLength(4);
+    expect(
+      (
+        await readLifecycleCommands(rpcUrl, {
+          targetAttemptId: completed.id,
+          commandId: "archive-history",
+        })
+      ).items.map(({ commandId }) => commandId),
+    ).toEqual(["archive-history"]);
   });
 
   test("keeps claimed when GitHub reports a pull request missing from local state", async () => {

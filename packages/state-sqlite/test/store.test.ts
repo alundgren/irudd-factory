@@ -271,6 +271,13 @@ describe("SQLite state store", () => {
     expect(
       (
         await Effect.runPromise(
+          opened.service.readAttempts({ includeArchived: true }),
+        )
+      ).items.map(({ id }) => id),
+    ).toEqual(["assignment-1"]);
+    expect(
+      (
+        await Effect.runPromise(
           opened.service.readTranscript("assignment-1", {}),
         )
       ).items[0]?.text,
@@ -661,6 +668,20 @@ describe("SQLite state store", () => {
       (await Effect.runPromise(opened.service.readUsage({}))).items[0]?.total
         .totalTokens,
     ).toBe(14);
+    expect(
+      (
+        await Effect.runPromise(
+          opened.service.readUsage({ attemptId: "assignment-1" }),
+        )
+      ).items[0]?.total.totalTokens,
+    ).toBe(14);
+    expect(
+      (
+        await Effect.runPromise(
+          opened.service.readUsage({ attemptId: "missing-assignment" }),
+        )
+      ).items,
+    ).toEqual([]);
     opened.close();
   });
 

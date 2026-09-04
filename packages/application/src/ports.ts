@@ -3,6 +3,7 @@ import type {
   AssignmentEvent,
   AssignmentEventType,
   AttemptPage,
+  AttemptPageRequest,
   AttemptUsage,
   CommandReceipt,
   DispatchState,
@@ -17,6 +18,7 @@ import type {
   TimelinePage,
   TranscriptPage,
   UsagePage,
+  UsagePageRequest,
   WorkflowRevision,
   WorkspacePaths,
   QueuePage,
@@ -25,6 +27,7 @@ import type {
   LifecycleCommandKind,
   LifecycleConsequence,
   LifecycleCommandPage,
+  LifecycleCommandPageRequest,
   OperationsOverview,
 } from "@irudd-factory/contracts";
 import { Context, type Effect } from "effect";
@@ -205,7 +208,7 @@ export interface StateStoreService {
     request: PageRequest,
   ) => Effect.Effect<IssuePage, FactoryError>;
   readonly readAttempts: (
-    request: PageRequest,
+    request: AttemptPageRequest,
   ) => Effect.Effect<AttemptPage, FactoryError>;
   readonly readTranscript: (
     attemptId: string,
@@ -216,7 +219,7 @@ export interface StateStoreService {
     request: PageRequest,
   ) => Effect.Effect<EventPage, FactoryError>;
   readonly readUsage: (
-    request: PageRequest,
+    request: UsagePageRequest,
   ) => Effect.Effect<UsagePage, FactoryError>;
   readonly readTimeline: (
     request: PageRequest,
@@ -226,7 +229,7 @@ export interface StateStoreService {
     FactoryError
   >;
   readonly readLifecycleCommands: (
-    request: PageRequest,
+    request: LifecycleCommandPageRequest,
   ) => Effect.Effect<LifecycleCommandPage, FactoryError>;
   readonly pullRequestRecoveryCandidates: () => Effect.Effect<
     ReadonlyArray<Assignment>,

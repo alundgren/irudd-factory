@@ -72,6 +72,7 @@ export type CommandPhase =
   | "executing"
   | "final"
   | "rejected"
+  | "uncertain"
   | "transport";
 
 export function commandPhaseLabel(phase: CommandPhase): string {
@@ -84,6 +85,8 @@ export function commandPhaseLabel(phase: CommandPhase): string {
       return "Final";
     case "rejected":
       return "Rejected";
+    case "uncertain":
+      return "Uncertain";
     case "transport":
       return "Transport failure";
   }

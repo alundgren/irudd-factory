@@ -88,6 +88,7 @@ export interface FixtureDefinition<Name extends string = string> {
   readonly behavior: FixtureBehavior;
   readonly expectations: FixtureExpectations;
   readonly consoleNetwork?: "disconnected" | "delayed";
+  readonly consoleClipboard?: "failure";
 }
 
 export interface FixtureControls {
