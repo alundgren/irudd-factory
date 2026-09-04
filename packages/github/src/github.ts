@@ -35,6 +35,7 @@ const LabelNode = Schema.Struct({ name: Schema.String });
 const BlockerNode = Schema.Struct({ state: Schema.String });
 const IssueNode = Schema.Struct({
   id: Schema.String,
+  state: Schema.String,
   number: Schema.Number,
   url: Schema.String,
   title: Schema.String,
@@ -61,6 +62,16 @@ const DiscoveryResponse = Schema.Struct({
         nodes: Schema.Array(IssueNode),
         pageInfo: PageInfo,
       }),
+    }),
+  }),
+});
+const ClaimedIssueResponse = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      defaultBranchRef: Schema.Struct({
+        target: Schema.Struct({ oid: Schema.String }),
+      }),
+      issue: Schema.NullOr(IssueNode),
     }),
   }),
 });
@@ -143,7 +154,7 @@ const DISCOVERY_QUERY = `query($owner: String!, $name: String!, $issueCursor: St
     defaultBranchRef { name target { oid } }
     issues(first: 100, after: $issueCursor, states: OPEN, labels: ${JSON.stringify(REQUIRED_ISSUE_LABELS)}) {
       nodes {
-        id number url title author { login }
+        id state number url title author { login }
         labels(first: 100) {
           nodes { name }
           pageInfo { hasNextPage endCursor }
@@ -154,6 +165,23 @@ const DISCOVERY_QUERY = `query($owner: String!, $name: String!, $issueCursor: St
         }
       }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+const CLAIMED_ISSUE_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef { target { oid } }
+    issue(number: $number) {
+      id state number url title author { login }
+      labels(first: 100) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+      blockedBy(first: 100) {
+        nodes { state }
+        pageInfo { hasNextPage endCursor }
+      }
     }
   }
 }`;
@@ -398,6 +426,7 @@ async function matchingPullRequests(
   branch: string,
   issueNumber: number,
   includeTerminal = false,
+  requireClosingIssue = true,
 ): Promise<ReadonlyArray<PullRequest>> {
   const [owner, name] = splitRepository(repository);
   const matches: PullRequest[] = [];
@@ -419,7 +448,8 @@ async function matchingPullRequests(
     for (const pull of response.data.repository.pullRequests.nodes) {
       if (
         pull.headRefName === branch &&
-        (await pullClosesIssue(runner, pull, repository, issueNumber))
+        (!requireClosingIssue ||
+          (await pullClosesIssue(runner, pull, repository, issueNumber)))
       ) {
         matches.push({
           url: pull.url,
@@ -434,6 +464,26 @@ async function matchingPullRequests(
     );
   } while (pullCursor);
   return matches;
+}
+
+async function readClaimOutcome(
+  runner: CommandRunner,
+  issue: { readonly repository: string; readonly number: number },
+): Promise<ClaimOutcome> {
+  try {
+    const read = await runner.run([
+      GH_CLI,
+      "api",
+      `repos/${issue.repository}/issues/${issue.number}`,
+    ]);
+    if (read.exitCode !== 0) return "unknown";
+    const current = decodeJson(IssueLabelsResponse, read.stdout);
+    return current.labels.some(({ name }) => name === CLAIM_LABEL)
+      ? "confirmed"
+      : "unclaimed";
+  } catch {
+    return "unknown";
+  }
 }
 
 function makeService(runner: CommandRunner): GitHubService {
@@ -560,6 +610,127 @@ function makeService(runner: CommandRunner): GitHubService {
             return Effect.succeed(match);
           }),
         ),
+    revalidateClaimedIssue: (issueRef) =>
+      Effect.tryPromise({
+        try: async () => {
+          const [owner, name] = splitRepository(issueRef.repository);
+          const response = decodeJson(
+            ClaimedIssueResponse,
+            await graphql(runner, CLAIMED_ISSUE_QUERY, {
+              owner,
+              name,
+              number: String(issueRef.number),
+            }),
+          );
+          const issue = response.data.repository.issue;
+          if (!issue || issue.id !== issueRef.nodeId || !issue.author) {
+            throw new FactoryError({
+              code: "issue_ineligible",
+              message: `${issueRef.repository}#${issueRef.number} is unavailable for restart`,
+            });
+          }
+          if (issue.state !== "OPEN") {
+            throw new FactoryError({
+              code: "issue_ineligible",
+              message: `${issueRef.repository}#${issueRef.number} is not open`,
+            });
+          }
+          const commit = response.data.repository.defaultBranchRef.target.oid;
+          const workflowPayload = decodeJson(
+            WorkflowResponse,
+            await checked(runner, [
+              GH_CLI,
+              "api",
+              "--method",
+              "GET",
+              `repos/${issueRef.repository}/contents/${WORKFLOW_FILE}`,
+              "-f",
+              `ref=${commit}`,
+            ]),
+          );
+          const source = Buffer.from(
+            workflowPayload.content.replaceAll("\n", ""),
+            "base64",
+          ).toString("utf8");
+          const workflow = parseWorkflow(source);
+          const labels = new Set(await allLabels(runner, issue));
+          const forbidden = workflow.policy.forbiddenLabels.filter(
+            (label) => label !== CLAIM_LABEL,
+          );
+          if (
+            !labels.has(CLAIM_LABEL) ||
+            workflow.policy.requiredLabels.some(
+              (label) => !labels.has(label),
+            ) ||
+            forbidden.some((label) => labels.has(label))
+          ) {
+            throw new FactoryError({
+              code: "issue_ineligible",
+              message: `${issueRef.repository}#${issueRef.number} has invalid restart labels`,
+            });
+          }
+          const blockers = await allBlockerStates(runner, issue);
+          if (blockers.some((state) => state !== CLOSED_BLOCKER_STATE)) {
+            throw new FactoryError({
+              code: "issue_ineligible",
+              message: `${issueRef.repository}#${issueRef.number} has an open blocker`,
+            });
+          }
+          const permission = decodeJson(
+            PermissionResponse,
+            await checked(runner, [
+              GH_CLI,
+              "api",
+              `repos/${issueRef.repository}/collaborators/${issue.author.login}/permission`,
+            ]),
+          ).permission.toLowerCase();
+          if (!authorWritePermissions.has(permission)) {
+            throw new FactoryError({
+              code: "issue_ineligible",
+              message: `${issueRef.repository}#${issueRef.number} author lacks write permission`,
+            });
+          }
+          return {
+            issue: {
+              nodeId: issue.id,
+              repository: issueRef.repository,
+              number: issue.number,
+              url: issue.url,
+              title: issue.title,
+            },
+            workflow: {
+              startingCommit: commit,
+              blobId: workflowPayload.sha,
+              digest: workflow.digest,
+              body: workflow.body,
+            },
+          };
+        },
+        catch: (error) =>
+          error instanceof FactoryError
+            ? error
+            : new FactoryError({
+                code: "github_discovery_failed",
+                message: String(error),
+              }),
+      }),
+    inspectClaim: (issue) =>
+      Effect.promise(() => readClaimOutcome(runner, issue)),
+    removeClaim: (issue) =>
+      Effect.promise(async () => {
+        try {
+          await runner.run([
+            GH_CLI,
+            "api",
+            "--method",
+            "DELETE",
+            `repos/${issue.repository}/issues/${issue.number}/labels/${CLAIM_LABEL}`,
+          ]);
+        } catch {
+          // The read below determines whether the idempotent effect completed.
+        }
+        return readClaimOutcome(runner, issue);
+      }),
     claimIssue: (issue) =>
       Effect.promise(async (): Promise<ClaimOutcome> => {
         let mutation: Awaited<ReturnType<CommandRunner["run"]>> | null = null;
@@ -590,22 +761,7 @@ function makeService(runner: CommandRunner): GitHubService {
           }
         }
 
-        try {
-          const read = await runner.run([
-            GH_CLI,
-            "api",
-            `repos/${issue.repository}/issues/${issue.number}`,
-          ]);
-          if (read.exitCode === 0) {
-            const current = decodeJson(IssueLabelsResponse, read.stdout);
-            return current.labels.some(({ name }) => name === CLAIM_LABEL)
-              ? "confirmed"
-              : "unclaimed";
-          }
-          return "unknown";
-        } catch {
-          return "unknown";
-        }
+        return readClaimOutcome(runner, issue);
       }),
     verifyPullRequest: (repository, branch, issueNumber) =>
       Effect.tryPromise({
@@ -630,9 +786,27 @@ function makeService(runner: CommandRunner): GitHubService {
                 message: "Pull request verification failed unexpectedly",
               }),
       }),
+    inspectAttemptPullRequest: (repository, branch) =>
+      Effect.promise(async () => {
+        try {
+          const matches = await matchingPullRequests(
+            runner,
+            repository,
+            branch,
+            0,
+            true,
+            false,
+          );
+          return matches.length > 0
+            ? ({ _tag: "present", pullRequest: matches[0]! } as const)
+            : ({ _tag: "absent" } as const);
+        } catch {
+          return { _tag: "unknown" } as const;
+        }
+      }),
     lookupPullRequest: (repository, branch, issueNumber) =>
-      Effect.tryPromise({
-        try: async () => {
+      Effect.promise(async () => {
+        try {
           const matches = await matchingPullRequests(
             runner,
             repository,
@@ -640,15 +814,12 @@ function makeService(runner: CommandRunner): GitHubService {
             issueNumber,
             true,
           );
-          return matches.length === 1 ? matches[0]! : null;
-        },
-        catch: (error) =>
-          error instanceof FactoryError
-            ? error
-            : new FactoryError({
-                code: "pull_request_verification_failed",
-                message: "Pull request lookup failed unexpectedly",
-              }),
+          return matches.length > 0
+            ? ({ _tag: "present", pullRequest: matches[0]! } as const)
+            : ({ _tag: "absent" } as const);
+        } catch {
+          return { _tag: "unknown" } as const;
+        }
       }),
   };
 }

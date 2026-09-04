@@ -103,13 +103,7 @@ async function seedAndInspect(
   const first = await Effect.runPromise(opened.service.getSnapshot());
   await Effect.runPromise(seed);
   const second = await Effect.runPromise(opened.service.getSnapshot());
-  const active = (
-    opened.database
-      .prepare(
-        "SELECT count(*) AS count FROM assignments WHERE state IN ('reserved', 'starting', 'running')",
-      )
-      .get() as { count: number }
-  ).count;
+  const active = first.assignments?.length ?? 0;
   opened.close();
   return { first, second, active };
 }
@@ -123,6 +117,7 @@ describe("fixture catalog", () => {
       "busy-reserved",
       "busy-starting",
       "busy-running",
+      "stop-uncertain",
       "runnable",
       "failed-long",
       "completed-ready",

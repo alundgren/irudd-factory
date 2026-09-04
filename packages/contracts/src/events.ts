@@ -14,6 +14,12 @@ export const ASSIGNMENT_EVENTS = {
   providerFailed: "provider.failed",
   pullRequestLookupStarted: "pull_request.lookup_started",
   pullRequestReconciled: "pull_request.reconciled",
+  stopped: "attempt.stopped",
+  stopUncertain: "attempt.stop_uncertain",
+  returned: "attempt.returned",
+  restarted: "attempt.restarted",
+  archived: "attempt.archived",
+  restored: "attempt.restored",
 } as const;
 
 export type AssignmentEventType =

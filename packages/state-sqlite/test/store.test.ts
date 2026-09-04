@@ -114,7 +114,7 @@ describe("SQLite state store", () => {
           .prepare("SELECT version FROM schema_migrations")
           .get() as { version: number } | undefined
       )?.version,
-    ).toBe(3);
+    ).toBe(4);
     opened.close();
   });
 
@@ -136,6 +136,313 @@ describe("SQLite state store", () => {
     expect(replay).toEqual(original.receipt);
     expect(replay?.result._tag).toBe("started");
     second.close();
+  });
+
+  test("persists lifecycle admission, progress, final consequence, and replay", async () => {
+    const path = await databasePath();
+    const first = openStateStore(path);
+    await Effect.runPromise(
+      first.service.admit(admission("start", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      first.service.appendEvent(
+        "assignment-1",
+        {
+          type: "assignment.failed",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          detail: {},
+        },
+        { state: "failed" },
+      ),
+    );
+    const attempt = await Effect.runPromise(
+      first.service.getAssignment("assignment-1"),
+    );
+    const admitted = await Effect.runPromise(
+      first.service.beginLifecycleCommand({
+        commandId: "return-1",
+        kind: "return",
+        targetAttemptId: "assignment-1",
+        expectedTargetVersion: attempt!.lastEventSequence,
+        repositoryConfigured: true,
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    expect(admitted.command).toMatchObject({
+      phase: "accepted",
+      effect: "admitted",
+      admission: {
+        _tag: "accepted",
+        sourceState: "failed",
+        sourceVersion: attempt!.lastEventSequence,
+      },
+    });
+    await Effect.runPromise(
+      first.service.markLifecycleCommandExecuting(
+        "return-1",
+        "label_removing",
+        "2026-01-01T00:03:00.000Z",
+      ),
+    );
+    first.close();
+
+    const second = openStateStore(path);
+    expect(
+      await Effect.runPromise(second.service.unfinishedLifecycleCommands()),
+    ).toMatchObject([{ commandId: "return-1", effect: "label_removing" }]);
+    const replay = await Effect.runPromise(
+      second.service.beginLifecycleCommand({
+        commandId: "return-1",
+        kind: "archive",
+        targetAttemptId: "missing",
+        expectedTargetVersion: 999,
+        repositoryConfigured: false,
+        timestamp: "2026-01-01T00:04:00.000Z",
+      }),
+    );
+    expect(replay.created).toBe(false);
+    expect(replay.command.kind).toBe("return");
+    const finished = await Effect.runPromise(
+      second.service.finishLifecycleCommand(
+        "return-1",
+        { _tag: "returned", claimedRemoved: true },
+        "2026-01-01T00:05:00.000Z",
+      ),
+    );
+    expect(finished).toMatchObject({
+      phase: "final",
+      consequence: { _tag: "returned", claimedRemoved: true },
+    });
+    expect(
+      (await Effect.runPromise(second.service.readLifecycleCommands({}))).items,
+    ).toEqual([finished]);
+    second.close();
+  });
+
+  test("archives and restores visibility without deleting retained data", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.admit(admission("start", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      opened.service.appendEvent(
+        "assignment-1",
+        {
+          type: "assignment.failed",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          detail: {},
+        },
+        { state: "failed" },
+      ),
+    );
+    await Effect.runPromise(
+      opened.service.appendProviderRecords("assignment-1", [
+        {
+          kind: "transcript",
+          timestamp: "2026-01-01T00:01:30.000Z",
+          text: "Retained work",
+        },
+      ]),
+    );
+    let attempt = (await Effect.runPromise(
+      opened.service.getAssignment("assignment-1"),
+    ))!;
+    await Effect.runPromise(
+      opened.service.beginLifecycleCommand({
+        commandId: "archive-1",
+        kind: "archive",
+        targetAttemptId: attempt.id,
+        expectedTargetVersion: attempt.lastEventSequence,
+        repositoryConfigured: true,
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.finishLifecycleCommand(
+        "archive-1",
+        { _tag: "archived" },
+        "2026-01-01T00:02:00.000Z",
+        { archivedAt: "2026-01-01T00:02:00.000Z" },
+      ),
+    );
+    expect(
+      (await Effect.runPromise(opened.service.readAttempts({}))).items,
+    ).toEqual([]);
+    expect(
+      (
+        await Effect.runPromise(
+          opened.service.readTranscript("assignment-1", {}),
+        )
+      ).items[0]?.text,
+    ).toBe("Retained work");
+
+    attempt = (await Effect.runPromise(
+      opened.service.getAssignment("assignment-1"),
+    ))!;
+    await Effect.runPromise(
+      opened.service.beginLifecycleCommand({
+        commandId: "restore-1",
+        kind: "restore",
+        targetAttemptId: attempt.id,
+        expectedTargetVersion: attempt.lastEventSequence,
+        repositoryConfigured: true,
+        timestamp: "2026-01-01T00:03:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.finishLifecycleCommand(
+        "restore-1",
+        { _tag: "restored" },
+        "2026-01-01T00:03:00.000Z",
+        { archivedAt: null },
+      ),
+    );
+    expect(
+      (await Effect.runPromise(opened.service.readAttempts({}))).items.map(
+        ({ id }) => id,
+      ),
+    ).toEqual(["assignment-1"]);
+    opened.close();
+  });
+
+  test("keeps a slot occupied after an uncertain stop", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.admit(admission("start", "assignment-1", [candidate()])),
+    );
+    let attempt = (await Effect.runPromise(
+      opened.service.getAssignment("assignment-1"),
+    ))!;
+    await Effect.runPromise(
+      opened.service.beginLifecycleCommand({
+        commandId: "stop-1",
+        kind: "stop",
+        targetAttemptId: attempt.id,
+        expectedTargetVersion: attempt.lastEventSequence,
+        repositoryConfigured: true,
+        timestamp: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.finishLifecycleCommand(
+        "stop-1",
+        { _tag: "stop_uncertain" },
+        "2026-01-01T00:01:00.000Z",
+        { state: "stop_uncertain" },
+      ),
+    );
+    const busy = await Effect.runPromise(
+      opened.service.admit(
+        admission("other", "assignment-2", [candidate("I_2", 2)]),
+      ),
+    );
+    expect(busy.receipt.result._tag).toBe("provider_busy");
+
+    attempt = (await Effect.runPromise(
+      opened.service.getAssignment("assignment-1"),
+    ))!;
+    await Effect.runPromise(
+      opened.service.beginLifecycleCommand({
+        commandId: "stop-2",
+        kind: "stop",
+        targetAttemptId: attempt.id,
+        expectedTargetVersion: attempt.lastEventSequence,
+        repositoryConfigured: true,
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.finishLifecycleCommand(
+        "stop-2",
+        { _tag: "stopped", processResult: "exited" },
+        "2026-01-01T00:02:00.000Z",
+        { state: "stopped" },
+      ),
+    );
+    const started = await Effect.runPromise(
+      opened.service.admit({
+        ...admission("other-2", "assignment-2", [candidate("I_2", 2)]),
+        allowRetry: true,
+      }),
+    );
+    expect(started.receipt.result._tag).toBe("started");
+    opened.close();
+  });
+
+  test("rejects return and restart when repository or pull request rules fail", async () => {
+    const opened = openStateStore(await databasePath());
+    await Effect.runPromise(
+      opened.service.admit(admission("start", "assignment-1", [candidate()])),
+    );
+    await Effect.runPromise(
+      opened.service.appendEvent(
+        "assignment-1",
+        {
+          type: "assignment.failed",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          detail: {},
+        },
+        { state: "failed" },
+      ),
+    );
+    let attempt = (await Effect.runPromise(
+      opened.service.getAssignment("assignment-1"),
+    ))!;
+    const absent = await Effect.runPromise(
+      opened.service.beginLifecycleCommand({
+        commandId: "return-absent",
+        kind: "return",
+        targetAttemptId: attempt.id,
+        expectedTargetVersion: attempt.lastEventSequence,
+        repositoryConfigured: false,
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    expect(absent.command).toMatchObject({
+      phase: "final",
+      consequence: { _tag: "rejected", code: "repository_not_configured" },
+    });
+    expect(
+      await Effect.runPromise(opened.service.getAssignment(attempt.id)),
+    ).toEqual(attempt);
+
+    await Effect.runPromise(
+      opened.service.appendEvent(
+        attempt.id,
+        {
+          type: "pull_request.reconciled",
+          timestamp: "2026-01-01T00:03:00.000Z",
+          detail: { evidence: "verified" },
+        },
+        {
+          pullRequest: {
+            url: "https://github.com/owner/repository/pull/2",
+            number: 2,
+            draft: false,
+          },
+        },
+      ),
+    );
+    attempt = (await Effect.runPromise(
+      opened.service.getAssignment("assignment-1"),
+    ))!;
+    for (const kind of ["return", "restart"] as const) {
+      const rejected = await Effect.runPromise(
+        opened.service.beginLifecycleCommand({
+          commandId: `${kind}-with-pr`,
+          kind,
+          targetAttemptId: attempt.id,
+          expectedTargetVersion: attempt.lastEventSequence,
+          repositoryConfigured: true,
+          timestamp: "2026-01-01T00:04:00.000Z",
+        }),
+      );
+      expect(rejected.command.consequence).toMatchObject({
+        _tag: "rejected",
+        code: "pull_request_present",
+      });
+    }
+    opened.close();
   });
 
   test("persists every rejection without creating an assignment", async () => {
@@ -1088,6 +1395,179 @@ setInterval(() => {}, 1000);`,
       eligibleSince: "2026-01-01T00:03:00.000Z",
     });
     expect(secondTenure?.tenureId).not.toBe(firstTenure?.tenureId);
+    opened.close();
+  });
+
+  test("creates one tenure when an interrupted attempt returns before an ineligible poll", async () => {
+    const opened = openStateStore(await databasePath());
+    const observed = candidate();
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const [firstTenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    await Effect.runPromise(
+      opened.service.admit({
+        ...admission("first", "assignment-1", [observed]),
+        queueTenureId: firstTenure!.tenureId,
+        source: "automatic",
+      }),
+    );
+    const interrupted = await Effect.runPromise(
+      opened.service.appendEvent(
+        "assignment-1",
+        {
+          type: "assignment.interrupted",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          detail: { processReconciliation: "exited" },
+        },
+        { state: "interrupted" },
+      ),
+    );
+    await Effect.runPromise(
+      opened.service.beginLifecycleCommand({
+        commandId: "return-1",
+        kind: "return",
+        targetAttemptId: interrupted.id,
+        expectedTargetVersion: interrupted.lastEventSequence,
+        repositoryConfigured: true,
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.finishLifecycleCommand(
+        "return-1",
+        { _tag: "returned", claimedRemoved: true },
+        "2026-01-01T00:02:01.000Z",
+      ),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:03:00.000Z",
+      }),
+    );
+    const queue = await Effect.runPromise(
+      opened.service.getDispatchableQueue(10),
+    );
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({
+      eligibleSince: "2026-01-01T00:03:00.000Z",
+    });
+    expect(queue[0]?.tenureId).not.toBe(firstTenure?.tenureId);
+    opened.close();
+  });
+
+  test("does not reuse an earlier Return after a newer attempt fails its claim", async () => {
+    const opened = openStateStore(await databasePath());
+    const observed = candidate();
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const [firstTenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    await Effect.runPromise(
+      opened.service.admit({
+        ...admission("first", "assignment-1", [observed]),
+        queueTenureId: firstTenure!.tenureId,
+        source: "automatic",
+      }),
+    );
+    const interrupted = await Effect.runPromise(
+      opened.service.appendEvent(
+        "assignment-1",
+        {
+          type: "assignment.interrupted",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          detail: { processReconciliation: "exited" },
+        },
+        { state: "interrupted" },
+      ),
+    );
+    await Effect.runPromise(
+      opened.service.beginLifecycleCommand({
+        commandId: "return-1",
+        kind: "return",
+        targetAttemptId: interrupted.id,
+        expectedTargetVersion: interrupted.lastEventSequence,
+        repositoryConfigured: true,
+        timestamp: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.finishLifecycleCommand(
+        "return-1",
+        { _tag: "returned", claimedRemoved: true },
+        "2026-01-01T00:02:01.000Z",
+      ),
+    );
+    await Effect.runPromise(
+      opened.service.reconcileQueue({
+        repository: "owner/repository",
+        candidates: [{ candidate: observed }],
+        timestamp: "2026-01-01T00:03:00.000Z",
+      }),
+    );
+    const [secondTenure] = await Effect.runPromise(
+      opened.service.getDispatchableQueue(1),
+    );
+    await Effect.runPromise(
+      opened.service.admit({
+        ...admission("second", "assignment-2", [observed]),
+        timestamp: "2026-01-01T00:03:01.000Z",
+        queueTenureId: secondTenure!.tenureId,
+        source: "automatic",
+        allowRetry: true,
+      }),
+    );
+    await Effect.runPromise(
+      opened.service.appendEvent(
+        "assignment-2",
+        {
+          type: "assignment.failed",
+          timestamp: "2026-01-01T00:04:00.000Z",
+          detail: { code: "claim_unconfirmed" },
+        },
+        {
+          state: "failed",
+          error: {
+            code: "claim_unconfirmed",
+            message: "GitHub confirmed that the issue was not claimed",
+          },
+        },
+      ),
+    );
+    for (const timestamp of [
+      "2026-01-01T00:05:00.000Z",
+      "2026-01-01T00:06:00.000Z",
+    ]) {
+      await Effect.runPromise(
+        opened.service.reconcileQueue({
+          repository: "owner/repository",
+          candidates: [{ candidate: observed }],
+          timestamp,
+        }),
+      );
+    }
+    expect(
+      await Effect.runPromise(opened.service.getDispatchableQueue(10)),
+    ).toEqual([]);
+    expect(
+      opened.database
+        .prepare("SELECT count(*) AS count FROM assignments")
+        .get(),
+    ).toEqual({ count: 2 });
     opened.close();
   });
 

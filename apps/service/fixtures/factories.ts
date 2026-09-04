@@ -84,6 +84,7 @@ export function fixtureAssignment(
     createdAt: FIXTURE_NOW,
     updatedAt: FIXTURE_NOW,
     lastEventSequence: 1,
+    archivedAt: null,
   };
 }
 

@@ -119,6 +119,23 @@ function handlerLayer(
             Effect.provide(context),
             Effect.mapError((error) => `${error.code}: ${error.message}`),
           ),
+        ControlAttempt: ({
+          commandId,
+          kind,
+          attemptId,
+          expectedTargetVersion,
+        }) =>
+          application
+            .controlAttempt(commandId, kind, attemptId, expectedTargetVersion)
+            .pipe(
+              Effect.provide(context),
+              Effect.mapError((error) => `${error.code}: ${error.message}`),
+            ),
+        ReadLifecycleCommands: ({ page }) =>
+          application.readLifecycleCommands(page).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
         ReadIssues: ({ page }) =>
           application.readIssues(page).pipe(
             Effect.provide(context),
@@ -126,6 +143,11 @@ function handlerLayer(
           ),
         ReadAttempts: ({ page }) =>
           application.readAttempts(page).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) => `${error.code}: ${error.message}`),
+          ),
+        ReadAttempt: ({ attemptId }) =>
+          application.readAttempt(attemptId).pipe(
             Effect.provide(context),
             Effect.mapError((error) => `${error.code}: ${error.message}`),
           ),

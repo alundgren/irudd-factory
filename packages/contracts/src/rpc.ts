@@ -5,6 +5,8 @@ import {
   DispatchState,
   FactorySnapshot,
   QueuePage,
+  LifecycleCommand,
+  Attempt,
 } from "./domain.ts";
 import {
   AttemptPage,
@@ -14,6 +16,7 @@ import {
   TimelinePage,
   TranscriptPage,
   UsagePage,
+  LifecycleCommandPage,
 } from "./history.ts";
 
 /** The HTTP path the service serves and both clients call. */
@@ -57,6 +60,21 @@ export class FactoryRpcs extends RpcGroup.make(
     success: DispatchState,
     error: Schema.String,
   }),
+  Rpc.make("ControlAttempt", {
+    payload: {
+      commandId: Schema.String,
+      kind: Schema.Literal("stop", "return", "restart", "archive", "restore"),
+      attemptId: Schema.String,
+      expectedTargetVersion: Schema.Number,
+    },
+    success: LifecycleCommand,
+    error: Schema.String,
+  }),
+  Rpc.make("ReadLifecycleCommands", {
+    payload: { page: PageRequest },
+    success: LifecycleCommandPage,
+    error: Schema.String,
+  }),
   Rpc.make("ReadIssues", {
     payload: { page: PageRequest },
     success: IssuePage,
@@ -65,6 +83,11 @@ export class FactoryRpcs extends RpcGroup.make(
   Rpc.make("ReadAttempts", {
     payload: { page: PageRequest },
     success: AttemptPage,
+    error: Schema.String,
+  }),
+  Rpc.make("ReadAttempt", {
+    payload: { attemptId: Schema.String },
+    success: Schema.NullOr(Attempt),
     error: Schema.String,
   }),
   Rpc.make("ReadTranscript", {
