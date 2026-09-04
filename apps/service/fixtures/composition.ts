@@ -299,6 +299,7 @@ export function fixtureDependencies(
     layerStateStore(config.databasePath, {
       recover: false,
       ...config.retention,
+      now: () => fixture.state.now,
     }),
     Layer.succeed(GitHub, github),
     Layer.succeed(Workspaces, workspaces),

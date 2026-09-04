@@ -12,6 +12,8 @@ import type {
   LifecycleCommandKind,
   QueuePage,
   OperationsOverview,
+  TimelinePage,
+  PageRequest,
   TranscriptPage,
   UsagePage,
 } from "@irudd-factory/contracts";
@@ -88,6 +90,13 @@ export function loadOperationsOverview(): Promise<OperationsOverview> {
   return Effect.gen(function* () {
     const client = yield* RpcClient.make(FactoryRpcs);
     return yield* client.GetOperationsOverview();
+  }).pipe(Effect.scoped, Effect.provide(Protocol), Effect.runPromise);
+}
+
+export function listTimeline(page: PageRequest): Promise<TimelinePage> {
+  return Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.ReadTimeline({ page });
   }).pipe(Effect.scoped, Effect.provide(Protocol), Effect.runPromise);
 }
 

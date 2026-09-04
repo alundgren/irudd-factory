@@ -59,7 +59,10 @@ export async function launchFixture(
     },
   };
 
-  const seedStore = openStateStore(databasePath, config.retention);
+  const seedStore = openStateStore(databasePath, {
+    ...config.retention,
+    now: () => fixture.state.now,
+  });
   await Effect.runPromise(
     seedFixture(fixture).pipe(
       Effect.provideService(StateStore, seedStore.service),

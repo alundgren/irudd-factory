@@ -732,6 +732,51 @@ describe("SQLite state store", () => {
     opened.close();
   });
 
+  test("orders equal-start timeline pages by end time before id", async () => {
+    const opened = openStateStore(await databasePath());
+    const expected: string[] = [];
+    for (let index = 0; index < 13; index += 1) {
+      const id = `equal-start-${String(12 - index).padStart(2, "0")}`;
+      expected.push(id);
+      await Effect.runPromise(
+        opened.service.admit(
+          admission(`equal-command-${index}`, id, [
+            candidate(`I_equal_${index}`, index + 1),
+          ]),
+        ),
+      );
+      await Effect.runPromise(
+        opened.service.appendEvent(
+          id,
+          {
+            type: "assignment.completed",
+            timestamp: new Date(
+              Date.UTC(2026, 0, 1, 0, index + 1),
+            ).toISOString(),
+            detail: {},
+          },
+          { state: "completed" },
+        ),
+      );
+    }
+
+    const first = await Effect.runPromise(
+      opened.service.readTimeline({ limit: 12 }),
+    );
+    const second = await Effect.runPromise(
+      opened.service.readTimeline({
+        limit: 12,
+        cursor: first.nextCursor ?? 0,
+        watermark: first.watermark,
+      }),
+    );
+    expect([...first.items, ...second.items].map(({ id }) => id)).toEqual(
+      expected,
+    );
+    expect(second.readAt).toBe(first.readAt);
+    opened.close();
+  });
+
   test("returns bounded operations data for current attempts", async () => {
     const path = await databasePath();
     const opened = openStateStore(path);

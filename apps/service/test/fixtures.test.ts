@@ -95,7 +95,9 @@ async function seedAndInspect(
   fixture: FixtureDefinition,
   fixtureConfig: FactoryConfig,
 ) {
-  const opened = openStateStore(fixtureConfig.databasePath);
+  const opened = openStateStore(fixtureConfig.databasePath, {
+    now: () => fixture.state.now,
+  });
   const seed = seedFixture(fixture).pipe(
     Effect.provideService(StateStore, opened.service),
   );
@@ -104,8 +106,9 @@ async function seedAndInspect(
   await Effect.runPromise(seed);
   const second = await Effect.runPromise(opened.service.getSnapshot());
   const active = first.assignments?.length ?? 0;
+  const timeline = await Effect.runPromise(opened.service.readTimeline({}));
   opened.close();
-  return { first, second, active };
+  return { first, second, active, timeline };
 }
 
 describe("fixture catalog", () => {
@@ -134,6 +137,9 @@ describe("fixture catalog", () => {
       "long-title",
       "pagination",
       "retained-history",
+      "timeline-empty",
+      "timeline-dense",
+      "timeline-pagination",
     ]);
     for (const fixture of FIXTURE_REGISTRY) {
       expect(fixture.summary.length).toBeGreaterThan(0);
@@ -226,7 +232,7 @@ describe("fixture contract", () => {
       const root = await mkdtemp(join(tmpdir(), `factory-${fixture.name}-`));
       roots.push(root);
       const fixtureConfig = config(root);
-      const { first, second, active } = await seedAndInspect(
+      const { first, second, active, timeline } = await seedAndInspect(
         fixture,
         fixtureConfig,
       );
@@ -241,6 +247,7 @@ describe("fixture contract", () => {
       expect(first.events.map(({ type }) => type)).toEqual(
         expected.initial.eventTypes,
       );
+      expect(timeline.readAt).toBe(fixture.state.now);
       if (!expected.command) continue;
 
       const enterRunning = gate();

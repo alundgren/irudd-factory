@@ -20,6 +20,9 @@ import { queueReadyFixture } from "./queue-ready/fixture.ts";
 import { queueStaleFixture } from "./queue-stale/fixture.ts";
 import { retainedHistoryFixture } from "./retained-history/fixture.ts";
 import { stopUncertainFixture } from "./stop-uncertain/fixture.ts";
+import { timelineDenseFixture } from "./timeline-dense/fixture.ts";
+import { timelineEmptyFixture } from "./timeline-empty/fixture.ts";
+import { timelinePaginationFixture } from "./timeline-pagination/fixture.ts";
 import { uncertainCapacityFixture } from "./uncertain-capacity/fixture.ts";
 import type { FixtureDefinition } from "./types.ts";
 
@@ -92,6 +95,9 @@ export const FIXTURE_REGISTRY = validateFixtureRegistry([
   longTitleFixture,
   paginationFixture,
   retainedHistoryFixture,
+  timelineEmptyFixture,
+  timelineDenseFixture,
+  timelinePaginationFixture,
 ] as const);
 
 export type FixtureName = (typeof FIXTURE_REGISTRY)[number]["name"];

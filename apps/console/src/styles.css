@@ -123,6 +123,10 @@ h2 {
   background: #e0d2bd;
   font-weight: 600;
 }
+.sidebar nav {
+  display: grid;
+  gap: 0.2rem;
+}
 .connection {
   display: flex;
   align-items: flex-start;
@@ -913,6 +917,261 @@ dd {
   white-space: pre-wrap;
 }
 
+.timeline-main {
+  width: min(100%, 110rem);
+}
+.timeline-topbar {
+  align-items: flex-end;
+}
+.timeline-zone {
+  flex: none;
+  margin: 0;
+  color: #66574d;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-lane {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  border-block: 1px solid #c1af9a;
+  background: #eadfcd;
+}
+.timeline-provider {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border-right: 1px solid #c1af9a;
+  padding: 1rem;
+  background: #eadfcd;
+}
+.timeline-provider strong {
+  font-size: 1rem;
+  font-weight: 600;
+}
+.timeline-provider span {
+  margin-top: 0.2rem;
+  color: #66574d;
+  font-size: 0.78rem;
+}
+.timeline-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  background: #f2eade;
+}
+.timeline-scroll:focus-visible {
+  outline: 3px solid #3d5d71;
+  outline-offset: -3px;
+}
+.timeline-board {
+  position: relative;
+  width: max(100%, 60rem);
+  min-height: 10rem;
+  overflow: hidden;
+}
+.timeline-axis {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 1.2rem;
+  left: 1.2rem;
+  height: 2.7rem;
+  border-bottom: 1px solid #c1af9a;
+}
+.timeline-axis span {
+  position: absolute;
+  top: 0.8rem;
+  color: #66574d;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+.timeline-axis span:first-child {
+  transform: none;
+}
+.timeline-axis span:last-child {
+  transform: translateX(-100%);
+}
+.timeline-grid {
+  position: absolute;
+  top: 2.7rem;
+  right: 1.2rem;
+  bottom: 0;
+  left: 1.2rem;
+}
+.timeline-grid span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed #c1af9a;
+}
+.timeline-card {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  height: 6.15rem;
+  flex-direction: column;
+  align-items: flex-start;
+  overflow: hidden;
+  border: 1px solid #3d5d71;
+  border-left-width: 0.38rem;
+  border-radius: 0.7rem;
+  padding: 0.58rem 0.7rem;
+  color: #604939;
+  background: #f9f6f0;
+  box-shadow: 0 0.2rem 0.55rem rgb(96 73 57 / 12%);
+  text-align: left;
+}
+.timeline-card:hover:not(:disabled) {
+  border-color: #784f26;
+  color: #604939;
+  background: #eadfcd;
+}
+.timeline-card-title,
+.timeline-card-repository {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-card-title {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.timeline-card-repository,
+.timeline-card-model,
+.timeline-card-tokens {
+  color: #66574d;
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+.timeline-card-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.28rem;
+  font-size: 0.77rem;
+  font-weight: 600;
+}
+.timeline-card-model,
+.timeline-card-tokens {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-card-tokens {
+  margin-top: auto;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-point {
+  position: absolute;
+  z-index: 2;
+  width: 2.625rem;
+  height: 2.625rem;
+  overflow: visible;
+  transform: translateX(-50%);
+}
+.timeline-point-marker {
+  display: grid;
+  width: 2.625rem;
+  min-height: 2.625rem;
+  height: 2.625rem;
+  place-items: center;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  padding: 0;
+  color: inherit;
+  background: #f9f6f0;
+  box-shadow: none;
+}
+.timeline-point-marker:hover:not(:disabled) {
+  background: #eadfcd;
+}
+.timeline-point-marker span {
+  color: inherit;
+}
+.timeline-point-copy {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 0.3rem);
+  display: flex;
+  width: 8rem;
+  height: 2.625rem;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 0.45rem;
+  padding: 0.25rem 0.4rem;
+  color: #604939;
+  background: #f9f6f0;
+  pointer-events: none;
+}
+.timeline-point-copy-left {
+  right: calc(100% + 0.3rem);
+  left: auto;
+}
+.timeline-point-copy strong,
+.timeline-point-copy small {
+  overflow: hidden;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-point-copy small {
+  color: #66574d;
+  font-weight: 400;
+}
+.timeline-point.timeline-card-reserved,
+.timeline-point.timeline-card-starting,
+.timeline-point.timeline-card-stop_uncertain,
+.timeline-point.timeline-card-ownership_uncertain {
+  color: #7e5220;
+}
+.timeline-point.timeline-card-completed,
+.timeline-point.timeline-card-stopped {
+  color: #3d6034;
+}
+.timeline-point.timeline-card-failed,
+.timeline-point.timeline-card-interrupted {
+  color: #8f3a2d;
+}
+.timeline-card-reserved,
+.timeline-card-starting,
+.timeline-card-stop_uncertain,
+.timeline-card-ownership_uncertain {
+  border-color: #7e5220;
+}
+.timeline-card-completed,
+.timeline-card-stopped {
+  border-color: #3d6034;
+}
+.timeline-card-failed,
+.timeline-card-interrupted {
+  border-color: #8f3a2d;
+}
+.timeline-card.timeline-card-archived {
+  border-style: dashed;
+  background: #e0d2bd;
+}
+.timeline-point.timeline-card-archived .timeline-point-marker {
+  border-style: dashed;
+  background: #e0d2bd;
+}
+.timeline-empty {
+  border-block: 1px solid #c1af9a;
+  padding: 2rem 0;
+}
+.timeline-empty p {
+  margin: 0.5rem 0 0;
+  color: #66574d;
+}
+
 @media (max-width: 1080px) {
   .overview-grid {
     grid-template-columns: 1fr;
@@ -948,6 +1207,7 @@ dd {
     padding: 0;
   }
   .sidebar nav {
+    display: flex;
     margin-left: auto;
   }
   .sidebar nav a {
@@ -1028,6 +1288,18 @@ dd {
   .attempt-inspector {
     width: 100%;
   }
+  .timeline-topbar {
+    display: flex;
+    align-items: flex-end;
+  }
+  .timeline-lane {
+    display: block;
+  }
+  .timeline-provider {
+    border-right: 0;
+    border-bottom: 1px solid #c1af9a;
+    padding: 0.75rem 1rem;
+  }
 }
 
 @media (max-width: 390px) {
@@ -1040,6 +1312,15 @@ dd {
   }
   .sidebar nav a {
     font-size: 0.88rem;
+  }
+  .sidebar nav a span {
+    display: none;
+  }
+  .timeline-topbar {
+    display: block;
+  }
+  .timeline-zone {
+    margin-top: 0.8rem;
   }
   .queue-row {
     grid-template-columns: 2.5rem minmax(0, 1fr);

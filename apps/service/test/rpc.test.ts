@@ -13,7 +13,7 @@ import {
 } from "@effect/platform";
 import { RpcClient, RpcSerialization } from "@effect/rpc";
 import { StateStore } from "@irudd-factory/application";
-import { FactoryRpcs } from "@irudd-factory/contracts";
+import { ASSIGNMENT_EVENTS, FactoryRpcs } from "@irudd-factory/contracts";
 import { openStateStore } from "@irudd-factory/state-sqlite";
 import { Effect, Layer } from "effect";
 import {
@@ -908,6 +908,41 @@ describe("Factory RPC service", () => {
         ],
       ),
     );
+    const completed = definition.state.history?.find(
+      ({ assignment }) => assignment.id === "attempt-history-completed",
+    )?.assignment;
+    if (!completed)
+      throw new Error("History fixture lacks its completed attempt");
+    await Effect.runPromise(
+      store.service.appendEvent(
+        completed.id,
+        {
+          type: ASSIGNMENT_EVENTS.archived,
+          timestamp: "2026-01-20T12:00:00.000Z",
+          detail: {},
+        },
+        { archivedAt: "2026-01-20T12:00:00.000Z" },
+      ),
+    );
+    await Effect.runPromise(
+      store.service.seedAssignment(
+        {
+          ...completed,
+          id: "attempt-other-provider",
+          provider: "other-provider",
+          createdAt: "2026-01-14T13:00:00.000Z",
+          updatedAt: "2026-01-14T13:10:00.000Z",
+        },
+        [
+          {
+            assignmentId: "attempt-other-provider",
+            type: ASSIGNMENT_EVENTS.completed,
+            timestamp: "2026-01-14T13:10:00.000Z",
+            detail: {},
+          },
+        ],
+      ),
+    );
     store.close();
     let pullRequestLookups = 0;
     const controls = {
@@ -930,7 +965,26 @@ describe("Factory RPC service", () => {
     });
     expect([...first.items, ...second.items]).toHaveLength(4);
     expect((await readIssues(rpcUrl)).items).toHaveLength(1);
-    expect((await readTimeline(rpcUrl)).items).toHaveLength(9);
+    const firstTimelinePage = await readTimeline(rpcUrl, { limit: 2 });
+    const secondTimelinePage = await readTimeline(rpcUrl, {
+      limit: 2,
+      cursor: firstTimelinePage.nextCursor ?? 0,
+      watermark: firstTimelinePage.watermark,
+    });
+    const completeTimeline = await readTimeline(rpcUrl);
+    expect(completeTimeline.items).toHaveLength(10);
+    expect(
+      completeTimeline.items.some(({ id }) => id === "attempt-other-provider"),
+    ).toBe(false);
+    expect(
+      completeTimeline.items.find(
+        ({ id }) => id === "attempt-history-completed",
+      ),
+    ).toMatchObject({
+      endedAt: completed.updatedAt,
+      updatedAt: "2026-01-20T12:00:00.000Z",
+    });
+    expect(secondTimelinePage.readAt).toBe(firstTimelinePage.readAt);
     expect((await readUsage(rpcUrl)).items).toHaveLength(1);
     expect(
       (
