@@ -25,6 +25,7 @@ import type {
   LifecycleCommandKind,
   LifecycleConsequence,
   LifecycleCommandPage,
+  OperationsOverview,
 } from "@irudd-factory/contracts";
 import { Context, type Effect } from "effect";
 import type { FactoryError } from "./errors.ts";
@@ -220,6 +221,10 @@ export interface StateStoreService {
   readonly readTimeline: (
     request: PageRequest,
   ) => Effect.Effect<TimelinePage, FactoryError>;
+  readonly getOperationsOverview: () => Effect.Effect<
+    OperationsOverview,
+    FactoryError
+  >;
   readonly readLifecycleCommands: (
     request: PageRequest,
   ) => Effect.Effect<LifecycleCommandPage, FactoryError>;

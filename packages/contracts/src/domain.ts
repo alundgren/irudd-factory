@@ -245,6 +245,7 @@ export const FactorySnapshot = Schema.Struct({
       ),
       codexSlots: Schema.Number,
       pollIntervalMs: Schema.Number,
+      access: Schema.optional(Schema.String),
     }),
   ),
 });

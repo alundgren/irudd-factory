@@ -14,7 +14,7 @@ export default defineConfig({
     options: { typeAware: true, typeCheck: true },
   },
   test: {
-    include: ["{apps,packages}/**/test/**/*.test.ts"],
+    include: ["{apps,packages}/**/test/**/*.test.{ts,tsx}"],
     fileParallelism: false,
   },
 });

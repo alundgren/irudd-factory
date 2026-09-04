@@ -1,16 +1,17 @@
 import { defaultBehavior, emptyState, fixtureIssue } from "../factories.ts";
 import type { FixtureDefinition } from "../types.ts";
 
-const issue = fixtureIssue(31);
+const issue = fixtureIssue(35);
 const state = { ...emptyState([issue]), queue: { candidates: [issue] } };
 
-export const queueReadyFixture = {
-  name: "queue-ready",
-  summary: "One issue has durable FIFO tenure and is ready to start.",
-  tags: ["queue", "ready"],
-  purpose: "Inspect a startable queue entry before admission.",
+export const delayedFixture = {
+  name: "delayed",
+  summary: "The console retains data while a later refresh is delayed.",
+  tags: ["console", "connection", "delayed"],
+  purpose: "Inspect delayed-refresh status after the initial snapshot loads.",
   state,
   behavior: defaultBehavior(),
+  consoleNetwork: "delayed",
   expectations: {
     initial: {
       candidateCount: 1,

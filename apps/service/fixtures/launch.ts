@@ -71,7 +71,10 @@ export async function launchFixture(
     config,
     fixtureDependencies(config, fixture),
   );
-  console.log(`Factory fixture ${fixture.name} listening at ${service.url}`);
+  const consoleUrl = fixture.consoleNetwork
+    ? `${service.url}/?fixture-network=${fixture.consoleNetwork}`
+    : service.url;
+  console.log(`Factory fixture ${fixture.name} listening at ${consoleUrl}`);
   console.log(
     `Second RPC client: node apps/cli/src/main.ts run-next --command-id second-${fixture.name} --url ${service.url}/rpc`,
   );

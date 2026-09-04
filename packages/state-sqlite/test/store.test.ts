@@ -711,6 +711,89 @@ describe("SQLite state store", () => {
     opened.close();
   });
 
+  test("returns bounded operations data for current attempts", async () => {
+    const path = await databasePath();
+    const opened = openStateStore(path);
+    for (let index = 0; index < 102; index += 1) {
+      const suffix = String(index).padStart(3, "0");
+      const timestamp = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
+      await Effect.runPromise(
+        opened.service.admit({
+          ...admission(`command-${suffix}`, `assignment-${suffix}`, [
+            candidate(`I_${suffix}`, index + 1),
+          ]),
+          timestamp,
+        }),
+      );
+      await Effect.runPromise(
+        opened.service.appendProviderRecords(`assignment-${suffix}`, [
+          {
+            kind: "usage",
+            timestamp,
+            usage: {
+              total: {
+                inputTokens: index,
+                cachedInputTokens: 0,
+                outputTokens: 1,
+                reasoningOutputTokens: 0,
+                totalTokens: index + 1,
+              },
+              last: {
+                inputTokens: index,
+                cachedInputTokens: 0,
+                outputTokens: 1,
+                reasoningOutputTokens: 0,
+                totalTokens: index + 1,
+              },
+              modelContextWindow: null,
+            },
+          },
+        ]),
+      );
+      if (index < 101) {
+        await Effect.runPromise(
+          opened.service.appendEvent(
+            `assignment-${suffix}`,
+            {
+              type: "assignment.failed",
+              timestamp,
+              detail: {},
+            },
+            { state: "failed" },
+          ),
+        );
+      }
+    }
+    const database = new DatabaseSync(path);
+    database
+      .prepare("UPDATE assignments SET updated_at = $updatedAt WHERE id = $id")
+      .run({
+        id: "assignment-000",
+        updatedAt: "2026-01-01T03:00:00.000Z",
+      });
+
+    const overview = await Effect.runPromise(
+      opened.service.getOperationsOverview(),
+    );
+    expect(overview.recentActivity).toHaveLength(8);
+    expect(overview.recentActivity[0]?.id).toBe("assignment-000");
+    expect(overview.recentActivity.map(({ id }) => id)).not.toContain(
+      "assignment-001",
+    );
+    expect(overview.usage.map(({ attemptId }) => attemptId)).toEqual([
+      "assignment-101",
+    ]);
+    expect(
+      (
+        database
+          .prepare("SELECT COUNT(*) AS count FROM read_snapshots")
+          .get() as { count: number }
+      ).count,
+    ).toBe(0);
+    database.close();
+    opened.close();
+  });
+
   test("rejects an incompatible database with a reset diagnostic", async () => {
     const path = await databasePath();
     const legacy = new DatabaseSync(path);

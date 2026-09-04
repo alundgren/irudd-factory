@@ -34,6 +34,7 @@ export interface ApplicationOptions {
   readonly provider: string;
   readonly slots: number;
   readonly pollIntervalMs: number;
+  readonly access?: string;
 }
 
 function failure(code: FactoryErrorCode, error: unknown): NormalizedError {
@@ -495,6 +496,7 @@ export function makeApplication(options: ApplicationOptions) {
           })),
           codexSlots: options.slots,
           pollIntervalMs: options.pollIntervalMs,
+          ...(options.access ? { access: options.access } : {}),
         },
       };
     });
@@ -557,6 +559,10 @@ export function makeApplication(options: ApplicationOptions) {
   const readTimeline = (page: PageRequest) =>
     Effect.gen(function* () {
       return yield* (yield* StateStore).readTimeline(page);
+    });
+  const getOperationsOverview = () =>
+    Effect.gen(function* () {
+      return yield* (yield* StateStore).getOperationsOverview();
     });
   const readLifecycleCommands = (page: PageRequest) =>
     Effect.gen(function* () {
@@ -1025,6 +1031,7 @@ export function makeApplication(options: ApplicationOptions) {
     readEvents,
     readUsage,
     readTimeline,
+    getOperationsOverview,
     readLifecycleCommands,
     controlAttempt,
     processAssignment,

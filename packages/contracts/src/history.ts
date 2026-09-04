@@ -135,3 +135,10 @@ export const TimelinePage = pageSchema(Assignment);
 export type TimelinePage = typeof TimelinePage.Type;
 export const LifecycleCommandPage = pageSchema(LifecycleCommand);
 export type LifecycleCommandPage = typeof LifecycleCommandPage.Type;
+
+export const OperationsOverview = Schema.Struct({
+  usage: Schema.Array(AttemptUsage),
+  recentActivity: Schema.Array(Assignment),
+  lifecycleCommands: Schema.Array(LifecycleCommand),
+});
+export type OperationsOverview = typeof OperationsOverview.Type;

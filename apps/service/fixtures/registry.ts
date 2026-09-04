@@ -6,7 +6,12 @@ import { busyStartingFixture } from "./busy-starting/fixture.ts";
 import { completedDraftFixture } from "./completed-draft/fixture.ts";
 import { completedReadyFixture } from "./completed-ready/fixture.ts";
 import { emptyFixture } from "./empty/fixture.ts";
+import { disconnectedFixture } from "./disconnected/fixture.ts";
+import { delayedFixture } from "./delayed/fixture.ts";
 import { failedLongFixture } from "./failed-long/fixture.ts";
+import { fullCapacityFixture } from "./full-capacity/fixture.ts";
+import { longTitleFixture } from "./long-title/fixture.ts";
+import { paginationFixture } from "./pagination/fixture.ts";
 import { runnableFixture } from "./runnable/fixture.ts";
 import { queueDisabledFixture } from "./queue-disabled/fixture.ts";
 import { queueMultiRepositoryFixture } from "./queue-multi-repository/fixture.ts";
@@ -15,6 +20,7 @@ import { queueReadyFixture } from "./queue-ready/fixture.ts";
 import { queueStaleFixture } from "./queue-stale/fixture.ts";
 import { retainedHistoryFixture } from "./retained-history/fixture.ts";
 import { stopUncertainFixture } from "./stop-uncertain/fixture.ts";
+import { uncertainCapacityFixture } from "./uncertain-capacity/fixture.ts";
 import type { FixtureDefinition } from "./types.ts";
 
 const TAG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -65,6 +71,8 @@ export function validateFixtureRegistry<
 
 export const FIXTURE_REGISTRY = validateFixtureRegistry([
   emptyFixture,
+  disconnectedFixture,
+  delayedFixture,
   ambiguousFixture,
   busyReservedFixture,
   busyStartingFixture,
@@ -72,6 +80,8 @@ export const FIXTURE_REGISTRY = validateFixtureRegistry([
   stopUncertainFixture,
   runnableFixture,
   failedLongFixture,
+  fullCapacityFixture,
+  uncertainCapacityFixture,
   completedReadyFixture,
   completedDraftFixture,
   queueReadyFixture,
@@ -79,6 +89,8 @@ export const FIXTURE_REGISTRY = validateFixtureRegistry([
   queuePausedFixture,
   queueDisabledFixture,
   queueMultiRepositoryFixture,
+  longTitleFixture,
+  paginationFixture,
   retainedHistoryFixture,
 ] as const);
 
