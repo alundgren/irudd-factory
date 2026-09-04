@@ -46,6 +46,54 @@ export function seedFixture(fixture: FixtureDefinition) {
         fixture.state.events,
       );
     }
+    if (fixture.state.queue) {
+      const repositories = new Map<
+        string,
+        typeof fixture.state.queue.candidates
+      >();
+      for (const issue of fixture.state.queue.candidates) {
+        repositories.set(issue.repository, [
+          ...(repositories.get(issue.repository) ?? []),
+          issue,
+        ]);
+      }
+      for (const [repository, issues] of repositories) {
+        yield* store.reconcileQueue({
+          repository,
+          candidates: issues.map((issue, index) => ({
+            tenureId: `fixture-tenure-${repository.replace("/", "-")}-${index + 1}`,
+            candidate: {
+              issue,
+              workflow: fixture.behavior.candidateWorkflow,
+            },
+          })),
+          timestamp: fixture.state.now,
+        });
+      }
+      if (fixture.state.queue.stale) {
+        const tenures = yield* store.getDispatchableQueue(100);
+        for (const tenure of tenures) {
+          yield* store.markQueueTenureIneligible(
+            tenure.tenureId,
+            fixture.state.now,
+            {
+              code: "issue_ineligible",
+              message: "Fresh validation rejected this fixture issue",
+            },
+          );
+        }
+      }
+    }
+    if (fixture.state.dispatch) {
+      yield* store.setDispatchPaused(
+        fixture.state.dispatch.paused,
+        fixture.state.now,
+      );
+      yield* store.setCodexEnabled(
+        fixture.state.dispatch.codexEnabled,
+        fixture.state.now,
+      );
+    }
   });
 }
 
@@ -55,6 +103,7 @@ export function fixtureDependencies(
   controls: FixtureControls = {},
 ): FactoryDependencies {
   let assignmentSequence = 0;
+  const claimedNodes = new Set<string>();
   const candidates: Candidate[] = fixture.state.candidates.map((issue) => ({
     issue,
     workflow: fixture.behavior.candidateWorkflow,
@@ -63,13 +112,33 @@ export function fixtureDependencies(
     discoverCandidates: (repository) =>
       Effect.succeed(
         candidates.filter(
-          (candidate) => candidate.issue.repository === repository,
+          (candidate) =>
+            candidate.issue.repository === repository &&
+            (!controls.hideClaimedCandidates ||
+              !claimedNodes.has(candidate.issue.nodeId)),
         ),
       ),
-    revalidateIssue: (candidate) => Effect.succeed(candidate),
-    claimIssue: () =>
+    revalidateIssue: (candidate) =>
+      Effect.gen(function* () {
+        controls.onRevalidate?.();
+        const revalidateFailure =
+          typeof controls.revalidateFailure === "function"
+            ? controls.revalidateFailure()
+            : controls.revalidateFailure;
+        if (revalidateFailure) {
+          return yield* Effect.fail(
+            new FactoryError({
+              code: controls.revalidateFailureCode ?? "issue_ineligible",
+              message: revalidateFailure,
+            }),
+          );
+        }
+        return candidate;
+      }),
+    claimIssue: (issue) =>
       Effect.sync(() => {
         controls.onClaim?.();
+        if (controls.hideClaimedCandidates) claimedNodes.add(issue.nodeId);
         return fixture.behavior.claimOutcome;
       }),
     verifyPullRequest: () => Effect.succeed(fixture.behavior.pullRequest),
@@ -160,7 +229,9 @@ export function fixtureDependencies(
           yield* retain(controls.providerRecordsBeforeCompletion);
         }
         yield* controls.beforeCompletion
-          ? Effect.promise(controls.beforeCompletion)
+          ? Effect.promise(() =>
+              controls.beforeCompletion!(input.assignment.issue.number),
+            )
           : Effect.sleep(
               `${fixture.behavior.provider.completionDelayMs} millis`,
             );

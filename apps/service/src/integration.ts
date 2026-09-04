@@ -414,6 +414,7 @@ export function restrictGitHubToIssue(
             candidates.filter((candidate) => candidate.issue.nodeId === nodeId),
           ),
         ),
+    revalidateIssue: (candidate) => github.revalidateIssue(candidate),
     claimIssue: (issue) => github.claimIssue(issue),
     verifyPullRequest: (repository, branch, issueNumber) =>
       github.verifyPullRequest(repository, branch, issueNumber),

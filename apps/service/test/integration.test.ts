@@ -462,6 +462,7 @@ describe("restricted discovery and terminal checks", () => {
     const candidates = [candidate("I_created", 73), candidate("I_other", 74)];
     const base: GitHubService = {
       discoverCandidates: () => Effect.succeed(candidates),
+      revalidateIssue: (value) => Effect.succeed(value),
       claimIssue: () =>
         Effect.sync(() => {
           calls.claim += 1;
@@ -876,6 +877,7 @@ function fakeGitHub(calls: {
   return {
     discoverCandidates: () =>
       Effect.succeed([candidate("I_other", 72), candidate("I_created", 73)]),
+    revalidateIssue: (value) => Effect.succeed(value),
     claimIssue: (issue) =>
       Effect.sync(() => {
         calls.claimed.push(issue.nodeId);

@@ -5,6 +5,7 @@ import type {
   AttemptPage,
   AttemptUsage,
   CommandReceipt,
+  DispatchState,
   EventPage,
   FactorySnapshot,
   IssuePage,
@@ -18,6 +19,8 @@ import type {
   UsagePage,
   WorkflowRevision,
   WorkspacePaths,
+  QueuePage,
+  QueueReason,
 } from "@irudd-factory/contracts";
 import { Context, type Effect } from "effect";
 import type { FactoryError } from "./errors.ts";
@@ -40,11 +43,36 @@ export interface AdmissionInput {
   readonly timestamp: string;
   readonly slots?: number;
   readonly allowRetry?: boolean;
+  readonly queueTenureId?: string;
+  readonly source?: "manual" | "automatic";
 }
 
 export interface AdmissionResult {
   readonly receipt: CommandReceipt;
   readonly created: boolean;
+}
+
+export interface QueueTenureCandidate extends Candidate {
+  readonly tenureId: string;
+  readonly eligibleSince: string;
+}
+
+export interface QueueObservationInput {
+  readonly repository: string;
+  readonly candidates: ReadonlyArray<{
+    readonly tenureId?: string;
+    readonly candidate: Candidate;
+  }>;
+  readonly timestamp: string;
+}
+
+export interface EligibilityObservation {
+  readonly sequence: number;
+  readonly assignmentId: string;
+  readonly issueNodeId: string;
+  readonly observedAt: string;
+  readonly eligible: false;
+  readonly reason: QueueReason;
 }
 
 export interface AssignmentPatch {
@@ -90,6 +118,46 @@ export interface StateStoreService {
     assignment: Assignment,
     events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>,
   ) => Effect.Effect<void, FactoryError>;
+  readonly reconcileQueue: (
+    input: QueueObservationInput,
+  ) => Effect.Effect<void, FactoryError>;
+  readonly endQueueTenuresOutsideRepositories: (
+    repositories: ReadonlyArray<string>,
+    timestamp: string,
+  ) => Effect.Effect<void, FactoryError>;
+  readonly getDispatchableQueue: (
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<QueueTenureCandidate>, FactoryError>;
+  readonly getActiveQueueTenureId: (
+    issueNodeId: string,
+  ) => Effect.Effect<string | null, FactoryError>;
+  readonly markQueueTenureIneligible: (
+    tenureId: string,
+    timestamp: string,
+    reason: QueueReason,
+  ) => Effect.Effect<void, FactoryError>;
+  readonly endQueueTenure: (
+    tenureId: string,
+    timestamp: string,
+    reason: QueueReason,
+  ) => Effect.Effect<void, FactoryError>;
+  readonly listQueue: (input: {
+    readonly limit: number;
+    readonly cursor?: string;
+    readonly watermark?: string;
+  }) => Effect.Effect<QueuePage, FactoryError>;
+  readonly getDispatchState: () => Effect.Effect<DispatchState, FactoryError>;
+  readonly setDispatchPaused: (
+    paused: boolean,
+    timestamp: string,
+  ) => Effect.Effect<DispatchState, FactoryError>;
+  readonly setCodexEnabled: (
+    enabled: boolean,
+    timestamp: string,
+  ) => Effect.Effect<DispatchState, FactoryError>;
+  readonly getLatestEligibilityObservation: (
+    assignmentId: string,
+  ) => Effect.Effect<EligibilityObservation | null, FactoryError>;
   readonly appendProviderRecords: (
     attemptId: string,
     records: ReadonlyArray<RetainedProviderRecord>,
@@ -134,7 +202,7 @@ export interface GitHubService {
   readonly discoverCandidates: (
     repository: string,
   ) => Effect.Effect<ReadonlyArray<Candidate>, FactoryError>;
-  readonly revalidateIssue?: (
+  readonly revalidateIssue: (
     candidate: Candidate,
   ) => Effect.Effect<Candidate, FactoryError>;
   readonly claimIssue: (

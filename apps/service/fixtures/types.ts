@@ -11,6 +11,7 @@ import type {
 } from "@irudd-factory/contracts";
 import type {
   ClaimOutcome,
+  FactoryErrorCode,
   ProviderRunResult,
 } from "@irudd-factory/application";
 
@@ -27,6 +28,14 @@ export interface FixtureState {
   readonly candidates: ReadonlyArray<IssueRef>;
   readonly assignment: Assignment | null;
   readonly events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>;
+  readonly queue?: {
+    readonly candidates: ReadonlyArray<IssueRef>;
+    readonly stale?: boolean;
+  };
+  readonly dispatch?: {
+    readonly paused: boolean;
+    readonly codexEnabled: boolean;
+  };
   readonly history?: ReadonlyArray<{
     readonly assignment: Assignment;
     readonly events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>;
@@ -82,11 +91,15 @@ export interface FixtureDefinition<Name extends string = string> {
 
 export interface FixtureControls {
   readonly beforeRunning?: () => Promise<void>;
-  readonly beforeCompletion?: () => Promise<void>;
+  readonly beforeCompletion?: (issueNumber: number) => Promise<void>;
   readonly onClaim?: () => void;
   readonly onWorkspace?: () => void;
   readonly onProviderRun?: () => void;
   readonly onProviderInterrupted?: () => void;
+  readonly onRevalidate?: () => void;
+  readonly revalidateFailure?: string | (() => string | null);
+  readonly revalidateFailureCode?: FactoryErrorCode;
+  readonly hideClaimedCandidates?: boolean;
   readonly onPullRequestLookup?: () => void;
   readonly providerRecordsBeforeCompletion?: ReadonlyArray<RetainedProviderRecord>;
   readonly cleanupUncertain?: boolean;

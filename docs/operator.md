@@ -1,6 +1,7 @@
 # Operator guide
 
-Factory operates configured repositories through a local or Tailscale-served
+Factory polls a configured repository pool and dispatches a durable FIFO queue
+into the available Codex slots. Operators use a local or Tailscale-served
 console.
 
 ## Requirements
@@ -49,12 +50,19 @@ Factory starts both listeners together. The main listener requires the exact
 Tailscale identity and an HTTPS same-origin browser RPC request. The local CLI
 listener accepts only Origin-less RPC and never serves console files.
 
-`port` is optional and defaults to `4317`. `timeouts` is also optional. You may
-override any subset of these defaults:
+`port`, `pollIntervalMs`, and `codex.slots` are optional. They default to
+`4317`, `30000`, and `1`. `timeouts` is also optional. You may override any
+subset of these defaults:
 
 ```json
 {
   "port": 4317,
+  "pollIntervalMs": 30000,
+  "codex": {
+    "model": "gpt-5.6-luna",
+    "reasoningEffort": "medium",
+    "slots": 2
+  },
   "timeouts": {
     "childStartupMs": 10000,
     "initializationMs": 10000,
@@ -66,8 +74,10 @@ override any subset of these defaults:
 ```
 
 Every supplied port or timeout must be a positive integer. Ports must be at
-most `65535`. Normal startup still requires `repository`, `databasePath`,
-`workspaceRoot`, `bindHost`, `codex.model`, and `codex.reasoningEffort`.
+most `65535`. `pollIntervalMs` accepts `1000` through `3600000`, and slots
+accepts `1` through `32`. Normal startup requires a nonempty `repositories`
+array, `databasePath`, `workspaceRoot`, `bindHost`, `codex.model`, and
+`codex.reasoningEffort`.
 
 Retained free text defaults to 65,536 bytes per entry. Configure regular
 expressions to replace known credentials or machine-specific secrets before
@@ -130,19 +140,24 @@ The service runs in the background while the CLI commands execute. Its output
 goes to a temporary log so shells with background terminal output disabled do
 not suspend it. If startup fails, the command prints that log. The cleanup trap
 stops the service and removes the log when you press Ctrl-C or leave the shell.
-Keep this terminal attached while using the console or running `run-next`.
+Keep this terminal attached while using the console or CLI.
 
 Open the configured local URL to use the console. The displayed command ID is
 created before submission. On a transport error, retry that same ID. Factory
 returns its original durable receipt after a service restart, even if GitHub is
 temporarily unavailable or the candidate set has changed.
 
-The CLI requires the caller to provide the command ID:
+Polling starts after one configured interval and continues until shutdown. The
+CLI can still request a manual scan. The caller must provide a command ID:
 
 ```sh
 vp node apps/cli/src/main.ts run-next --command-id 40b8af63-b7cc-4bc7-96d6-43d9aa42fc91
 wait "$service_pid"
 ```
+
+Automatic work uses persisted FIFO tenure. A manual `start` or `run-next`
+request uses the same slot and active-issue checks. Paused dispatch or disabled
+Codex rejects new admission. A full provider returns `provider_busy`.
 
 In Tailscale mode, point the CLI at its separate listener:
 
@@ -241,6 +256,10 @@ records, values, and ordering even if a new attempt arrives during traversal.
 After a failed or completed run, remove files only after preserving anything
 needed for diagnosis. The current release has no cleanup command.
 
+Queue pages carry a watermark. Pass the first page's watermark and next cursor
+to read later pages from the same point-in-time result, even if polling changes
+the live queue.
+
 ## Deterministic fixtures
 
 List the registered fixtures and their tags before choosing one:
@@ -284,8 +303,10 @@ to confirm that another command receives a durable `provider_busy` result.
 
 ## Current recovery limits
 
-Receipt replay and all attempts survive restart. Factory interrupts unfinished
-attempts and does not resume or retry them. If provider process ownership is
-uncertain, the attempt continues to consume capacity until an operator can
-resolve it. Cancellation, stall detection, and automatic cleanup are deferred.
-Remote console access is available through the Tailscale mode described above.
+Receipt replay, attempts, queue tenure, dispatch pause, and Codex enabled state
+survive restart. Startup interrupts unfinished attempts and reconciles recorded
+provider process ownership. It does not resume or retry attempts. If provider
+process ownership is uncertain, the attempt continues to consume capacity until
+an operator can resolve it. Cancellation, stall detection, and automatic cleanup
+are deferred. Remote console access is available through the Tailscale mode
+described above.

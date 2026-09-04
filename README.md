@@ -1,15 +1,17 @@
 # Irudd Factory
 
-Irudd Factory runs one eligible GitHub issue through one unattended Codex turn
-and records the result in SQLite. It is built for one developer operating a
-dedicated machine and repositories they own. The project was inspired by
+Irudd Factory polls configured GitHub repositories and runs eligible issues
+through unattended Codex turns. It keeps a durable FIFO queue and records each
+result in SQLite. It is built for one developer operating a dedicated machine
+and repositories they own. The project was inspired by
 [Symphony](https://github.com/openai/symphony/blob/main/SPEC.md).
 
 The current implementation provides a service, CLI, and browser console with
-separate local and Tailscale Serve access modes. It discovers eligible issues,
-pins repository policy to the default branch commit, claims one issue, creates
-a retained linked worktree, runs Codex through App Server, and verifies the
-resulting pull request.
+separate local and Tailscale Serve access modes. It preserves eligibility tenure
+across restarts, fills a configured Codex slot pool, revalidates before admission,
+pins repository policy to the default branch commit, claims each issue, creates a
+retained linked worktree, runs Codex through App Server, and verifies the resulting
+pull request. Manual starts use the same database transaction as automatic dispatch.
 
 ## Development
 

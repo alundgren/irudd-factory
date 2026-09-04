@@ -86,10 +86,13 @@ metadata, state, fake behavior, and expectations.
 
 ## Operations
 
-The service is currently started manually and binds to loopback. The operator
-may expose the authenticated main listener with Tailscale Serve. Factory does
-not install, configure, start, or stop Tailscale. systemd, cancellation, stall
-detection, and workspace cleanup remain deferred.
+The service is currently started manually and binds to loopback. It polls each
+configured repository, persists FIFO queue tenure and dispatch controls, and
+fills the configured Codex slots. Queue pages and pause or enable controls are
+available through Effect RPC. The operator may expose the authenticated main
+listener with Tailscale Serve. Factory does not install, configure, start, or
+stop Tailscale. systemd, cancellation, stall detection, and workspace cleanup
+remain deferred.
 
 ## Eligibility labels
 

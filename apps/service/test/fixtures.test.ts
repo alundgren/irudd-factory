@@ -127,6 +127,11 @@ describe("fixture catalog", () => {
       "failed-long",
       "completed-ready",
       "completed-draft",
+      "queue-ready",
+      "queue-stale",
+      "queue-paused",
+      "queue-disabled",
+      "queue-multi-repository",
       "retained-history",
     ]);
     for (const fixture of FIXTURE_REGISTRY) {
@@ -315,5 +320,5 @@ describe("fixture contract", () => {
       await service.stop();
       stops.pop();
     }
-  });
+  }, 10_000);
 });

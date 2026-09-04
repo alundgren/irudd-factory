@@ -8,6 +8,11 @@ import { completedReadyFixture } from "./completed-ready/fixture.ts";
 import { emptyFixture } from "./empty/fixture.ts";
 import { failedLongFixture } from "./failed-long/fixture.ts";
 import { runnableFixture } from "./runnable/fixture.ts";
+import { queueDisabledFixture } from "./queue-disabled/fixture.ts";
+import { queueMultiRepositoryFixture } from "./queue-multi-repository/fixture.ts";
+import { queuePausedFixture } from "./queue-paused/fixture.ts";
+import { queueReadyFixture } from "./queue-ready/fixture.ts";
+import { queueStaleFixture } from "./queue-stale/fixture.ts";
 import { retainedHistoryFixture } from "./retained-history/fixture.ts";
 import type { FixtureDefinition } from "./types.ts";
 
@@ -67,6 +72,11 @@ export const FIXTURE_REGISTRY = validateFixtureRegistry([
   failedLongFixture,
   completedReadyFixture,
   completedDraftFixture,
+  queueReadyFixture,
+  queueStaleFixture,
+  queuePausedFixture,
+  queueDisabledFixture,
+  queueMultiRepositoryFixture,
   retainedHistoryFixture,
 ] as const);
 
