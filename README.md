@@ -29,10 +29,14 @@ find it.
 Lint, type-check, and run the active test suite:
 
 ```sh
-vp lint
-vp run typecheck
+vp run check
 vp run test
 ```
+
+The check reports advisory warnings for files over 500 lines, functions over
+100 lines, and functions with cyclomatic complexity over 20. CI uses
+`vp run check:ci` to hide those warnings while retaining format, lint, and type
+failures.
 
 List the deterministic local fixtures:
 

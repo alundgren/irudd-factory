@@ -11,6 +11,11 @@ vp run test:application -t "builds the narrow preclaimed prompt"
 ```
 
 Run `vp run check` and `vp run test` after the implementation is complete.
+`vp run check` includes `vp check`, whose file length, function length, and
+cyclomatic complexity warnings are design prompts. Address them when that
+improves the code, or leave them with a brief explanation when it does not.
+CI must use `vp run check:ci`, which still fails on lint and type errors but
+does not publish advisory warnings.
 
 Tests never depend on a build artifact. Serve static fixtures the test itself
 writes, so `vp run test` stays independent of `vp run build:console`.

@@ -11,6 +11,7 @@
     "build": "vp run typecheck && vp run build:console",
     "build:console": "vp -C apps/console build",
     "check": "vp check && tsc --noEmit",
+    "check:ci": "vp fmt --check && vp lint --quiet && tsc --noEmit",
     "fixture": "node scripts/fixture.ts",
     "format": "vp fmt --check",
     "format:write": "vp fmt --write",

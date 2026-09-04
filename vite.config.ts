@@ -10,7 +10,15 @@ export default defineConfig({
   },
   lint: {
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
-    rules: { "vite-plus/prefer-vite-plus-imports": "error" },
+    rules: {
+      complexity: ["warn", { max: 20 }],
+      "max-lines": ["warn", { max: 500 }],
+      "max-lines-per-function": ["warn", { max: 100 }],
+      "typescript/no-floating-promises": "error",
+      "typescript/no-misused-promises": "error",
+      "typescript/switch-exhaustiveness-check": "error",
+      "vite-plus/prefer-vite-plus-imports": "error",
+    },
     options: { typeAware: true, typeCheck: true },
   },
   test: {
