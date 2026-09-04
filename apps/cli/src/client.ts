@@ -2,6 +2,7 @@ import { FetchHttpClient } from "@effect/platform";
 import { RpcClient, RpcSerialization } from "@effect/rpc";
 import type {
   AttemptPage,
+  AttemptPageRequest,
   Attempt,
   CommandReceipt,
   DispatchState,
@@ -13,9 +14,11 @@ import type {
   TimelinePage,
   TranscriptPage,
   UsagePage,
+  UsagePageRequest,
   LifecycleCommand,
   LifecycleCommandKind,
   LifecycleCommandPage,
+  LifecycleCommandPageRequest,
 } from "@irudd-factory/contracts";
 import { FactoryRpcs } from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
@@ -106,7 +109,7 @@ export function controlAttempt(
 
 export const readLifecycleCommands = (
   url: string,
-  page: PageRequest = {},
+  page: LifecycleCommandPageRequest = {},
 ): Promise<LifecycleCommandPage> =>
   Effect.gen(function* () {
     const client = yield* RpcClient.make(FactoryRpcs);
@@ -123,7 +126,7 @@ export const readIssues = (
   }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
 export const readAttempts = (
   url: string,
-  page: PageRequest = {},
+  page: AttemptPageRequest = {},
 ): Promise<AttemptPage> =>
   Effect.gen(function* () {
     const client = yield* RpcClient.make(FactoryRpcs);
@@ -157,7 +160,7 @@ export const readEvents = (
   }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
 export const readUsage = (
   url: string,
-  page: PageRequest = {},
+  page: UsagePageRequest = {},
 ): Promise<UsagePage> =>
   Effect.gen(function* () {
     const client = yield* RpcClient.make(FactoryRpcs);

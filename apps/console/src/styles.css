@@ -281,6 +281,21 @@ main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.issue-title-button,
+.activity-attempt {
+  min-height: 0;
+  border-radius: 0;
+  padding: 0;
+  color: #3d5d71;
+  background: transparent;
+  text-align: left;
+}
+.issue-title-button:hover:not(:disabled),
+.activity-attempt:hover:not(:disabled) {
+  color: #604939;
+  background: transparent;
+  text-decoration: underline;
+}
 .meta,
 .model span,
 .attempt-numbers span,
@@ -528,6 +543,355 @@ dd {
 .command-final span {
   color: #3d6034;
 }
+.command-uncertain {
+  border-color: #7e5220 !important;
+}
+.command-uncertain span {
+  color: #7e5220;
+}
+
+.session-heading {
+  align-items: flex-end;
+}
+.session-heading > div small {
+  display: block;
+  margin-top: 0.2rem;
+}
+.archive-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #66574d;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+.archive-filter input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #784f26;
+}
+.session-list {
+  border-top: 1px solid #c1af9a;
+}
+.session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(9rem, auto) auto;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  min-height: 72px;
+  border-bottom: 1px solid #c1af9a;
+  border-radius: 0;
+  padding: 0.75rem 0;
+  color: #604939;
+  background: transparent;
+  text-align: left;
+}
+.session-row:hover:not(:disabled) {
+  color: #604939;
+  background: #eadfcd;
+}
+.session-row > span:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.session-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-row small,
+.session-row time,
+.archived-label {
+  color: #66574d;
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+.session-row time {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.archived-label {
+  color: #7e5220;
+  font-weight: 500;
+}
+.inline-error {
+  border-left: 3px solid #8f3a2d;
+  padding: 0.65rem 0.8rem;
+  color: #8f3a2d;
+  background: #eadfcd;
+  overflow-wrap: anywhere;
+}
+
+.inspector-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(96 73 57 / 42%);
+}
+.attempt-inspector {
+  width: min(52rem, calc(100vw - 3rem));
+  height: 100dvh;
+  overflow-y: auto;
+  color: #604939;
+  background: #f2eade;
+  box-shadow: -0.5rem 0 2rem rgb(96 73 57 / 22%);
+}
+.inspector-header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  border-bottom: 1px solid #c1af9a;
+  padding: 1.4rem clamp(1rem, 4vw, 2.2rem);
+  background: #eadfcd;
+}
+.inspector-header h2 {
+  max-width: 34ch;
+  font-size: 1.4rem;
+}
+.inspector-header p:last-child {
+  margin: 0.35rem 0 0;
+  color: #66574d;
+}
+.inspector-close {
+  min-height: 38px;
+  border: 1px solid #c1af9a;
+  padding: 0.45rem 0.7rem;
+  color: #604939;
+  background: #f9f6f0;
+}
+.inspector-body {
+  padding: 0 clamp(1rem, 4vw, 2.2rem) 4rem;
+}
+.inspector-body > section {
+  border-bottom: 1px solid #c1af9a;
+  padding: 1.6rem 0;
+}
+.inspector-body > section:last-child {
+  border-bottom: 0;
+}
+.inspector-summary > p {
+  max-width: 68ch;
+  color: #66574d;
+}
+.inspector-state {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  margin-bottom: 0.45rem;
+}
+.inspector-state h3,
+.inspector-section-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.inspector-state span,
+.inspector-section-heading > span {
+  color: #66574d;
+  font-size: 0.8rem;
+}
+.inspector-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1.5rem;
+  margin: 1.2rem 0 0;
+}
+.inspector-facts div {
+  min-width: 0;
+}
+.inspector-facts dd {
+  overflow-wrap: anywhere;
+}
+.inspector-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+.inspector-section-heading small {
+  display: block;
+  max-width: 68ch;
+  margin-top: 0.25rem;
+  color: #66574d;
+  font-size: 0.8rem;
+}
+.sibling-list {
+  display: flex;
+  gap: 0.55rem;
+  overflow-x: auto;
+  padding: 0.2rem 0 0.5rem;
+}
+.sibling-list button {
+  display: flex;
+  min-width: 11rem;
+  flex-direction: column;
+  align-items: flex-start;
+  border: 1px solid #c1af9a;
+  padding: 0.6rem 0.75rem;
+  color: #604939;
+  background: #f9f6f0;
+  font-size: 0.82rem;
+}
+.sibling-list button:hover:not(:disabled),
+.sibling-list .sibling-current {
+  border-color: #784f26;
+  color: #784f26;
+  background: #eadfcd;
+}
+.sibling-list time {
+  margin-top: 0.2rem;
+  color: #66574d;
+  font-size: 0.74rem;
+  font-weight: 400;
+}
+.transcript {
+  max-height: 24rem;
+  overflow: auto;
+  border: 1px solid #c1af9a;
+  border-radius: 0.65rem;
+  background: #f9f6f0;
+}
+.transcript article {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid #c1af9a;
+}
+.transcript article:last-child {
+  border-bottom: 0;
+}
+.transcript time,
+.event-list time {
+  color: #66574d;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.transcript pre,
+.attempt-error pre {
+  margin: 0.5rem 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+.event-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.event-list li {
+  padding: 0.7rem 0;
+  border-bottom: 1px solid #c1af9a;
+}
+.event-list li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.event-list strong {
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
+.event-list pre {
+  margin: 0.45rem 0 0;
+  overflow: auto;
+  color: #66574d;
+  font-size: 0.75rem;
+}
+.attempt-error {
+  color: #8f3a2d;
+}
+.path-list {
+  margin: 0;
+}
+.path-list > div {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid #c1af9a;
+}
+.path-list dd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.path-list code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  user-select: all;
+}
+.path-list button {
+  flex: none;
+}
+.copy-notice {
+  margin: 0.7rem 0;
+  color: #3d6034;
+  font-size: 0.84rem;
+}
+.github-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1.5rem;
+  margin-top: 1rem;
+}
+.github-links span {
+  color: #66574d;
+}
+.control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.command-confirmation {
+  margin-top: 1rem;
+  border-left: 4px solid #8f3a2d;
+  padding: 0.8rem 1rem;
+  background: #eadfcd;
+}
+.command-confirmation p {
+  margin-bottom: 0.65rem;
+}
+.command-confirmation > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+.command-submitting {
+  margin: 0.8rem 0 0;
+  color: #66574d;
+  font-size: 0.84rem;
+}
+.inspector-command {
+  margin-top: 1rem;
+  border-left: 4px solid #3d5d71;
+  padding: 0.7rem 0 0.7rem 0.9rem;
+}
+.inspector-command > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.inspector-command span {
+  color: #3d5d71;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.inspector-command p {
+  margin: 0.35rem 0;
+  font-size: 0.84rem;
+}
+.inspector-command code {
+  color: #66574d;
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
 .stale-note,
 .delay-note {
   margin-bottom: 1.5rem;
@@ -651,6 +1015,19 @@ dd {
   .section-heading {
     align-items: flex-start;
   }
+  .session-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.45rem 0.8rem;
+  }
+  .session-row time {
+    text-align: left;
+  }
+  .archived-label {
+    text-align: right;
+  }
+  .attempt-inspector {
+    width: 100%;
+  }
 }
 
 @media (max-width: 390px) {
@@ -670,6 +1047,24 @@ dd {
   .queue-row button {
     grid-column: 2;
     grid-row: 3;
+    width: 100%;
+  }
+  .inspector-header {
+    gap: 0.75rem;
+  }
+  .inspector-header h2 {
+    font-size: 1.15rem;
+  }
+  .inspector-facts {
+    grid-template-columns: 1fr;
+  }
+  .path-list dd {
+    display: block;
+  }
+  .path-list button {
+    margin-top: 0.35rem;
+  }
+  .control-actions button {
     width: 100%;
   }
 }

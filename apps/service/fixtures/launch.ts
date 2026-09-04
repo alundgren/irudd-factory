@@ -71,8 +71,15 @@ export async function launchFixture(
     config,
     fixtureDependencies(config, fixture),
   );
-  const consoleUrl = fixture.consoleNetwork
-    ? `${service.url}/?fixture-network=${fixture.consoleNetwork}`
+  const consoleParameters = new URLSearchParams();
+  if (fixture.consoleNetwork) {
+    consoleParameters.set("fixture-network", fixture.consoleNetwork);
+  }
+  if (fixture.consoleClipboard) {
+    consoleParameters.set("fixture-clipboard", fixture.consoleClipboard);
+  }
+  const consoleUrl = consoleParameters.size
+    ? `${service.url}/?${consoleParameters.toString()}`
     : service.url;
   console.log(`Factory fixture ${fixture.name} listening at ${consoleUrl}`);
   console.log(

@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
   Assignment,
+  Attempt,
   FactorySnapshot,
   LifecycleCommand,
   QueuePage,
@@ -18,9 +19,16 @@ import {
 } from "vite-plus/test";
 
 vi.mock("../src/client.ts", () => ({
+  controlAttempt: vi.fn(),
   listQueue: vi.fn(),
+  listAttempts: vi.fn(),
+  loadAttempt: vi.fn(),
+  loadEvents: vi.fn(),
+  loadLifecycleCommands: vi.fn(),
   loadOperationsOverview: vi.fn(),
   loadSnapshot: vi.fn(),
+  loadTranscript: vi.fn(),
+  loadUsage: vi.fn(),
   setCodexEnabled: vi.fn(),
   setDispatchPaused: vi.fn(),
   startIssue: vi.fn(),
@@ -54,6 +62,26 @@ const assignment = {
   createdAt: now,
   updatedAt: now,
 } as Assignment;
+const retainedRunningAttempt: Attempt = {
+  ...assignment,
+  workflow: {
+    startingCommit: "a".repeat(40),
+    blobId: "b".repeat(40),
+    digest: "c".repeat(64),
+    body: "Fixture workflow",
+  },
+  workspace: null,
+  codexVersion: null,
+  threadId: null,
+  turnId: null,
+  processGroupId: null,
+  processStartIdentity: null,
+  processStartPending: false,
+  pullRequest: null,
+  error: null,
+  lastEventSequence: 4,
+  archivedAt: null,
+};
 const queue: QueuePage = {
   items: [
     {
@@ -126,6 +154,32 @@ async function renderApp() {
 }
 
 beforeEach(() => {
+  vi.mocked(client.listAttempts).mockResolvedValue({
+    items: [],
+    watermark: "attempts-1",
+    nextCursor: null,
+  });
+  vi.mocked(client.loadAttempt).mockResolvedValue(null);
+  vi.mocked(client.loadEvents).mockResolvedValue({
+    items: [],
+    watermark: "events-1",
+    nextCursor: null,
+  });
+  vi.mocked(client.loadLifecycleCommands).mockResolvedValue({
+    items: [],
+    watermark: "lifecycle-1",
+    nextCursor: null,
+  });
+  vi.mocked(client.loadTranscript).mockResolvedValue({
+    items: [],
+    watermark: "transcript-1",
+    nextCursor: null,
+  });
+  vi.mocked(client.loadUsage).mockResolvedValue({
+    items: [],
+    watermark: "usage-1",
+    nextCursor: null,
+  });
   vi.mocked(client.loadSnapshot).mockResolvedValue(snapshot);
   vi.mocked(client.loadOperationsOverview).mockResolvedValue({
     usage: [
@@ -458,7 +512,10 @@ describe("Operations overview", () => {
       .mockResolvedValueOnce(queue)
       .mockResolvedValueOnce(secondPage);
     const container = await renderApp();
-    const next = [...container.querySelectorAll("button")].find(
+    const queuePagination = container.querySelector(
+      '[aria-label="Ready queue pages"]',
+    )!;
+    const next = [...queuePagination.querySelectorAll("button")].find(
       (button) => button.textContent === "Next",
     )!;
     await act(async () => {
@@ -467,7 +524,7 @@ describe("Operations overview", () => {
     });
     expect(client.listQueue).toHaveBeenLastCalledWith(6, "1", "queue-1");
     expect(container.textContent).toContain("Second page issue");
-    const previous = [...container.querySelectorAll("button")].find(
+    const previous = [...queuePagination.querySelectorAll("button")].find(
       (button) => button.textContent === "Previous",
     )!;
     await act(async () => previous.click());
@@ -507,9 +564,11 @@ describe("Operations overview", () => {
       pause.click();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    const next = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Next",
-    )!;
+    const next = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="Ready queue pages"] button',
+      ),
+    ].find((button) => button.textContent === "Next")!;
     await act(async () => {
       next.click();
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -521,5 +580,51 @@ describe("Operations overview", () => {
     });
     expect(container.textContent).toContain("Second page issue");
     expect(container.textContent).toContain("Page 2");
+  });
+
+  test("disables inspector controls when an application refresh is delayed", async () => {
+    let finishRefresh!: (value: FactorySnapshot) => void;
+    const delayedSnapshot = new Promise<FactorySnapshot>((resolve) => {
+      finishRefresh = resolve;
+    });
+    vi.mocked(client.loadAttempt).mockResolvedValue(retainedRunningAttempt);
+    vi.mocked(client.listAttempts).mockImplementation(async (request) => ({
+      items: request.issueNodeId ? [retainedRunningAttempt] : [],
+      watermark: "attempts-running",
+      nextCursor: null,
+    }));
+    vi.mocked(client.setDispatchPaused).mockResolvedValue({
+      paused: true,
+      codexEnabled: true,
+      updatedAt: now,
+    });
+    const container = await renderApp();
+    const activeAttempt = container.querySelector<HTMLButtonElement>(
+      ".issue-title-button",
+    )!;
+    await act(async () => {
+      activeAttempt.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const stop = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Stop attempt")!;
+    expect(stop.disabled).toBe(false);
+
+    vi.mocked(client.loadSnapshot).mockReturnValueOnce(delayedSnapshot);
+    const pause = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Pause")!;
+    await act(async () => {
+      pause.click();
+      await new Promise((resolve) => setTimeout(resolve, 1_600));
+    });
+    expect(container.textContent).toContain("Refresh delayed");
+    expect(stop.disabled).toBe(true);
+
+    await act(async () => {
+      finishRefresh(snapshot);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
   });
 });

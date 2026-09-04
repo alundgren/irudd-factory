@@ -23,16 +23,72 @@ const third = {
   id: "attempt-history-completed",
   createdAt: "2026-01-14T12:00:00.000Z",
   updatedAt: FIXTURE_NOW,
-  lastEventSequence: 3,
+  lastEventSequence: 8,
 };
+const fourth = {
+  ...fixtureAssignment("stopped"),
+  id: "attempt-history-stopped",
+  workspace: third.workspace,
+  createdAt: "2026-01-11T12:00:00.000Z",
+  updatedAt: "2026-01-11T12:10:00.000Z",
+};
+const fifth = {
+  ...fixtureAssignment("completed"),
+  id: "attempt-history-completed-older",
+  createdAt: "2026-01-10T12:00:00.000Z",
+  updatedAt: "2026-01-10T12:10:00.000Z",
+};
+const sixth = {
+  ...fixtureAssignment("failed"),
+  id: "attempt-history-failed-older",
+  createdAt: "2026-01-09T12:00:00.000Z",
+  updatedAt: "2026-01-09T12:10:00.000Z",
+};
+const seventh = {
+  ...fixtureAssignment("completed"),
+  id: "attempt-history-completed-oldest",
+  createdAt: "2026-01-08T12:00:00.000Z",
+  updatedAt: "2026-01-08T12:10:00.000Z",
+};
+const eighth = {
+  ...fixtureAssignment("stopped"),
+  id: "attempt-history-stopped-older",
+  workspace: third.workspace,
+  createdAt: "2026-01-07T12:00:00.000Z",
+  updatedAt: "2026-01-07T12:10:00.000Z",
+};
+const archived = {
+  ...fixtureAssignment("stopped"),
+  id: "attempt-history-archived",
+  workspace: third.workspace,
+  createdAt: "2026-01-06T12:00:00.000Z",
+  updatedAt: "2026-01-06T12:10:00.000Z",
+  archivedAt: "2026-01-06T12:15:00.000Z",
+};
+
+function event(assignment: typeof fourth): ReadonlyArray<{
+  assignmentId: string;
+  type: string;
+  timestamp: string;
+  detail: Record<string, unknown>;
+}> {
+  return [
+    {
+      assignmentId: assignment.id,
+      type: `assignment.${assignment.state}`,
+      timestamp: assignment.updatedAt,
+      detail: {},
+    },
+  ];
+}
 
 export const retainedHistoryFixture: FixtureDefinition<"retained-history"> = {
   name: "retained-history",
   summary:
     "Several retained attempts with long, truncated, and partial evidence",
-  tags: ["history", "pagination", "transcript", "recovery"],
+  tags: ["history", "pagination", "transcript", "recovery", "clipboard"],
   purpose:
-    "Exercise paged history for one issue across failed, interrupted, and completed attempts, including known and unknown token totals.",
+    "Exercise paged history for one issue across failed, interrupted, stopped, completed, and archived attempts, including long truncated text, known and unknown tokens, pull request evidence, and clipboard failure.",
   state: {
     ...emptyState(),
     assignment: third,
@@ -90,6 +146,11 @@ export const retainedHistoryFixture: FixtureDefinition<"retained-history"> = {
           },
         ],
       },
+      { assignment: fourth, events: event(fourth), providerRecords: [] },
+      { assignment: fifth, events: event(fifth), providerRecords: [] },
+      { assignment: sixth, events: event(sixth), providerRecords: [] },
+      { assignment: seventh, events: event(seventh), providerRecords: [] },
+      { assignment: eighth, events: event(eighth), providerRecords: [] },
       {
         assignment: third,
         events: [
@@ -120,6 +181,7 @@ export const retainedHistoryFixture: FixtureDefinition<"retained-history"> = {
           },
         ],
       },
+      { assignment: archived, events: event(archived), providerRecords: [] },
     ],
   },
   behavior: defaultBehavior(),
@@ -134,4 +196,5 @@ export const retainedHistoryFixture: FixtureDefinition<"retained-history"> = {
     reset: "deterministic",
     checks: ["inspect-initial-snapshot"],
   },
+  consoleClipboard: "failure",
 };

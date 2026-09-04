@@ -2013,16 +2013,22 @@ export function openStateStore(
 
   function assignmentRows(
     order: "history" | "timeline",
+    includeArchived = false,
+    issueNodeId?: string,
   ): ReadonlyArray<Assignment> {
     const direction = order === "timeline" ? "ASC" : "DESC";
+    const archivedFilter = includeArchived ? "" : "AND archived_at IS NULL";
+    const issueFilter = issueNodeId ? "AND issue_node_id = $issueNodeId" : "";
     return (
       database
         .prepare(
           `SELECT * FROM assignments
-           WHERE archived_at IS NULL
+           WHERE 1 = 1 ${archivedFilter} ${issueFilter}
            ORDER BY created_at ${direction}, id ${direction}`,
         )
-        .all() as unknown as ReadonlyArray<AssignmentRow>
+        .all(
+          issueNodeId ? { issueNodeId } : {},
+        ) as unknown as ReadonlyArray<AssignmentRow>
     ).map(decodeAssignment);
   }
 
@@ -2441,8 +2447,17 @@ export function openStateStore(
     readAttempts: (request) =>
       Effect.try({
         try: () =>
-          pageRequest("attempts", "", request, Assignment, () =>
-            assignmentRows("history"),
+          pageRequest(
+            "attempts",
+            `${request.includeArchived === true ? "all" : "current"}:${request.issueNodeId ?? ""}`,
+            request,
+            Assignment,
+            () =>
+              assignmentRows(
+                "history",
+                request.includeArchived === true,
+                request.issueNodeId,
+              ),
           ),
         catch: storageError,
       }),
@@ -2495,14 +2510,24 @@ export function openStateStore(
     readUsage: (request) =>
       Effect.try({
         try: () =>
-          pageRequest("usage", "", request, AttemptUsage, () =>
-            (
-              database
-                .prepare(
-                  "SELECT attempt_id, timestamp, total_json, last_json, model_context_window FROM attempt_usage ORDER BY timestamp, attempt_id",
-                )
-                .all() as unknown as ReadonlyArray<UsageRow>
-            ).map(decodeUsage),
+          pageRequest(
+            "usage",
+            request.attemptId ?? "",
+            request,
+            AttemptUsage,
+            () =>
+              (
+                database
+                  .prepare(
+                    `SELECT attempt_id, timestamp, total_json, last_json, model_context_window
+                   FROM attempt_usage
+                   WHERE $attemptId IS NULL OR attempt_id = $attemptId
+                   ORDER BY timestamp, attempt_id`,
+                  )
+                  .all({
+                    attemptId: request.attemptId ?? null,
+                  }) as unknown as ReadonlyArray<UsageRow>
+              ).map(decodeUsage),
           ),
         catch: storageError,
       }),
@@ -2543,14 +2568,25 @@ export function openStateStore(
     readLifecycleCommands: (request) =>
       Effect.try({
         try: () =>
-          pageRequest("lifecycle_commands", "", request, LifecycleCommand, () =>
-            (
-              database
-                .prepare(
-                  "SELECT * FROM lifecycle_commands ORDER BY created_at DESC, command_id DESC",
-                )
-                .all() as unknown as ReadonlyArray<LifecycleCommandRow>
-            ).map(decodeLifecycleCommand),
+          pageRequest(
+            "lifecycle_commands",
+            `${request.targetAttemptId ?? ""}:${request.commandId ?? ""}`,
+            request,
+            LifecycleCommand,
+            () =>
+              (
+                database
+                  .prepare(
+                    `SELECT * FROM lifecycle_commands
+                   WHERE ($targetAttemptId IS NULL OR target_attempt_id = $targetAttemptId)
+                     AND ($commandId IS NULL OR command_id = $commandId)
+                   ORDER BY created_at DESC, command_id DESC`,
+                  )
+                  .all({
+                    targetAttemptId: request.targetAttemptId ?? null,
+                    commandId: request.commandId ?? null,
+                  }) as unknown as ReadonlyArray<LifecycleCommandRow>
+              ).map(decodeLifecycleCommand),
           ),
         catch: storageError,
       }),

@@ -28,6 +28,7 @@ import {
   tokenTotal,
   type CommandPhase,
 } from "./view-model.ts";
+import AttemptInspector from "./AttemptInspector.tsx";
 
 const QUEUE_PAGE_SIZE = 6;
 const REFRESH_INTERVAL_MS = 5_000;
@@ -112,17 +113,23 @@ function receiptMessage(receipt: CommandReceipt): string {
 function ActiveAttempt({
   assignment,
   usage,
+  onOpen,
 }: {
   assignment: Assignment;
   usage: ReadonlyArray<AttemptUsage>;
+  onOpen: (attemptId: string) => void;
 }) {
   const tokens = tokenTotal(assignment.id, usage);
   return (
     <article className="attempt-row">
       <div className="attempt-main">
-        <a className="issue-title" href={assignment.issue.url}>
+        <button
+          className="issue-title issue-title-button"
+          data-attempt-id={assignment.id}
+          onClick={() => onOpen(assignment.id)}
+        >
           {assignment.issue.title}
-        </a>
+        </button>
         <span className="meta">
           {assignment.issue.repository} #{assignment.issue.number}
         </span>
@@ -201,12 +208,24 @@ export default function App() {
   const [hasLoaded, setHasLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [delayedRefresh, setDelayedRefresh] = useState<number | null>(null);
+  const [dataVersion, setDataVersion] = useState(0);
   const [pending, setPending] = useState<string | null>(null);
   const [notices, setNotices] = useState<ReadonlyArray<CommandNotice>>([]);
+  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("attempt"),
+  );
   const mounted = useRef(true);
   const queueRequest = useRef<QueueRequest>({});
   const refreshGeneration = useRef(0);
   const refreshDelayed = delayedRefresh !== null;
+
+  const selectAttempt = useCallback((attemptId: string | null) => {
+    setSelectedAttemptId(attemptId);
+    const url = new URL(window.location.href);
+    if (attemptId) url.searchParams.set("attempt", attemptId);
+    else url.searchParams.delete("attempt");
+    window.history.replaceState(null, "", url);
+  }, []);
 
   const refresh = useCallback(async (initial = false) => {
     const generation = refreshGeneration.current + 1;
@@ -234,6 +253,7 @@ export default function App() {
         setQueue(nextQueue);
       }
       setLifecycleCommands(overview.lifecycleCommands);
+      setDataVersion((version) => version + 1);
       if (initial) setQueueHistory([]);
       setLoadError(null);
     } catch (error) {
@@ -571,11 +591,20 @@ export default function App() {
                         key={assignment.id}
                         assignment={assignment}
                         usage={usage}
+                        onOpen={selectAttempt}
                       />
                     ))
                   )}
                 </div>
               </section>
+
+              <AttemptInspector
+                selectedAttemptId={selectedAttemptId}
+                controlsDisabled={Boolean(loadError) || refreshDelayed}
+                refreshVersion={dataVersion}
+                onSelect={selectAttempt}
+                onChanged={() => refresh()}
+              />
 
               <section aria-labelledby="queue-heading">
                 <div className="section-heading">
@@ -709,9 +738,13 @@ export default function App() {
                           aria-hidden="true"
                         />
                         <div>
-                          <a href={attempt.issue.url}>
+                          <button
+                            className="activity-attempt"
+                            data-attempt-id={attempt.id}
+                            onClick={() => selectAttempt(attempt.id)}
+                          >
                             {attempt.issue.repository}#{attempt.issue.number}
-                          </a>{" "}
+                          </button>{" "}
                           {stateLabel(attempt.state).toLowerCase()}
                           <time dateTime={attempt.updatedAt}>
                             {formatTime(attempt.updatedAt)}

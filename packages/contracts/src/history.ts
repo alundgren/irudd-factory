@@ -19,6 +19,27 @@ export const PageRequest = Schema.Struct({
 });
 export type PageRequest = typeof PageRequest.Type;
 
+export const AttemptPageRequest = Schema.Struct({
+  ...PageRequest.fields,
+  includeArchived: Schema.optional(Schema.Boolean),
+  issueNodeId: Schema.optional(Schema.String),
+});
+export type AttemptPageRequest = typeof AttemptPageRequest.Type;
+
+export const UsagePageRequest = Schema.Struct({
+  ...PageRequest.fields,
+  attemptId: Schema.optional(Schema.String),
+});
+export type UsagePageRequest = typeof UsagePageRequest.Type;
+
+export const LifecycleCommandPageRequest = Schema.Struct({
+  ...PageRequest.fields,
+  targetAttemptId: Schema.optional(Schema.String),
+  commandId: Schema.optional(Schema.String),
+});
+export type LifecycleCommandPageRequest =
+  typeof LifecycleCommandPageRequest.Type;
+
 export interface Page<A> {
   readonly items: ReadonlyArray<A>;
   readonly nextCursor: number | null;

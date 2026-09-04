@@ -10,6 +10,7 @@ import {
 } from "./domain.ts";
 import {
   AttemptPage,
+  AttemptPageRequest,
   EventPage,
   IssuePage,
   PageRequest,
@@ -17,7 +18,9 @@ import {
   OperationsOverview,
   TranscriptPage,
   UsagePage,
+  UsagePageRequest,
   LifecycleCommandPage,
+  LifecycleCommandPageRequest,
 } from "./history.ts";
 
 /** The HTTP path the service serves and both clients call. */
@@ -72,7 +75,7 @@ export class FactoryRpcs extends RpcGroup.make(
     error: Schema.String,
   }),
   Rpc.make("ReadLifecycleCommands", {
-    payload: { page: PageRequest },
+    payload: { page: LifecycleCommandPageRequest },
     success: LifecycleCommandPage,
     error: Schema.String,
   }),
@@ -82,7 +85,7 @@ export class FactoryRpcs extends RpcGroup.make(
     error: Schema.String,
   }),
   Rpc.make("ReadAttempts", {
-    payload: { page: PageRequest },
+    payload: { page: AttemptPageRequest },
     success: AttemptPage,
     error: Schema.String,
   }),
@@ -102,7 +105,7 @@ export class FactoryRpcs extends RpcGroup.make(
     error: Schema.String,
   }),
   Rpc.make("ReadUsage", {
-    payload: { page: PageRequest },
+    payload: { page: UsagePageRequest },
     success: UsagePage,
     error: Schema.String,
   }),
