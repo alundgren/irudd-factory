@@ -41,6 +41,8 @@ describe("console state labels", () => {
         "completed",
         "failed",
         "interrupted",
+        "stopped",
+        "stop_uncertain",
         "ownership_uncertain",
       ].map((state) => stateLabel(state as Assignment["state"])),
     ).toEqual([
@@ -50,6 +52,8 @@ describe("console state labels", () => {
       "Completed",
       "Failed",
       "Interrupted",
+      "Stopped",
+      "Stop unconfirmed",
       "Process ownership uncertain",
     ]);
   });
@@ -60,7 +64,7 @@ describe("console state labels", () => {
     expect(codexCapacityFull([assignment("running")], 2)).toBe(false);
     expect(
       codexCapacityFull(
-        [assignment("running"), assignment("ownership_uncertain")],
+        [assignment("running"), assignment("stop_uncertain")],
         2,
       ),
     ).toBe(true);

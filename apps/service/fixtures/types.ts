@@ -101,6 +101,10 @@ export interface FixtureControls {
   readonly revalidateFailureCode?: FactoryErrorCode;
   readonly hideClaimedCandidates?: boolean;
   readonly onPullRequestLookup?: () => void;
+  readonly pullRequestLookup?: PullRequest | null | "unknown";
+  readonly claimInitiallyRemoved?: boolean;
+  readonly onInspectClaim?: () => void;
+  readonly onRemoveClaim?: () => void;
   readonly providerRecordsBeforeCompletion?: ReadonlyArray<RetainedProviderRecord>;
   readonly cleanupUncertain?: boolean;
   readonly failAfterObservation?: {

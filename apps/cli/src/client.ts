@@ -2,6 +2,7 @@ import { FetchHttpClient } from "@effect/platform";
 import { RpcClient, RpcSerialization } from "@effect/rpc";
 import type {
   AttemptPage,
+  Attempt,
   CommandReceipt,
   DispatchState,
   EventPage,
@@ -12,6 +13,9 @@ import type {
   TimelinePage,
   TranscriptPage,
   UsagePage,
+  LifecycleCommand,
+  LifecycleCommandKind,
+  LifecycleCommandPage,
 } from "@irudd-factory/contracts";
 import { FactoryRpcs } from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
@@ -85,6 +89,30 @@ export function setCodexEnabled(
   }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
 }
 
+export function controlAttempt(
+  url: string,
+  input: {
+    readonly commandId: string;
+    readonly kind: LifecycleCommandKind;
+    readonly attemptId: string;
+    readonly expectedTargetVersion: number;
+  },
+): Promise<LifecycleCommand> {
+  return Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.ControlAttempt(input);
+  }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
+}
+
+export const readLifecycleCommands = (
+  url: string,
+  page: PageRequest = {},
+): Promise<LifecycleCommandPage> =>
+  Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.ReadLifecycleCommands({ page });
+  }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
+
 export const readIssues = (
   url: string,
   page: PageRequest = {},
@@ -100,6 +128,14 @@ export const readAttempts = (
   Effect.gen(function* () {
     const client = yield* RpcClient.make(FactoryRpcs);
     return yield* client.ReadAttempts({ page });
+  }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
+export const readAttempt = (
+  url: string,
+  attemptId: string,
+): Promise<Attempt | null> =>
+  Effect.gen(function* () {
+    const client = yield* RpcClient.make(FactoryRpcs);
+    return yield* client.ReadAttempt({ attemptId });
   }).pipe(Effect.scoped, Effect.provide(protocol(url)), Effect.runPromise);
 export const readTranscript = (
   url: string,

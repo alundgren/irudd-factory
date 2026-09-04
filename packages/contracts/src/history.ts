@@ -5,6 +5,7 @@ import {
   AssignmentEvent,
   IssueRef,
   PullRequest,
+  LifecycleCommand,
 } from "./domain.ts";
 
 export const DEFAULT_PAGE_LIMIT = 50;
@@ -132,3 +133,5 @@ export const UsagePage = pageSchema(AttemptUsage);
 export type UsagePage = typeof UsagePage.Type;
 export const TimelinePage = pageSchema(Assignment);
 export type TimelinePage = typeof TimelinePage.Type;
+export const LifecycleCommandPage = pageSchema(LifecycleCommand);
+export type LifecycleCommandPage = typeof LifecycleCommandPage.Type;

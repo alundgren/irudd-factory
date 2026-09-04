@@ -301,12 +301,17 @@ create runtime files, construct dependencies, or open a listener.
 While a busy fixture runs, use the second-client command printed by the fixture
 to confirm that another command receives a durable `provider_busy` result.
 
-## Current recovery limits
+## Attempt recovery and controls
 
 Receipt replay, attempts, queue tenure, dispatch pause, and Codex enabled state
 survive restart. Startup interrupts unfinished attempts and reconciles recorded
-provider process ownership. It does not resume or retry attempts. If provider
-process ownership is uncertain, the attempt continues to consume capacity until
-an operator can resolve it. Cancellation, stall detection, and automatic cleanup
-are deferred. Remote console access is available through the Tailscale mode
-described above.
+provider process ownership. It also completes unfinished Stop, Return, Restart,
+Archive, and Restore commands from their last durable checkpoint. It does not
+resume or retry attempts automatically.
+
+If Stop cannot confirm process exit, the attempt enters `stop_uncertain` and
+continues to consume capacity. A later Stop can resolve it. Return and Restart
+reject attempts from repositories absent from the current configuration. See
+[`attempt-lifecycle.md`](attempt-lifecycle.md) for the complete consequence and
+recovery table. Stall detection and automatic cleanup remain deferred. Remote
+console access is available through the Tailscale mode described above.

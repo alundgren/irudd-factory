@@ -104,6 +104,15 @@ export function fixtureDependencies(
 ): FactoryDependencies {
   let assignmentSequence = 0;
   const claimedNodes = new Set<string>();
+  const returnedNodes = new Set<string>();
+  if (controls.claimInitiallyRemoved) {
+    if (fixture.state.assignment) {
+      returnedNodes.add(fixture.state.assignment.issue.nodeId);
+    }
+    for (const issue of fixture.state.history ?? []) {
+      returnedNodes.add(issue.assignment.issue.nodeId);
+    }
+  }
   const candidates: Candidate[] = fixture.state.candidates.map((issue) => ({
     issue,
     workflow: fixture.behavior.candidateWorkflow,
@@ -135,6 +144,24 @@ export function fixtureDependencies(
         }
         return candidate;
       }),
+    revalidateClaimedIssue: (issue) =>
+      Effect.sync(() => ({
+        issue,
+        workflow: fixture.behavior.candidateWorkflow,
+      })),
+    inspectClaim: (issue) =>
+      Effect.sync(() => {
+        controls.onInspectClaim?.();
+        return returnedNodes.has(issue.nodeId)
+          ? ("unclaimed" as const)
+          : ("confirmed" as const);
+      }),
+    removeClaim: (issue) =>
+      Effect.sync(() => {
+        controls.onRemoveClaim?.();
+        returnedNodes.add(issue.nodeId);
+        return "unclaimed" as const;
+      }),
     claimIssue: (issue) =>
       Effect.sync(() => {
         controls.onClaim?.();
@@ -142,10 +169,31 @@ export function fixtureDependencies(
         return fixture.behavior.claimOutcome;
       }),
     verifyPullRequest: () => Effect.succeed(fixture.behavior.pullRequest),
+    inspectAttemptPullRequest: () =>
+      Effect.sync(() => {
+        controls.onPullRequestLookup?.();
+        const result =
+          "pullRequestLookup" in controls
+            ? controls.pullRequestLookup
+            : fixture.behavior.pullRequest;
+        return result === "unknown"
+          ? ({ _tag: "unknown" } as const)
+          : result
+            ? ({ _tag: "present", pullRequest: result } as const)
+            : ({ _tag: "absent" } as const);
+      }),
     lookupPullRequest: () =>
       Effect.sync(() => {
         controls.onPullRequestLookup?.();
-        return fixture.behavior.pullRequest;
+        const result =
+          "pullRequestLookup" in controls
+            ? controls.pullRequestLookup
+            : fixture.behavior.pullRequest;
+        return result === "unknown"
+          ? ({ _tag: "unknown" } as const)
+          : result
+            ? ({ _tag: "present", pullRequest: result } as const)
+            : ({ _tag: "absent" } as const);
       }),
   };
   const workspaces: WorkspaceService = {
@@ -219,6 +267,7 @@ export function fixtureDependencies(
           detail: { threadId: fixture.behavior.provider.result.threadId },
           patch: {
             state: "running",
+            processStartPending: false,
             codexVersion: fixture.behavior.provider.result.codexVersion,
             threadId: fixture.behavior.provider.result.threadId,
             observedModel: input.assignment.requestedModel,

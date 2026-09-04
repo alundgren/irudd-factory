@@ -20,7 +20,8 @@ and pull request evidence. There is no JSONL side channel.
 The application validates a command, appends events, and updates an assignment
 projection. The command receipt, assignment projection, and reservation event
 commit in one `BEGIN IMMEDIATE` transaction. A partial unique index permits
-only one Codex assignment in `reserved`, `starting`, or `running`.
+only one active Codex assignment per issue. `stop_uncertain` and
+`ownership_uncertain` continue to count against provider capacity.
 
 The core durable tables are:
 
@@ -28,6 +29,7 @@ The core durable tables are:
 - `assignment_events`: ordered sequence, assignment ID, type, timestamp, and JSON payload
 - `assignments`: one attempt with provider settings, workspace, diagnostics, and pull request projection
 - `command_receipts`: client command ID mapped to the original accepted or rejected result
+- `lifecycle_commands`: Stop, Return, Restart, Archive, and Restore admission, execution checkpoint, and final consequence
 - `attempt_transcript`, `retained_provider_events`, and `attempt_usage`: filtered provider evidence
 - `read_snapshots`: immutable page values referenced by traversal watermarks
 
@@ -65,6 +67,10 @@ React, Vite, and Tailwind provide one operator page. The console and CLI use the
 same Effect RPC group. The console submits `RunNextEligibleIssue`, polls
 `GetFactorySnapshot`, and shows the durable receipt, current assignment,
 retained paths, pull request, errors, and event history.
+
+The RPC group also exposes `ControlAttempt`, `ReadAttempt`, and the bounded
+`ReadLifecycleCommands` traversal. Console controls are implemented by the
+later inspector work.
 
 Local access uses unauthenticated HTTP on one IP-loopback listener. Tailscale
 access requires the configured `Tailscale-User-Login` on the main console and

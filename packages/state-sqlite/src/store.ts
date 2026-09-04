@@ -18,6 +18,7 @@ import type {
   AdmissionResult,
   QueueObservationInput,
   StateStoreService,
+  LifecycleCommandInput,
 } from "@irudd-factory/application";
 import { FactoryError, StateStore } from "@irudd-factory/application";
 import {
@@ -44,6 +45,11 @@ import {
   RetainedProviderEvent,
   TranscriptEntry,
   WorkspacePaths,
+  LifecycleAdmission,
+  LifecycleCommand,
+  LifecycleCommandKind,
+  LifecycleCommandPhase,
+  LifecycleConsequence,
 } from "@irudd-factory/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { migrate } from "./migrations.ts";
@@ -78,6 +84,20 @@ interface AssignmentRow {
   readonly created_at: string;
   readonly updated_at: string;
   readonly last_event_sequence: number;
+  readonly archived_at: string | null;
+}
+
+interface LifecycleCommandRow {
+  readonly command_id: string;
+  readonly kind: string;
+  readonly target_attempt_id: string;
+  readonly expected_target_version: number;
+  readonly phase: string;
+  readonly effect: string;
+  readonly admission_json: string;
+  readonly consequence_json: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
 }
 
 interface EventRow {
@@ -202,6 +222,22 @@ function decodeAssignment(row: AssignmentRow): Assignment {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastEventSequence: row.last_event_sequence,
+    archivedAt: row.archived_at,
+  };
+}
+
+function decodeLifecycleCommand(row: LifecycleCommandRow): LifecycleCommand {
+  return {
+    commandId: row.command_id,
+    kind: Schema.decodeUnknownSync(LifecycleCommandKind)(row.kind),
+    targetAttemptId: row.target_attempt_id,
+    expectedTargetVersion: row.expected_target_version,
+    phase: Schema.decodeUnknownSync(LifecycleCommandPhase)(row.phase),
+    effect: row.effect,
+    admission: decodeJson(LifecycleAdmission, row.admission_json),
+    consequence: decodeJsonOrNull(LifecycleConsequence, row.consequence_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -480,6 +516,9 @@ export function openStateStore(
   const assignmentQuery = database.prepare(
     "SELECT * FROM assignments WHERE id = $id",
   );
+  const lifecycleCommandQuery = database.prepare(
+    "SELECT * FROM lifecycle_commands WHERE command_id = $commandId",
+  );
 
   function retainText(source: string): { text: string; truncated: boolean } {
     let text = source;
@@ -587,6 +626,23 @@ export function openStateStore(
         return shortText(detail.processReconciliation)
           ? { processReconciliation: shortText(detail.processReconciliation) }
           : {};
+      case ASSIGNMENT_EVENTS.stopped:
+      case ASSIGNMENT_EVENTS.stopUncertain:
+      case ASSIGNMENT_EVENTS.returned:
+      case ASSIGNMENT_EVENTS.restarted:
+      case ASSIGNMENT_EVENTS.archived:
+      case ASSIGNMENT_EVENTS.restored:
+        return {
+          ...(shortText(detail.commandId)
+            ? { commandId: shortText(detail.commandId) }
+            : {}),
+          ...(shortText(detail.processResult)
+            ? { processResult: shortText(detail.processResult) }
+            : {}),
+          ...(shortText(detail.siblingAttemptId)
+            ? { siblingAttemptId: shortText(detail.siblingAttemptId) }
+            : {}),
+        };
       default:
         return {};
     }
@@ -646,7 +702,7 @@ export function openStateStore(
           thread_id, turn_id, process_group_id, process_start_identity,
           process_start_pending,
           pull_request_json, error_json, created_at,
-          updated_at, last_event_sequence
+          updated_at, last_event_sequence, archived_at
         ) VALUES (
           $id, $provider, $issueNodeId, $issueRepository, $issueNumber,
           $issueUrl, $issueTitle, $state, $startingCommit, $workflowBlobId,
@@ -655,7 +711,7 @@ export function openStateStore(
           $threadId, $turnId, $processGroupId, $processStartIdentity,
           $processStartPending,
           $pullRequestJson, $errorJson, $createdAt,
-          $updatedAt, $lastEventSequence
+          $updatedAt, $lastEventSequence, $archivedAt
         )`,
       )
       .run({
@@ -689,6 +745,7 @@ export function openStateStore(
         createdAt: value.createdAt,
         updatedAt: value.updatedAt,
         lastEventSequence: value.lastEventSequence,
+        archivedAt: value.archivedAt ?? null,
       });
   }
 
@@ -940,6 +997,27 @@ export function openStateStore(
            $workflowBody, $eligibleSince, $lastObservedAt
          )`,
       );
+      const activeAssignmentQuery = database.prepare(
+        `SELECT 1 AS present FROM assignments
+         WHERE issue_node_id = $issueNodeId
+           AND state IN (${sqlStateList(ACTIVE_ASSIGNMENT_STATES)})
+         LIMIT 1`,
+      );
+      const returnedAttemptQuery = database.prepare(
+        `SELECT 1 AS present
+         FROM assignments
+         JOIN assignment_events
+           ON assignment_events.assignment_id = assignments.id
+         WHERE assignments.issue_node_id = $issueNodeId
+           AND assignment_events.type = $returnedEventType
+           AND assignments.id = (
+             SELECT latest.id FROM assignments AS latest
+             WHERE latest.issue_node_id = $issueNodeId
+             ORDER BY latest.created_at DESC, latest.rowid DESC
+             LIMIT 1
+           )
+         LIMIT 1`,
+      );
       for (const { candidate, tenureId } of input.candidates) {
         const issue = candidate.issue;
         const workflow = candidate.workflow;
@@ -965,7 +1043,14 @@ export function openStateStore(
             });
           }
           recordQueueVersion(updated);
-        } else if (priorStatusByNode.get(issue.nodeId) !== 1) {
+        } else if (
+          priorStatusByNode.get(issue.nodeId) !== 1 ||
+          (!activeAssignmentQuery.get({ issueNodeId: issue.nodeId }) &&
+            returnedAttemptQuery.get({
+              issueNodeId: issue.nodeId,
+              returnedEventType: ASSIGNMENT_EVENTS.returned,
+            }))
+        ) {
           const id = tenureId ?? `tenure-${randomUUID()}`;
           insert.run({
             id,
@@ -1363,6 +1448,7 @@ export function openStateStore(
                process_start_pending = $processStartPending,
                pull_request_json = $pullRequestJson,
                error_json = $errorJson,
+               archived_at = $archivedAt,
                updated_at = $updatedAt,
                last_event_sequence = $lastEventSequence
              WHERE id = $id`,
@@ -1382,11 +1468,230 @@ export function openStateStore(
             ? JSON.stringify(next.pullRequest)
             : null,
           errorJson: next.error ? JSON.stringify(next.error) : null,
+          archivedAt: next.archivedAt ?? null,
           updatedAt: next.updatedAt,
           lastEventSequence: sequence,
           id: assignmentId,
         });
       return { ...next, lastEventSequence: sequence };
+    });
+  }
+
+  function getLifecycleCommandSync(commandId: string): LifecycleCommand | null {
+    const row = lifecycleCommandQuery.get({ commandId }) as
+      | LifecycleCommandRow
+      | undefined;
+    return row ? decodeLifecycleCommand(row) : null;
+  }
+
+  function beginLifecycleCommandSync(input: LifecycleCommandInput): {
+    command: LifecycleCommand;
+    created: boolean;
+  } {
+    return immediateTransaction(database, () => {
+      const existing = getLifecycleCommandSync(input.commandId);
+      if (existing) return { command: existing, created: false };
+      if (!input.commandId.trim()) {
+        throw new FactoryError({
+          code: "command_id_required",
+          message: "commandId must be a nonempty string",
+        });
+      }
+      const row = assignmentQuery.get({ id: input.targetAttemptId }) as
+        | AssignmentRow
+        | undefined;
+      const assignment = row ? decodeAssignment(row) : null;
+      let rejection: { code: string; message: string } | null = null;
+      if (!assignment) {
+        rejection = {
+          code: "assignment_not_found",
+          message: `Assignment ${input.targetAttemptId} was not found`,
+        };
+      } else if (assignment.lastEventSequence !== input.expectedTargetVersion) {
+        rejection = {
+          code: "target_version_changed",
+          message: `Attempt ${assignment.id} is at version ${assignment.lastEventSequence}`,
+        };
+      } else if (
+        (input.kind === "return" || input.kind === "restart") &&
+        !input.repositoryConfigured
+      ) {
+        rejection = {
+          code: "repository_not_configured",
+          message: `Repository ${assignment.issue.repository} is not configured`,
+        };
+      } else if (
+        (input.kind === "return" || input.kind === "restart") &&
+        assignment.pullRequest
+      ) {
+        rejection = {
+          code: "pull_request_present",
+          message: `Attempt ${assignment.id} already has a pull request`,
+        };
+      } else {
+        const allowed =
+          input.kind === "stop"
+            ? [
+                "reserved",
+                "starting",
+                "running",
+                "ownership_uncertain",
+                "stop_uncertain",
+              ].includes(assignment.state) && !assignment.archivedAt
+            : input.kind === "return" || input.kind === "restart"
+              ? ["failed", "interrupted", "stopped"].includes(
+                  assignment.state,
+                ) && !assignment.archivedAt
+              : input.kind === "archive"
+                ? ["completed", "failed", "interrupted", "stopped"].includes(
+                    assignment.state,
+                  ) && !assignment.archivedAt
+                : ["completed", "failed", "interrupted", "stopped"].includes(
+                    assignment.state,
+                  ) && Boolean(assignment.archivedAt);
+        if (!allowed) {
+          rejection = {
+            code: "lifecycle_state_invalid",
+            message: `${input.kind} is not allowed for attempt ${assignment.id} in state ${assignment.state}`,
+          };
+        }
+      }
+      const admission = rejection
+        ? ({ _tag: "rejected", ...rejection } as const)
+        : ({
+            _tag: "accepted",
+            sourceState: assignment!.state,
+            sourceVersion: assignment!.lastEventSequence,
+          } as const);
+      const consequence = rejection
+        ? ({ _tag: "rejected", ...rejection } as const)
+        : null;
+      database
+        .prepare(
+          `INSERT INTO lifecycle_commands(
+             command_id, kind, target_attempt_id, expected_target_version,
+             phase, effect, admission_json, consequence_json, created_at, updated_at
+           ) VALUES (
+             $commandId, $kind, $targetAttemptId, $expectedTargetVersion,
+             $phase, $effect, $admissionJson, $consequenceJson, $createdAt, $updatedAt
+           )`,
+        )
+        .run({
+          commandId: input.commandId,
+          kind: input.kind,
+          targetAttemptId: input.targetAttemptId,
+          expectedTargetVersion: input.expectedTargetVersion,
+          phase: rejection ? "final" : "accepted",
+          effect: rejection ? "none" : "admitted",
+          admissionJson: JSON.stringify(admission),
+          consequenceJson: consequence ? JSON.stringify(consequence) : null,
+          createdAt: input.timestamp,
+          updatedAt: input.timestamp,
+        });
+      return {
+        command: getLifecycleCommandSync(input.commandId)!,
+        created: true,
+      };
+    });
+  }
+
+  function markLifecycleCommandExecutingSync(
+    commandId: string,
+    effect: string,
+    timestamp: string,
+  ): LifecycleCommand {
+    return immediateTransaction(database, () => {
+      const current = getLifecycleCommandSync(commandId);
+      if (!current) {
+        throw new FactoryError({
+          code: "state_store_failed",
+          message: `Lifecycle command ${commandId} was not found`,
+        });
+      }
+      if (current.phase === "final") return current;
+      database
+        .prepare(
+          `UPDATE lifecycle_commands
+           SET phase = $phase, effect = $effect, updated_at = $updatedAt
+           WHERE command_id = $commandId`,
+        )
+        .run({ phase: "executing", effect, updatedAt: timestamp, commandId });
+      return getLifecycleCommandSync(commandId)!;
+    });
+  }
+
+  function finishLifecycleCommandSync(
+    commandId: string,
+    consequence: LifecycleConsequence,
+    timestamp: string,
+    patch: AssignmentPatch = {},
+  ): LifecycleCommand {
+    const current = getLifecycleCommandSync(commandId);
+    if (!current) {
+      throw new FactoryError({
+        code: "state_store_failed",
+        message: `Lifecycle command ${commandId} was not found`,
+      });
+    }
+    if (current.phase === "final") return current;
+    const eventType = {
+      stopped: ASSIGNMENT_EVENTS.stopped,
+      stop_uncertain: ASSIGNMENT_EVENTS.stopUncertain,
+      returned: ASSIGNMENT_EVENTS.returned,
+      restarted: ASSIGNMENT_EVENTS.restarted,
+      archived: ASSIGNMENT_EVENTS.archived,
+      restored: ASSIGNMENT_EVENTS.restored,
+      rejected: null,
+    }[consequence._tag];
+    if (eventType) {
+      const recorded = database
+        .prepare(
+          `SELECT 1 AS present FROM assignment_events
+           WHERE assignment_id = $assignmentId AND type = $type
+             AND json_extract(detail_json, '$.commandId') = $commandId
+           LIMIT 1`,
+        )
+        .get({
+          assignmentId: current.targetAttemptId,
+          type: eventType,
+          commandId,
+        });
+      if (!recorded) {
+        appendEventSync(
+          current.targetAttemptId,
+          {
+            type: eventType,
+            timestamp,
+            detail: {
+              commandId,
+              ...(consequence._tag === "stopped"
+                ? { processResult: consequence.processResult }
+                : {}),
+              ...(consequence._tag === "restarted"
+                ? { siblingAttemptId: consequence.siblingAttemptId }
+                : {}),
+            },
+          },
+          patch,
+        );
+      }
+    }
+    return immediateTransaction(database, () => {
+      database
+        .prepare(
+          `UPDATE lifecycle_commands
+           SET phase = $phase, effect = $effect,
+               consequence_json = $consequenceJson, updated_at = $updatedAt
+           WHERE command_id = $commandId`,
+        )
+        .run({
+          phase: "final",
+          effect: "complete",
+          consequenceJson: JSON.stringify(consequence),
+          updatedAt: timestamp,
+          commandId,
+        });
+      return getLifecycleCommandSync(commandId)!;
     });
   }
 
@@ -1426,6 +1731,31 @@ export function openStateStore(
     }
   }
 
+  function reconcileAttemptProcessSync(
+    attemptId: string,
+  ): "exited" | "terminated" | "uncertain" {
+    const row = assignmentQuery.get({ id: attemptId }) as
+      | AssignmentRow
+      | undefined;
+    if (!row) {
+      throw new FactoryError({
+        code: "assignment_not_found",
+        message: `Assignment ${attemptId} was not found`,
+      });
+    }
+    const assignment = decodeAssignment(row);
+    if (
+      assignment.processGroupId != null &&
+      assignment.processStartIdentity != null
+    ) {
+      return reconcileStoredProcess({
+        processGroupId: assignment.processGroupId,
+        processStartIdentity: assignment.processStartIdentity,
+      });
+    }
+    return assignment.processStartPending ? "uncertain" : "exited";
+  }
+
   function interruptUnfinishedSync(
     timestamp: string,
     reconcileProcess: (identity: {
@@ -1453,6 +1783,10 @@ export function openStateStore(
             ? "uncertain"
             : "exited";
       const uncertain = outcome === "uncertain";
+      const uncertainState =
+        assignment.state === "stop_uncertain"
+          ? "stop_uncertain"
+          : "ownership_uncertain";
       appendEventSync(
         assignment.id,
         {
@@ -1461,7 +1795,7 @@ export function openStateStore(
           detail: { processReconciliation: outcome },
         },
         {
-          state: uncertain ? "ownership_uncertain" : "interrupted",
+          state: uncertain ? uncertainState : "interrupted",
           error: {
             code: uncertain ? "process_identity_changed" : "service_shutdown",
             message: uncertain
@@ -1683,7 +2017,9 @@ export function openStateStore(
     return (
       database
         .prepare(
-          `SELECT * FROM assignments ORDER BY created_at ${direction}, id ${direction}`,
+          `SELECT * FROM assignments
+           WHERE archived_at IS NULL
+           ORDER BY created_at ${direction}, id ${direction}`,
         )
         .all() as unknown as ReadonlyArray<AssignmentRow>
     ).map(decodeAssignment);
@@ -1712,6 +2048,42 @@ export function openStateStore(
         },
         catch: storageError,
       }),
+    beginLifecycleCommand: (input) =>
+      Effect.try({
+        try: () => beginLifecycleCommandSync(input),
+        catch: storageError,
+      }),
+    markLifecycleCommandExecuting: (commandId, effect, timestamp) =>
+      Effect.try({
+        try: () =>
+          markLifecycleCommandExecutingSync(commandId, effect, timestamp),
+        catch: storageError,
+      }),
+    finishLifecycleCommand: (commandId, consequence, timestamp, patch) =>
+      Effect.try({
+        try: () =>
+          finishLifecycleCommandSync(commandId, consequence, timestamp, patch),
+        catch: storageError,
+      }),
+    unfinishedLifecycleCommands: () =>
+      Effect.try({
+        try: () =>
+          (
+            database
+              .prepare(
+                "SELECT * FROM lifecycle_commands WHERE phase != $phase ORDER BY created_at, command_id",
+              )
+              .all({
+                phase: "final",
+              }) as unknown as ReadonlyArray<LifecycleCommandRow>
+          ).map(decodeLifecycleCommand),
+        catch: storageError,
+      }),
+    reconcileAttemptProcess: (attemptId) =>
+      Effect.try({
+        try: () => reconcileAttemptProcessSync(attemptId),
+        catch: storageError,
+      }),
     getSnapshot: () =>
       Effect.try({
         try: () => {
@@ -1721,7 +2093,9 @@ export function openStateStore(
             )
             .get() as ReceiptRow | undefined;
           const assignmentRow = database
-            .prepare("SELECT * FROM assignments ORDER BY rowid DESC LIMIT 1")
+            .prepare(
+              "SELECT * FROM assignments WHERE archived_at IS NULL ORDER BY rowid DESC LIMIT 1",
+            )
             .get() as AssignmentRow | undefined;
           const assignments = (
             database
@@ -1763,6 +2137,7 @@ export function openStateStore(
           immediateTransaction(database, () => {
             database.exec("DELETE FROM issue_eligibility_observations");
             database.exec("DELETE FROM read_snapshots");
+            database.exec("DELETE FROM lifecycle_commands");
             database.exec("DELETE FROM attempt_usage");
             database.exec("DELETE FROM retained_provider_events");
             database.exec("DELETE FROM attempt_transcript");
@@ -2122,6 +2497,20 @@ export function openStateStore(
         try: () =>
           pageRequest("timeline", "", request, Assignment, () =>
             assignmentRows("timeline"),
+          ),
+        catch: storageError,
+      }),
+    readLifecycleCommands: (request) =>
+      Effect.try({
+        try: () =>
+          pageRequest("lifecycle_commands", "", request, LifecycleCommand, () =>
+            (
+              database
+                .prepare(
+                  "SELECT * FROM lifecycle_commands ORDER BY created_at DESC, command_id DESC",
+                )
+                .all() as unknown as ReadonlyArray<LifecycleCommandRow>
+            ).map(decodeLifecycleCommand),
           ),
         catch: storageError,
       }),

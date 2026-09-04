@@ -14,6 +14,7 @@ import { queuePausedFixture } from "./queue-paused/fixture.ts";
 import { queueReadyFixture } from "./queue-ready/fixture.ts";
 import { queueStaleFixture } from "./queue-stale/fixture.ts";
 import { retainedHistoryFixture } from "./retained-history/fixture.ts";
+import { stopUncertainFixture } from "./stop-uncertain/fixture.ts";
 import type { FixtureDefinition } from "./types.ts";
 
 const TAG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -68,6 +69,7 @@ export const FIXTURE_REGISTRY = validateFixtureRegistry([
   busyReservedFixture,
   busyStartingFixture,
   busyRunningFixture,
+  stopUncertainFixture,
   runnableFixture,
   failedLongFixture,
   completedReadyFixture,

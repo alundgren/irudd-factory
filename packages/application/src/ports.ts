@@ -21,6 +21,10 @@ import type {
   WorkspacePaths,
   QueuePage,
   QueueReason,
+  LifecycleCommand,
+  LifecycleCommandKind,
+  LifecycleConsequence,
+  LifecycleCommandPage,
 } from "@irudd-factory/contracts";
 import { Context, type Effect } from "effect";
 import type { FactoryError } from "./errors.ts";
@@ -83,11 +87,21 @@ export interface AssignmentPatch {
   readonly codexVersion?: string;
   readonly threadId?: string;
   readonly turnId?: string;
-  readonly processGroupId?: number;
-  readonly processStartIdentity?: string;
+  readonly processGroupId?: number | null;
+  readonly processStartIdentity?: string | null;
   readonly processStartPending?: boolean;
   readonly pullRequest?: PullRequest;
   readonly error?: NormalizedError;
+  readonly archivedAt?: string | null;
+}
+
+export interface LifecycleCommandInput {
+  readonly commandId: string;
+  readonly kind: LifecycleCommandKind;
+  readonly targetAttemptId: string;
+  readonly expectedTargetVersion: number;
+  readonly repositoryConfigured: boolean;
+  readonly timestamp: string;
 }
 
 export interface StateStoreService {
@@ -105,6 +119,30 @@ export interface StateStoreService {
   readonly getAssignment: (
     assignmentId: string,
   ) => Effect.Effect<Assignment | null, FactoryError>;
+  readonly beginLifecycleCommand: (
+    input: LifecycleCommandInput,
+  ) => Effect.Effect<
+    { readonly command: LifecycleCommand; readonly created: boolean },
+    FactoryError
+  >;
+  readonly markLifecycleCommandExecuting: (
+    commandId: string,
+    effect: string,
+    timestamp: string,
+  ) => Effect.Effect<LifecycleCommand, FactoryError>;
+  readonly finishLifecycleCommand: (
+    commandId: string,
+    consequence: LifecycleConsequence,
+    timestamp: string,
+    patch?: AssignmentPatch,
+  ) => Effect.Effect<LifecycleCommand, FactoryError>;
+  readonly unfinishedLifecycleCommands: () => Effect.Effect<
+    ReadonlyArray<LifecycleCommand>,
+    FactoryError
+  >;
+  readonly reconcileAttemptProcess: (
+    attemptId: string,
+  ) => Effect.Effect<"exited" | "terminated" | "uncertain", FactoryError>;
   readonly getSnapshot: () => Effect.Effect<FactorySnapshot, FactoryError>;
   readonly reset: () => Effect.Effect<void, FactoryError>;
   readonly interruptUnfinished: (
@@ -182,6 +220,9 @@ export interface StateStoreService {
   readonly readTimeline: (
     request: PageRequest,
   ) => Effect.Effect<TimelinePage, FactoryError>;
+  readonly readLifecycleCommands: (
+    request: PageRequest,
+  ) => Effect.Effect<LifecycleCommandPage, FactoryError>;
   readonly pullRequestRecoveryCandidates: () => Effect.Effect<
     ReadonlyArray<Assignment>,
     FactoryError
@@ -198,6 +239,11 @@ export class StateStore extends Context.Tag(
 
 export type ClaimOutcome = "confirmed" | "unclaimed" | "unknown";
 
+export type PullRequestLookupOutcome =
+  | { readonly _tag: "absent" }
+  | { readonly _tag: "present"; readonly pullRequest: PullRequest }
+  | { readonly _tag: "unknown" };
+
 export interface GitHubService {
   readonly discoverCandidates: (
     repository: string,
@@ -208,6 +254,19 @@ export interface GitHubService {
   readonly claimIssue: (
     issue: IssueRef,
   ) => Effect.Effect<ClaimOutcome, FactoryError>;
+  readonly revalidateClaimedIssue?: (
+    issue: IssueRef,
+  ) => Effect.Effect<Candidate, FactoryError>;
+  readonly inspectClaim?: (
+    issue: IssueRef,
+  ) => Effect.Effect<ClaimOutcome, FactoryError>;
+  readonly removeClaim?: (
+    issue: IssueRef,
+  ) => Effect.Effect<ClaimOutcome, FactoryError>;
+  readonly inspectAttemptPullRequest?: (
+    repository: string,
+    branch: string,
+  ) => Effect.Effect<PullRequestLookupOutcome, FactoryError>;
   readonly verifyPullRequest: (
     repository: string,
     branch: string,
@@ -217,7 +276,7 @@ export interface GitHubService {
     repository: string,
     branch: string,
     issueNumber: number,
-  ) => Effect.Effect<PullRequest | null, FactoryError>;
+  ) => Effect.Effect<PullRequestLookupOutcome, FactoryError>;
 }
 
 export class GitHub extends Context.Tag("@irudd-factory/application/GitHub")<

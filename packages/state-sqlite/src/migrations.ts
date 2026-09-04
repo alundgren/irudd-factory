@@ -6,7 +6,7 @@ import {
 } from "@irudd-factory/contracts";
 import { sqlStateList } from "./sql.ts";
 
-export const DATABASE_SCHEMA_VERSION = 3;
+export const DATABASE_SCHEMA_VERSION = 4;
 
 const statements = [
   `CREATE TABLE schema_migrations (
@@ -56,7 +56,8 @@ const statements = [
     error_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL DEFAULT 0
+    last_event_sequence INTEGER NOT NULL DEFAULT 0,
+    archived_at TEXT
   ) STRICT`,
   `CREATE UNIQUE INDEX assignments_one_active_issue
    ON assignments(issue_node_id)
@@ -178,6 +179,20 @@ const statements = [
     values_json TEXT NOT NULL,
     created_at TEXT NOT NULL
   ) STRICT`,
+  `CREATE TABLE lifecycle_commands (
+    command_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('stop', 'return', 'restart', 'archive', 'restore')),
+    target_attempt_id TEXT NOT NULL,
+    expected_target_version INTEGER NOT NULL,
+    phase TEXT NOT NULL CHECK (phase IN ('accepted', 'executing', 'final')),
+    effect TEXT NOT NULL,
+    admission_json TEXT NOT NULL,
+    consequence_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT`,
+  `CREATE INDEX lifecycle_commands_target_created
+   ON lifecycle_commands(target_attempt_id, created_at, command_id)`,
 ] as const;
 
 function resetRequired(detail: string): never {

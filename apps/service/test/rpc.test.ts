@@ -20,6 +20,7 @@ import {
   getFactorySnapshot,
   listQueue,
   readAttempts,
+  readAttempt,
   readEvents,
   readIssues,
   readTimeline,
@@ -29,6 +30,8 @@ import {
   setCodexEnabled,
   setDispatchPaused,
   startIssue,
+  controlAttempt,
+  readLifecycleCommands,
 } from "../../cli/src/client.ts";
 import { fixtureIssue } from "../fixtures/factories.ts";
 import { fixtureDependencies, seedFixture } from "../fixtures/composition.ts";
@@ -944,6 +947,423 @@ describe("Factory RPC service", () => {
     await waitForRpc(`${restarted.url}/rpc`);
     expect(pullRequestLookups).toBe(1);
     await restarted.stop();
+  });
+
+  test("controls retained attempts and preserves sibling history", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-lifecycle-"));
+    roots.push(root);
+    const config = serviceConfig(root);
+    const definition = fixture("retained-history");
+    const store = openStateStore(config.databasePath);
+    await Effect.runPromise(
+      seedFixture(definition).pipe(
+        Effect.provideService(StateStore, store.service),
+      ),
+    );
+    store.close();
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, definition, { pullRequestLookup: null }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+    const initial = await readAttempts(rpcUrl);
+    const interrupted = initial.items.find(
+      ({ id }) => id === "attempt-history-interrupted",
+    )!;
+    const restarted = await controlAttempt(rpcUrl, {
+      commandId: "restart-history",
+      kind: "restart",
+      attemptId: interrupted.id,
+      expectedTargetVersion: interrupted.lastEventSequence,
+    });
+    expect(restarted.consequence).toEqual({
+      _tag: "restarted",
+      siblingAttemptId: expect.any(String),
+    });
+    if (restarted.consequence?._tag !== "restarted") {
+      throw new Error("Restart did not produce a sibling attempt");
+    }
+    expect(restarted.consequence.siblingAttemptId).not.toBe(interrupted.id);
+    expect(
+      (await readAttempts(rpcUrl)).items.some(
+        ({ id }) => id === interrupted.id,
+      ),
+    ).toBe(true);
+
+    const failed = (await readAttempts(rpcUrl)).items.find(
+      ({ id }) => id === "attempt-history-failed",
+    )!;
+    const returned = await controlAttempt(rpcUrl, {
+      commandId: "return-history",
+      kind: "return",
+      attemptId: failed.id,
+      expectedTargetVersion: failed.lastEventSequence,
+    });
+    expect(returned).toMatchObject({
+      phase: "final",
+      consequence: { _tag: "returned", claimedRemoved: true },
+    });
+    const replay = await controlAttempt(rpcUrl, {
+      commandId: "return-history",
+      kind: "archive",
+      attemptId: failed.id,
+      expectedTargetVersion: 999,
+    });
+    expect(replay).toEqual(returned);
+
+    const completed = (await readAttempts(rpcUrl)).items.find(
+      ({ id }) => id === "attempt-history-completed",
+    )!;
+    const archived = await controlAttempt(rpcUrl, {
+      commandId: "archive-history",
+      kind: "archive",
+      attemptId: completed.id,
+      expectedTargetVersion: completed.lastEventSequence,
+    });
+    expect(archived.consequence?._tag).toBe("archived");
+    expect(
+      (await readAttempts(rpcUrl)).items.some(({ id }) => id === completed.id),
+    ).toBe(false);
+    const restored = await controlAttempt(rpcUrl, {
+      commandId: "restore-history",
+      kind: "restore",
+      attemptId: completed.id,
+      expectedTargetVersion: (await readAttempt(rpcUrl, completed.id))!
+        .lastEventSequence,
+    });
+    expect(restored.consequence?._tag).toBe("restored");
+    expect(
+      (await readAttempts(rpcUrl)).items.some(({ id }) => id === completed.id),
+    ).toBe(true);
+    expect((await readLifecycleCommands(rpcUrl)).items).toHaveLength(4);
+  });
+
+  test("keeps claimed when GitHub reports a pull request missing from local state", async () => {
+    for (const targetState of ["failed", "stopped"] as const) {
+      const root = await mkdtemp(join(tmpdir(), "factory-rpc-return-pr-"));
+      roots.push(root);
+      const config = serviceConfig(root);
+      const definition = fixture("failed-long");
+      const store = openStateStore(config.databasePath);
+      await Effect.runPromise(
+        seedFixture(definition).pipe(
+          Effect.provideService(StateStore, store.service),
+        ),
+      );
+      let attempt = (await Effect.runPromise(
+        store.service.getAssignment("assignment-failed"),
+      ))!;
+      if (targetState === "stopped") {
+        attempt = await Effect.runPromise(
+          store.service.appendEvent(
+            attempt.id,
+            {
+              type: "attempt.stopped",
+              timestamp: "2026-01-15T12:00:30.000Z",
+              detail: { processResult: "exited" },
+            },
+            { state: "stopped" },
+          ),
+        );
+      }
+      store.close();
+      let removeCalls = 0;
+      const service = await startFactoryService(
+        config,
+        fixtureDependencies(config, definition, {
+          pullRequestLookup: {
+            url: "https://github.com/factory/fixture/pull/99",
+            number: 99,
+            draft: false,
+          },
+          onRemoveClaim: () => {
+            removeCalls += 1;
+          },
+        }),
+      );
+      const rpcUrl = `${service.url}/rpc`;
+      await waitForRpc(rpcUrl);
+      const result = await controlAttempt(rpcUrl, {
+        commandId: `return-with-pr-${targetState}`,
+        kind: "return",
+        attemptId: attempt.id,
+        expectedTargetVersion: attempt.lastEventSequence,
+      });
+      expect(result.consequence).toMatchObject({
+        _tag: "rejected",
+        code: "pull_request_present",
+      });
+      expect(removeCalls).toBe(0);
+      await service.stop();
+    }
+  });
+
+  test("stops an active provider and confirms capacity release", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-rpc-stop-"));
+    roots.push(root);
+    const config = serviceConfig(root);
+    const completion = gate();
+    let interrupted = false;
+    const definition = fixture("runnable");
+    const service = await startFactoryService(
+      config,
+      fixtureDependencies(config, definition, {
+        beforeCompletion: completion.wait,
+        onProviderInterrupted: () => {
+          interrupted = true;
+        },
+      }),
+    );
+    stops.push(service.stop);
+    const rpcUrl = `${service.url}/rpc`;
+    await waitForRpc(rpcUrl);
+    const receipt = await startIssue(
+      rpcUrl,
+      "start-for-stop",
+      "factory/fixture",
+      definition.state.candidates[0]!.number,
+    );
+    if (receipt.result._tag !== "started") {
+      throw new Error("Fixture attempt did not start");
+    }
+    const running = await waitForAssignmentState(rpcUrl, "running");
+    const stopped = await controlAttempt(rpcUrl, {
+      commandId: "stop-running",
+      kind: "stop",
+      attemptId: receipt.result.assignment.id,
+      expectedTargetVersion: running.assignment!.lastEventSequence,
+    });
+    expect(interrupted).toBe(true);
+    expect(stopped).toMatchObject({
+      phase: "final",
+      consequence: { _tag: "stopped", processResult: "exited" },
+    });
+    expect((await getFactorySnapshot(rpcUrl)).assignment?.state).toBe(
+      "stopped",
+    );
+  });
+
+  test("reconciles every lifecycle effect checkpoint after restart", async () => {
+    const recover = async (input: {
+      fixtureName: FixtureName;
+      attemptId: string;
+      kind: "stop" | "return" | "restart" | "archive" | "restore";
+      effect: string;
+      beforeAdmission?: (
+        store: ReturnType<typeof openStateStore>,
+        attemptId: string,
+      ) => Promise<void>;
+      afterEffect?: (
+        store: ReturnType<typeof openStateStore>,
+        attemptId: string,
+      ) => Promise<void>;
+      claimInitiallyRemoved?: boolean;
+    }) => {
+      const root = await mkdtemp(join(tmpdir(), "factory-rpc-recovery-"));
+      roots.push(root);
+      const config = serviceConfig(root);
+      const definition = fixture(input.fixtureName);
+      const store = openStateStore(config.databasePath);
+      await Effect.runPromise(
+        seedFixture(definition).pipe(
+          Effect.provideService(StateStore, store.service),
+        ),
+      );
+      await input.beforeAdmission?.(store, input.attemptId);
+      const attempt = (await Effect.runPromise(
+        store.service.getAssignment(input.attemptId),
+      ))!;
+      await Effect.runPromise(
+        store.service.beginLifecycleCommand({
+          commandId: `recover-${input.kind}-${input.effect}`,
+          kind: input.kind,
+          targetAttemptId: input.attemptId,
+          expectedTargetVersion: attempt.lastEventSequence,
+          repositoryConfigured: true,
+          timestamp: "2026-01-15T12:01:00.000Z",
+        }),
+      );
+      if (input.effect !== "admitted") {
+        await Effect.runPromise(
+          store.service.markLifecycleCommandExecuting(
+            `recover-${input.kind}-${input.effect}`,
+            input.effect,
+            "2026-01-15T12:02:00.000Z",
+          ),
+        );
+      }
+      await input.afterEffect?.(store, input.attemptId);
+      store.close();
+      let removeCalls = 0;
+      let workspaceCalls = 0;
+      let pullRequestLookups = 0;
+      const service = await startFactoryService(
+        config,
+        fixtureDependencies(config, definition, {
+          pullRequestLookup: null,
+          ...(input.claimInitiallyRemoved === undefined
+            ? {}
+            : { claimInitiallyRemoved: input.claimInitiallyRemoved }),
+          onRemoveClaim: () => {
+            removeCalls += 1;
+          },
+          onWorkspace: () => {
+            workspaceCalls += 1;
+          },
+          onPullRequestLookup: () => {
+            pullRequestLookups += 1;
+          },
+        }),
+      );
+      const rpcUrl = `${service.url}/rpc`;
+      await waitForRpc(rpcUrl);
+      const command = (await readLifecycleCommands(rpcUrl)).items.find(
+        ({ commandId }) =>
+          commandId === `recover-${input.kind}-${input.effect}`,
+      )!;
+      let sibling = null;
+      if (command.consequence?._tag === "restarted") {
+        const deadline = Date.now() + 3_000;
+        do {
+          sibling = await readAttempt(
+            rpcUrl,
+            command.consequence.siblingAttemptId,
+          );
+          if (sibling?.workspace) break;
+          await delay(20);
+        } while (Date.now() < deadline);
+      }
+      await service.stop();
+      return {
+        command,
+        removeCalls,
+        workspaceCalls,
+        pullRequestLookups,
+        sibling,
+      };
+    };
+
+    for (const effect of [
+      "admitted",
+      "process_interrupting",
+      "process_resolved:exited",
+    ]) {
+      const { command } = await recover({
+        fixtureName: "busy-reserved",
+        attemptId: "assignment-reserved",
+        kind: "stop",
+        effect,
+      });
+      expect(command.consequence?._tag).toBe("stopped");
+    }
+
+    for (const effect of [
+      "admitted",
+      "pull_request_inspecting",
+      "pull_request_absent",
+      "label_removing",
+      "label_removed",
+    ]) {
+      const labelMutationStarted =
+        effect === "label_removing" || effect === "label_removed";
+      const { command, removeCalls, pullRequestLookups } = await recover({
+        fixtureName: "failed-long",
+        attemptId: "assignment-failed",
+        kind: "return",
+        effect,
+        claimInitiallyRemoved: labelMutationStarted,
+      });
+      expect(command.consequence?._tag).toBe("returned");
+      expect(removeCalls).toBe(labelMutationStarted ? 0 : 1);
+      expect(pullRequestLookups).toBe(
+        effect === "admitted" || effect === "pull_request_inspecting" ? 1 : 0,
+      );
+    }
+
+    for (const effect of [
+      "admitted",
+      "issue_revalidating",
+      "issue_validated",
+      "sibling_reserved",
+    ]) {
+      const { command, sibling, workspaceCalls } = await recover({
+        fixtureName: "failed-long",
+        attemptId: "assignment-failed",
+        kind: "restart",
+        effect,
+        ...(effect === "issue_validated" || effect === "sibling_reserved"
+          ? {
+              afterEffect: async (store, attemptId) => {
+                const attempt = (await Effect.runPromise(
+                  store.service.getAssignment(attemptId),
+                ))!;
+                await Effect.runPromise(
+                  store.service.admit({
+                    commandId: `lifecycle:recover-restart-${effect}`,
+                    provider: "codex",
+                    candidates: [
+                      {
+                        issue: attempt.issue,
+                        workflow: attempt.workflow,
+                        requestedModel: "gpt-5.6-luna",
+                        requestedEffort: "low",
+                      },
+                    ],
+                    assignmentId: "recovered-sibling",
+                    timestamp: "2026-01-15T12:02:30.000Z",
+                    slots: 1,
+                    allowRetry: true,
+                  }),
+                );
+              },
+            }
+          : {}),
+      });
+      expect(command.consequence?._tag).toBe("restarted");
+      expect(sibling?.workspace?.branch).toContain(
+        sibling?.id ?? "__missing__",
+      );
+      expect(workspaceCalls).toBe(1);
+    }
+
+    for (const effect of ["admitted", "visibility_updating"]) {
+      const archived = await recover({
+        fixtureName: "completed-ready",
+        attemptId: "assignment-completed",
+        kind: "archive",
+        effect,
+      });
+      expect(archived.command.consequence?._tag).toBe("archived");
+    }
+
+    const archivedBeforeRestore = async (
+      store: ReturnType<typeof openStateStore>,
+      attemptId: string,
+    ) => {
+      await Effect.runPromise(
+        store.service.appendEvent(
+          attemptId,
+          {
+            type: "attempt.archived",
+            timestamp: "2026-01-15T12:00:30.000Z",
+            detail: { commandId: "setup-archive" },
+          },
+          { archivedAt: "2026-01-15T12:00:30.000Z" },
+        ),
+      );
+    };
+    for (const effect of ["admitted", "visibility_updating"]) {
+      const restored = await recover({
+        fixtureName: "completed-ready",
+        attemptId: "assignment-completed",
+        kind: "restore",
+        effect,
+        beforeAdmission: archivedBeforeRestore,
+      });
+      expect(restored.command.consequence?._tag).toBe("restored");
+    }
   });
 
   test("starts issues from two repositories with effective Codex settings", async () => {

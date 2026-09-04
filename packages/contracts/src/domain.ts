@@ -7,6 +7,8 @@ export const ASSIGNMENT_STATES = [
   "completed",
   "failed",
   "interrupted",
+  "stopped",
+  "stop_uncertain",
   "ownership_uncertain",
 ] as const;
 
@@ -21,6 +23,7 @@ export const ACTIVE_ASSIGNMENT_STATES = [
   "reserved",
   "starting",
   "running",
+  "stop_uncertain",
   "ownership_uncertain",
 ] as const satisfies ReadonlyArray<AssignmentState>;
 
@@ -87,6 +90,7 @@ export const Assignment = Schema.Struct({
   createdAt: Schema.String,
   updatedAt: Schema.String,
   lastEventSequence: Schema.Number,
+  archivedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type Assignment = typeof Assignment.Type;
 
@@ -130,6 +134,65 @@ export const CommandReceipt = Schema.Struct({
   createdAt: Schema.String,
 });
 export type CommandReceipt = typeof CommandReceipt.Type;
+
+export const LIFECYCLE_COMMAND_KINDS = [
+  "stop",
+  "return",
+  "restart",
+  "archive",
+  "restore",
+] as const;
+export const LifecycleCommandKind = Schema.Literal(...LIFECYCLE_COMMAND_KINDS);
+export type LifecycleCommandKind = typeof LifecycleCommandKind.Type;
+
+export const LifecycleCommandPhase = Schema.Literal(
+  "accepted",
+  "executing",
+  "final",
+);
+export type LifecycleCommandPhase = typeof LifecycleCommandPhase.Type;
+
+export const LifecycleAdmission = Schema.Union(
+  Schema.TaggedStruct("accepted", {
+    sourceState: AssignmentState,
+    sourceVersion: Schema.Number,
+  }),
+  Schema.TaggedStruct("rejected", {
+    code: Schema.String,
+    message: Schema.String,
+  }),
+);
+export type LifecycleAdmission = typeof LifecycleAdmission.Type;
+
+export const LifecycleConsequence = Schema.Union(
+  Schema.TaggedStruct("stopped", {
+    processResult: Schema.Literal("exited", "terminated"),
+  }),
+  Schema.TaggedStruct("stop_uncertain", {}),
+  Schema.TaggedStruct("returned", { claimedRemoved: Schema.Boolean }),
+  Schema.TaggedStruct("restarted", { siblingAttemptId: Schema.String }),
+  Schema.TaggedStruct("archived", {}),
+  Schema.TaggedStruct("restored", {}),
+  Schema.TaggedStruct("rejected", {
+    code: Schema.String,
+    message: Schema.String,
+  }),
+);
+export type LifecycleConsequence = typeof LifecycleConsequence.Type;
+
+export const LifecycleCommand = Schema.Struct({
+  commandId: Schema.String,
+  kind: LifecycleCommandKind,
+  targetAttemptId: Schema.String,
+  expectedTargetVersion: Schema.Number,
+  phase: LifecycleCommandPhase,
+  effect: Schema.String,
+  admission: LifecycleAdmission,
+  consequence: Schema.NullOr(LifecycleConsequence),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type LifecycleCommand = typeof LifecycleCommand.Type;
 
 export const QueueReason = Schema.Struct({
   code: Schema.String,
