@@ -3,6 +3,7 @@ import type {
   CommandReceipt,
   FactorySnapshot,
   NormalizedError,
+  PageRequest,
 } from "@irudd-factory/contracts";
 import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
 import { Effect, Fiber } from "effect";
@@ -132,17 +133,24 @@ export function makeApplication(options: ApplicationOptions) {
               },
               event.patch,
             )
-            .pipe(Effect.asVoid),
+            .pipe(
+              Effect.zipRight(
+                event.records && event.records.length > 0
+                  ? state.appendProviderRecords(withWorkspace.id, event.records)
+                  : Effect.void,
+              ),
+            ),
+        (records) => state.appendProviderRecords(withWorkspace.id, records),
       );
+      if (result.records && result.records.length > 0) {
+        yield* state.appendProviderRecords(withWorkspace.id, result.records);
+      }
       yield* state.appendEvent(
         withWorkspace.id,
         {
           type: ASSIGNMENT_EVENTS.providerTurnFinished,
           timestamp: clock.now(),
           detail: {
-            finalResponse: result.finalResponse,
-            itemSummaries: result.itemSummaries,
-            tokenUsage: result.tokenUsage,
             approvalCount: result.approvalCount,
             processExit: result.processExit,
           },
@@ -512,6 +520,78 @@ export function makeApplication(options: ApplicationOptions) {
   const shutdown = (): Effect.Effect<void> =>
     Fiber.interruptAll(Array.from(inFlight));
 
+  const readIssues = (page: PageRequest) =>
+    Effect.gen(function* () {
+      return yield* (yield* StateStore).readIssues(page);
+    });
+  const readAttempts = (page: PageRequest) =>
+    Effect.gen(function* () {
+      return yield* (yield* StateStore).readAttempts(page);
+    });
+  const readTranscript = (attemptId: string, page: PageRequest) =>
+    Effect.gen(function* () {
+      return yield* (yield* StateStore).readTranscript(attemptId, page);
+    });
+  const readEvents = (attemptId: string, page: PageRequest) =>
+    Effect.gen(function* () {
+      return yield* (yield* StateStore).readEvents(attemptId, page);
+    });
+  const readUsage = (page: PageRequest) =>
+    Effect.gen(function* () {
+      return yield* (yield* StateStore).readUsage(page);
+    });
+  const readTimeline = (page: PageRequest) =>
+    Effect.gen(function* () {
+      return yield* (yield* StateStore).readTimeline(page);
+    });
+
+  const recoverInterruptedAttempts = () =>
+    Effect.gen(function* () {
+      const state = yield* StateStore;
+      const github = yield* GitHub;
+      const clock = yield* Clock;
+      const unfinished = yield* state.unfinishedPullRequestLookups();
+      for (const attempt of unfinished) {
+        yield* state.appendEvent(attempt.id, {
+          type: ASSIGNMENT_EVENTS.pullRequestReconciled,
+          timestamp: clock.now(),
+          detail: { evidence: "unknown" },
+        });
+      }
+      const candidates = yield* state.pullRequestRecoveryCandidates();
+      for (const attempt of candidates) {
+        const workspace = attempt.workspace;
+        if (!workspace) continue;
+        yield* state.appendEvent(attempt.id, {
+          type: ASSIGNMENT_EVENTS.pullRequestLookupStarted,
+          timestamp: clock.now(),
+          detail: {},
+        });
+        let pullRequest = null;
+        if (github.lookupPullRequest) {
+          const lookup = yield* Effect.either(
+            github.lookupPullRequest(
+              attempt.issue.repository,
+              workspace.branch,
+              attempt.issue.number,
+            ),
+          );
+          if (lookup._tag === "Right") pullRequest = lookup.right;
+        }
+        yield* state.appendEvent(
+          attempt.id,
+          {
+            type: ASSIGNMENT_EVENTS.pullRequestReconciled,
+            timestamp: clock.now(),
+            detail: pullRequest
+              ? { evidence: "verified", pullRequestUrl: pullRequest.url }
+              : { evidence: "unknown" },
+          },
+          pullRequest ? { pullRequest } : {},
+        );
+      }
+    });
+
   return {
     runNextEligibleIssue,
     startIssue,
@@ -521,6 +601,13 @@ export function makeApplication(options: ApplicationOptions) {
     setCodexEnabled,
     pollAndDispatch,
     startDispatcher,
+    recoverInterruptedAttempts,
+    readIssues,
+    readAttempts,
+    readTranscript,
+    readEvents,
+    readUsage,
+    readTimeline,
     processAssignment,
     shutdown,
   } as const;

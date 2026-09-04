@@ -32,7 +32,11 @@ export function fixtureAssignment(
   state: Assignment["state"],
   options: { readonly draft?: boolean; readonly longError?: boolean } = {},
 ): Assignment {
-  const terminal = state === "completed" || state === "failed";
+  const terminal =
+    state === "completed" ||
+    state === "failed" ||
+    state === "interrupted" ||
+    state === "ownership_uncertain";
   return {
     id: `assignment-${state}`,
     provider: CODEX_PROVIDER,

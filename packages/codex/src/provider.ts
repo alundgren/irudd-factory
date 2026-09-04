@@ -8,7 +8,10 @@ import type {
   TokenUsageBreakdown,
 } from "@irudd-factory/application";
 import { FactoryError, Provider } from "@irudd-factory/application";
-import { ASSIGNMENT_EVENTS } from "@irudd-factory/contracts";
+import {
+  ASSIGNMENT_EVENTS,
+  type RetainedProviderRecord,
+} from "@irudd-factory/contracts";
 import { Effect, Layer } from "effect";
 import {
   runManagedCommand,
@@ -79,7 +82,9 @@ async function listFiles(root: string, current = root): Promise<string[]> {
   const nested = await Promise.all(
     entries.map((entry) => {
       const path = join(current, entry.name);
-      return entry.isDirectory() ? listFiles(root, path) : [path];
+      return entry.isDirectory()
+        ? listFiles(root, path)
+        : Promise.resolve([path]);
     }),
   );
   return nested.flat();
@@ -243,7 +248,7 @@ export function makeCodexProvider(
   }
 
   return {
-    run: (input, emit) =>
+    run: (input, emit, retain) =>
       Effect.tryPromise({
         try: async (signal): Promise<ProviderRunResult> => {
           const model = input.assignment.requestedModel;
@@ -303,6 +308,16 @@ export function makeCodexProvider(
           let finalResponse = "";
           let tokenUsage: ProviderTokenUsage | null = null;
           const itemSummaries: Array<Readonly<Record<string, unknown>>> = [];
+          const retainedRecords: RetainedProviderRecord[] = [];
+          const retainRecords = async (
+            records: ReadonlyArray<RetainedProviderRecord>,
+          ): Promise<void> => {
+            if (retain) {
+              await Effect.runPromise(retain(records));
+            } else {
+              retainedRecords.push(...records);
+            }
+          };
           let terminalFailure: FactoryError | null = null;
           let resolveTerminal!: (error: FactoryError) => void;
           const terminalSignal = new Promise<FactoryError>((resolve) => {
@@ -384,7 +399,7 @@ export function makeCodexProvider(
             },
             recordTerminal,
           );
-          const unsubscribe = rpc.onMessage((message) => {
+          const unsubscribe = rpc.onMessage(async (message) => {
             if (!belongsToAssignmentThread(message)) return;
             if (message.method === APP_SERVER_METHODS.modelRerouted) {
               reroutes.push({
@@ -425,7 +440,22 @@ export function makeCodexProvider(
               message.method === APP_SERVER_METHODS.itemStarted ||
               message.method === APP_SERVER_METHODS.itemCompleted
             ) {
-              itemSummaries.push(normalizedItem(message));
+              const summary = normalizedItem(message);
+              itemSummaries.push(summary);
+              await retainRecords([
+                {
+                  kind: "item",
+                  timestamp: new Date().toISOString(),
+                  phase: summary.phase === "started" ? "started" : "completed",
+                  ...(typeof summary.id === "string" ? { id: summary.id } : {}),
+                  ...(typeof summary.type === "string"
+                    ? { itemType: summary.type }
+                    : {}),
+                  ...(typeof summary.status === "string"
+                    ? { status: summary.status }
+                    : {}),
+                },
+              ]);
             }
             if (message.method === APP_SERVER_METHODS.itemCompleted) {
               const item = message.params?.item as
@@ -436,10 +466,24 @@ export function makeCodexProvider(
                 typeof item.text === "string"
               ) {
                 finalResponse = item.text;
+                await retainRecords([
+                  {
+                    kind: "transcript",
+                    timestamp: new Date().toISOString(),
+                    text: item.text,
+                  },
+                ]);
               }
             }
             if (message.method === APP_SERVER_METHODS.threadTokenUsageUpdated) {
               tokenUsage = normalizeTokenUsage(message.params?.tokenUsage);
+              await retainRecords([
+                {
+                  kind: "usage",
+                  timestamp: new Date().toISOString(),
+                  usage: tokenUsage,
+                },
+              ]);
             }
           });
           rpc.start();
@@ -693,12 +737,6 @@ export function makeCodexProvider(
                 message: `Requested ${reasoningEffort}, observed ${observedEffort}`,
               });
             }
-            if (!tokenUsage) {
-              throw new FactoryError({
-                code: "token_usage_missing",
-                message: "Codex completed without token usage",
-              });
-            }
             throwIfTerminal();
             cleanupDeadline = Date.now() + options.timeouts.shutdownMs;
             rpc.expectProcessExit();
@@ -717,6 +755,15 @@ export function makeCodexProvider(
             }
             await guardTerminal(() => rpc.drainOutput());
             throwIfTerminal();
+            await retainRecords([
+              {
+                kind: "process_exit",
+                timestamp: new Date().toISOString(),
+                code: processExit.code,
+                signal: processExit.signal,
+                cleanupTimedOut: processExit.cleanupTimedOut,
+              },
+            ]);
             const result: ProviderRunResult = {
               codexVersion,
               threadId,
@@ -732,6 +779,7 @@ export function makeCodexProvider(
                 signal: processExit.signal,
                 schemaDigest,
               },
+              records: retain ? [] : retainedRecords,
             };
             throwIfTerminal();
             return result;
@@ -786,6 +834,32 @@ export function makeCodexProvider(
                     finalResponse,
                     processExit,
                   },
+                  records: [
+                    ...retainedRecords,
+                    {
+                      kind: "error" as const,
+                      timestamp: new Date().toISOString(),
+                      code:
+                        primary instanceof FactoryError
+                          ? primary.code
+                          : "provider_failed",
+                      message:
+                        primary instanceof FactoryError
+                          ? primary.message
+                          : "Codex provider failed unexpectedly",
+                    },
+                    ...(processExit
+                      ? [
+                          {
+                            kind: "process_exit" as const,
+                            timestamp: new Date().toISOString(),
+                            code: processExit.code,
+                            signal: processExit.signal,
+                            cleanupTimedOut: processExit.cleanupTimedOut,
+                          },
+                        ]
+                      : []),
+                  ],
                   ...(processExit.cleanupTimedOut
                     ? { patch: { state: "ownership_uncertain" as const } }
                     : {}),

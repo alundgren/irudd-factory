@@ -1,7 +1,8 @@
 # Operator guide
 
 Factory polls a configured repository pool and dispatches a durable FIFO queue
-into the available Codex slots. The service is local and loopback-only.
+into the available Codex slots. Operators use a local or Tailscale-served
+console.
 
 ## Requirements
 
@@ -13,8 +14,41 @@ into the available Codex slots. The service is local and loopback-only.
 
 Install dependencies with `vp install --frozen-lockfile`. Copy
 `factory.example.json` to `factory.json` and set the repository, database
-path, workspace root, Codex model, and reasoning effort. The bind address must
-be an IPv4 or IPv6 loopback address.
+path, workspace root, Codex model, and reasoning effort. Omitted `access`
+defaults to local mode. Local mode accepts any IP-loopback bind address:
+
+```json
+{
+  "bindHost": "127.0.0.1",
+  "port": 4317,
+  "access": { "mode": "local" }
+}
+```
+
+Local mode serves the console and RPC together. Browser RPC requests must have
+an HTTP Origin matching their Host. Ordinary navigation and asset requests may
+omit Origin. The CLI sends no Origin and is accepted on the same listener. Do
+not put this mode behind a proxy or port forward.
+
+To use Tailscale Serve, set the exact expected login and keep `bindHost` at
+`127.0.0.1`:
+
+```json
+{
+  "bindHost": "127.0.0.1",
+  "port": 4317,
+  "access": {
+    "mode": "tailscale",
+    "operatorLogin": "operator@example.com",
+    "localCliPort": 4318
+  }
+}
+```
+
+`localCliPort` is optional and defaults to `4318`. It must differ from `port`.
+Factory starts both listeners together. The main listener requires the exact
+Tailscale identity and an HTTPS same-origin browser RPC request. The local CLI
+listener accepts only Origin-less RPC and never serves console files.
 
 `port`, `pollIntervalMs`, and `codex.slots` are optional. They default to
 `4317`, `30000`, and `1`. `timeouts` is also optional. You may override any
@@ -45,7 +79,29 @@ accepts `1` through `32`. Normal startup requires a nonempty `repositories`
 array, `databasePath`, `workspaceRoot`, `bindHost`, `codex.model`, and
 `codex.reasoningEffort`.
 
+Retained free text defaults to 65,536 bytes per entry. Configure regular
+expressions to replace known credentials or machine-specific secrets before
+Factory writes transcript and error text:
+
+```json
+{
+  "retention": {
+    "sensitivePatterns": ["ghp_[A-Za-z0-9]+", "internal-host-[0-9]+"],
+    "maxTextBytes": 65536
+  }
+}
+```
+
+Factory appends `[truncated]` when an entry exceeds the byte limit. These
+filters reduce accidental retention, but they cannot make transcripts public.
+Agent messages may repeat any repository or machine file the agent could read.
+Treat the database, transcripts, branches, and worktrees as sensitive data.
+
 ## Start and inspect Factory
+
+The commands in this section use local mode. In Tailscale mode, use the
+separate CLI URL documented below and open the HTTPS URL printed by
+`tailscale serve` in the browser.
 
 ```sh
 vp run build:console
@@ -103,6 +159,23 @@ Automatic work uses persisted FIFO tenure. A manual `start` or `run-next`
 request uses the same slot and active-issue checks. Paused dispatch or disabled
 Codex rejects new admission. A full provider returns `provider_busy`.
 
+In Tailscale mode, point the CLI at its separate listener:
+
+```sh
+vp node apps/cli/src/main.ts snapshot --url http://127.0.0.1:4318/rpc
+```
+
+Never proxy the local CLI listener. Factory does not install, configure, start,
+or stop Tailscale. After Factory starts, expose only the main port:
+
+```sh
+tailscale serve --bg 4317
+```
+
+Factory accepts the command only when exactly one issue is eligible. A second
+client receives `provider_busy` while the active assignment is reserved,
+starting, or running.
+
 ## Live integration command
 
 Run the complete production composition deliberately with:
@@ -148,9 +221,10 @@ SIGTERM. The command returns its stored pass or failure status after the
 signal.
 
 A signal while the assignment is active cancels the run and returns nonzero.
-The assignment may remain `reserved`, `starting`, or `running` because Factory
-does not recover nonterminal work yet. On every exit after startup, the runner
-stops the application, Codex process group, and HTTP listener.
+The integration command does not restart the service, so its database may keep
+the last active state until the next normal startup records the interruption.
+On every exit after startup, the runner stops the application, Codex process
+group, and HTTP listener.
 
 Files remain under `.factory/integration/<run-id>`. The command does not delete
 the issue, label, branch, pull request, database, clone, worktree, or provider
@@ -173,6 +247,11 @@ retry the mutation. A worktree is created only after the claim is confirmed.
 Factory keeps the bare clone, linked worktree, linked-worktree Git directory,
 shared Git directory, branch, and SQLite records. It does not delete a retained
 workspace automatically. The console shows the absolute paths for inspection.
+
+The RPC API provides paginated reads for issues, attempts, transcripts,
+lifecycle and provider events, authoritative usage, and timeline entries. Keep
+the first page's watermark on every later request. That watermark fixes the
+records, values, and ordering even if a new attempt arrives during traversal.
 
 After a failed or completed run, remove files only after preserving anything
 needed for diagnosis. The current release has no cleanup command.
@@ -224,7 +303,10 @@ to confirm that another command receives a durable `provider_busy` result.
 
 ## Current recovery limits
 
-Receipts, queue tenure, dispatch pause, and Codex enabled state survive restart.
-Startup interrupts unfinished attempts and reconciles recorded provider process
-ownership. It does not resume or retry attempts. Stop, return, restart,
-archive, authentication, remote access, and automatic cleanup remain deferred.
+Receipt replay, attempts, queue tenure, dispatch pause, and Codex enabled state
+survive restart. Startup interrupts unfinished attempts and reconciles recorded
+provider process ownership. It does not resume or retry attempts. If provider
+process ownership is uncertain, the attempt continues to consume capacity until
+an operator can resolve it. Cancellation, stall detection, and automatic cleanup
+are deferred. Remote console access is available through the Tailscale mode
+described above.

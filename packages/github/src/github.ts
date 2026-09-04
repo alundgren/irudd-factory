@@ -195,6 +195,21 @@ const PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: Stri
   }
 }`;
 
+const RECOVERY_PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $branch: String!, $pullCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 50, after: $pullCursor, states: [OPEN, CLOSED, MERGED], headRefName: $branch) {
+      nodes {
+        id number url isDraft headRefName
+        closingIssuesReferences(first: 50) {
+          nodes { number repository { nameWithOwner } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
 const CLOSING_ISSUES_PAGE_QUERY = `query($id: ID!, $cursor: String!) {
   node(id: $id) {
     ... on PullRequest {
@@ -377,6 +392,50 @@ async function pullClosesIssue(
   return false;
 }
 
+async function matchingPullRequests(
+  runner: CommandRunner,
+  repository: string,
+  branch: string,
+  issueNumber: number,
+  includeTerminal = false,
+): Promise<ReadonlyArray<PullRequest>> {
+  const [owner, name] = splitRepository(repository);
+  const matches: PullRequest[] = [];
+  let pullCursor: string | null = null;
+  do {
+    const response = decodeJson(
+      PullRequestsResponse,
+      await graphql(
+        runner,
+        includeTerminal ? RECOVERY_PULL_REQUEST_QUERY : PULL_REQUEST_QUERY,
+        {
+          owner,
+          name,
+          branch,
+          ...(pullCursor ? { pullCursor } : {}),
+        },
+      ),
+    );
+    for (const pull of response.data.repository.pullRequests.nodes) {
+      if (
+        pull.headRefName === branch &&
+        (await pullClosesIssue(runner, pull, repository, issueNumber))
+      ) {
+        matches.push({
+          url: pull.url,
+          number: pull.number,
+          draft: pull.isDraft,
+        });
+      }
+    }
+    pullCursor = nextCursor(
+      response.data.repository.pullRequests.pageInfo,
+      "pull requests",
+    );
+  } while (pullCursor);
+  return matches;
+}
+
 function makeService(runner: CommandRunner): GitHubService {
   return {
     discoverCandidates: (repository) =>
@@ -551,38 +610,16 @@ function makeService(runner: CommandRunner): GitHubService {
     verifyPullRequest: (repository, branch, issueNumber) =>
       Effect.tryPromise({
         try: async (): Promise<PullRequest> => {
-          const [owner, name] = splitRepository(repository);
-          let pullCursor: string | null = null;
-          do {
-            const response = decodeJson(
-              PullRequestsResponse,
-              await graphql(runner, PULL_REQUEST_QUERY, {
-                owner,
-                name,
-                branch,
-                ...(pullCursor ? { pullCursor } : {}),
-              }),
-            );
-            for (const pull of response.data.repository.pullRequests.nodes) {
-              if (
-                pull.headRefName === branch &&
-                (await pullClosesIssue(runner, pull, repository, issueNumber))
-              ) {
-                return {
-                  url: pull.url,
-                  number: pull.number,
-                  draft: pull.isDraft,
-                };
-              }
-            }
-            pullCursor = nextCursor(
-              response.data.repository.pullRequests.pageInfo,
-              "pull requests",
-            );
-          } while (pullCursor);
+          const matches = await matchingPullRequests(
+            runner,
+            repository,
+            branch,
+            issueNumber,
+          );
+          if (matches.length === 1) return matches[0]!;
           throw new FactoryError({
             code: "pull_request_unverified",
-            message: `No pull request from ${branch} closes ${repository}#${issueNumber}`,
+            message: `${matches.length} pull requests from ${branch} close ${repository}#${issueNumber}`,
           });
         },
         catch: (error) =>
@@ -591,6 +628,26 @@ function makeService(runner: CommandRunner): GitHubService {
             : new FactoryError({
                 code: "pull_request_verification_failed",
                 message: "Pull request verification failed unexpectedly",
+              }),
+      }),
+    lookupPullRequest: (repository, branch, issueNumber) =>
+      Effect.tryPromise({
+        try: async () => {
+          const matches = await matchingPullRequests(
+            runner,
+            repository,
+            branch,
+            issueNumber,
+            true,
+          );
+          return matches.length === 1 ? matches[0]! : null;
+        },
+        catch: (error) =>
+          error instanceof FactoryError
+            ? error
+            : new FactoryError({
+                code: "pull_request_verification_failed",
+                message: "Pull request lookup failed unexpectedly",
               }),
       }),
   };

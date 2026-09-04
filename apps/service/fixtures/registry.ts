@@ -13,6 +13,7 @@ import { queueMultiRepositoryFixture } from "./queue-multi-repository/fixture.ts
 import { queuePausedFixture } from "./queue-paused/fixture.ts";
 import { queueReadyFixture } from "./queue-ready/fixture.ts";
 import { queueStaleFixture } from "./queue-stale/fixture.ts";
+import { retainedHistoryFixture } from "./retained-history/fixture.ts";
 import type { FixtureDefinition } from "./types.ts";
 
 const TAG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -76,6 +77,7 @@ export const FIXTURE_REGISTRY = validateFixtureRegistry([
   queuePausedFixture,
   queueDisabledFixture,
   queueMultiRepositoryFixture,
+  retainedHistoryFixture,
 ] as const);
 
 export type FixtureName = (typeof FIXTURE_REGISTRY)[number]["name"];

@@ -18,10 +18,20 @@ const statements = [
     result_json TEXT NOT NULL,
     created_at TEXT NOT NULL
   ) STRICT`,
+  `CREATE TABLE issues (
+    node_id TEXT PRIMARY KEY,
+    repository TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(repository, number)
+  ) STRICT`,
   `CREATE TABLE assignments (
     id TEXT PRIMARY KEY,
     provider TEXT NOT NULL,
-    issue_node_id TEXT NOT NULL,
+    issue_node_id TEXT NOT NULL REFERENCES issues(node_id),
     issue_repository TEXT NOT NULL,
     issue_number INTEGER NOT NULL,
     issue_url TEXT NOT NULL,
@@ -135,6 +145,39 @@ const statements = [
   ) STRICT`,
   `CREATE INDEX issue_eligibility_assignment_sequence
    ON issue_eligibility_observations(assignment_id, sequence)`,
+  `CREATE TABLE attempt_transcript (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+    timestamp TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role = 'agent'),
+    text TEXT NOT NULL,
+    truncated INTEGER NOT NULL CHECK (truncated IN (0, 1))
+  ) STRICT`,
+  `CREATE INDEX attempt_transcript_attempt_sequence
+   ON attempt_transcript(attempt_id, sequence)`,
+  `CREATE TABLE retained_provider_events (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+    timestamp TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('item.started', 'item.completed', 'provider.error', 'process.exited', 'usage.updated')),
+    detail_json TEXT NOT NULL
+  ) STRICT`,
+  `CREATE INDEX retained_provider_events_attempt_sequence
+   ON retained_provider_events(attempt_id, sequence)`,
+  `CREATE TABLE attempt_usage (
+    attempt_id TEXT PRIMARY KEY REFERENCES assignments(id) ON DELETE CASCADE,
+    timestamp TEXT NOT NULL,
+    total_json TEXT NOT NULL,
+    last_json TEXT NOT NULL,
+    model_context_window INTEGER
+  ) STRICT`,
+  `CREATE TABLE read_snapshots (
+    watermark TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    values_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT`,
 ] as const;
 
 function resetRequired(detail: string): never {

@@ -22,17 +22,22 @@ projection. The command receipt, assignment projection, and reservation event
 commit in one `BEGIN IMMEDIATE` transaction. A partial unique index permits
 only one Codex assignment in `reserved`, `starting`, or `running`.
 
-The first three tables are:
+The core durable tables are:
 
+- `issues`: one GitHub issue identity shared by all of its attempts
 - `assignment_events`: ordered sequence, assignment ID, type, timestamp, and JSON payload
-- `assignments`: issue, provider, policy, workspace, diagnostics, and pull request projection
+- `assignments`: one attempt with provider settings, workspace, diagnostics, and pull request projection
 - `command_receipts`: client command ID mapped to the original accepted or rejected result
+- `attempt_transcript`, `retained_provider_events`, and `attempt_usage`: filtered provider evidence
+- `read_snapshots`: immutable page values referenced by traversal watermarks
 
 Receipt replay happens before GitHub discovery, so restarting the service does
 not change the result returned for an existing command ID. Factory records
 `provider.start.requested` before spawning Codex and records the thread ID
-before marking an assignment `running`. Automatic recovery of nonterminal
-assignments is not implemented.
+before marking an assignment `running`. Startup interrupts nonterminal
+attempts after it resolves provider process ownership. Once process exit is
+confirmed, Factory performs at most one read-only pull request lookup and
+keeps verified evidence without resuming the attempt.
 
 ## Provider
 
@@ -61,8 +66,11 @@ same Effect RPC group. The console submits `RunNextEligibleIssue`, polls
 `GetFactorySnapshot`, and shows the durable receipt, current assignment,
 retained paths, pull request, errors, and event history.
 
-The current transport is unauthenticated HTTP bound only to an IP loopback
-address. Authentication, server streams, and remote console access are deferred.
+Local access uses unauthenticated HTTP on one IP-loopback listener. Tailscale
+access requires the configured `Tailscale-User-Login` on the main console and
+RPC listener, plus a matching HTTPS Origin for browser RPC. Its second
+IP-loopback listener accepts only Origin-less CLI RPC. Server streams are
+deferred.
 
 ## Effect
 
@@ -81,8 +89,10 @@ metadata, state, fake behavior, and expectations.
 The service is currently started manually and binds to loopback. It polls each
 configured repository, persists FIFO queue tenure and dispatch controls, and
 fills the configured Codex slots. Queue pages and pause or enable controls are
-available through Effect RPC. systemd, Tailscale exposure, authentication,
-cancellation, stall detection, and workspace cleanup remain deferred.
+available through Effect RPC. The operator may expose the authenticated main
+listener with Tailscale Serve. Factory does not install, configure, start, or
+stop Tailscale. systemd, cancellation, stall detection, and workspace cleanup
+remain deferred.
 
 ## Eligibility labels
 

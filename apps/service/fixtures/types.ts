@@ -5,6 +5,7 @@ import type {
   CommandResult,
   IssueRef,
   PullRequest,
+  RetainedProviderRecord,
   WorkflowRevision,
   WorkspacePaths,
 } from "@irudd-factory/contracts";
@@ -35,6 +36,11 @@ export interface FixtureState {
     readonly paused: boolean;
     readonly codexEnabled: boolean;
   };
+  readonly history?: ReadonlyArray<{
+    readonly assignment: Assignment;
+    readonly events: ReadonlyArray<Omit<AssignmentEvent, "sequence">>;
+    readonly providerRecords: ReadonlyArray<RetainedProviderRecord>;
+  }>;
 }
 
 export interface FixtureBehavior {
@@ -94,6 +100,8 @@ export interface FixtureControls {
   readonly revalidateFailure?: string | (() => string | null);
   readonly revalidateFailureCode?: FactoryErrorCode;
   readonly hideClaimedCandidates?: boolean;
+  readonly onPullRequestLookup?: () => void;
+  readonly providerRecordsBeforeCompletion?: ReadonlyArray<RetainedProviderRecord>;
   readonly cleanupUncertain?: boolean;
   readonly failAfterObservation?: {
     readonly model?: string;

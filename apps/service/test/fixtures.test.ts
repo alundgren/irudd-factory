@@ -132,6 +132,7 @@ describe("fixture catalog", () => {
       "queue-paused",
       "queue-disabled",
       "queue-multi-repository",
+      "retained-history",
     ]);
     for (const fixture of FIXTURE_REGISTRY) {
       expect(fixture.summary.length).toBeGreaterThan(0);
