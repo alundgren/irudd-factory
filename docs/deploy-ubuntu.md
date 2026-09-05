@@ -1,9 +1,9 @@
 # Deploy Factory on Ubuntu
 
 This guide installs Factory as a service for one Linux user. It uses a
-dedicated production clone, separate from development checkouts and T3 Code
-worktrees. The commands assume you are logged in as the user that already owns
-the GitHub, Codex, and Tailscale credentials Factory should use.
+dedicated production clone, separate from development checkouts. The commands
+assume you are logged in as the user that already owns the GitHub, Codex, and
+Tailscale credentials Factory should use.
 
 Factory will use these locations:
 

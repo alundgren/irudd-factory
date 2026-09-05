@@ -123,9 +123,3 @@ forbidden_labels: [claimed, ready-for-human, epic, needs-refinement]
 runtime: node
 test: vp run test
 ```
-
-## Prior art
-
-[T3 Code](https://github.com/pingdotgg/t3code) informed the process ownership,
-typed protocol, event recording, and test discipline above. It is prior art,
-not a source copied wholesale.
