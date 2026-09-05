@@ -81,6 +81,9 @@ The normal service defaults to local access at `http://127.0.0.1:4317/` when
 `access` and `port` are omitted. See the [operator guide](docs/operator.md) for
 local and Tailscale Serve startup, fixtures, and current recovery limits.
 
+For a dedicated Ubuntu production clone and systemd user service, follow the
+[Ubuntu deployment guide](docs/deploy-ubuntu.md).
+
 ## Project records
 
 - [Product intent](docs/product-intent.md): product boundaries and operating rules

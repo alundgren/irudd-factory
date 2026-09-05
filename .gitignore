@@ -2,6 +2,7 @@ node_modules/
 dist/
 .factory/
 factory.json
+/redploy-main.sh
 *.db
 *.db-shm
 *.db-wal

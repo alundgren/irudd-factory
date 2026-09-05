@@ -7,6 +7,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_PORT,
   DEFAULT_PROVIDER_TIMEOUTS,
+  DEFAULT_SENSITIVE_PATTERNS,
   validateConfig,
   validateIntegrationConfig,
 } from "../src/index.ts";
@@ -67,16 +68,22 @@ describe("factory configuration", () => {
     ).toThrow("turnMs must be a positive integer");
   });
 
-  test("defaults the port and every provider timeout", () => {
-    const { port: _port, timeouts: _timeouts, ...source } = valid;
+  test("defaults routine service settings", () => {
+    const {
+      bindHost: _bindHost,
+      port: _port,
+      timeouts: _timeouts,
+      ...source
+    } = valid;
     const config = validateConfig(source);
+    expect(config.bindHost).toBe("127.0.0.1");
     expect(config.port).toBe(DEFAULT_PORT);
     expect(config.timeouts).toEqual(DEFAULT_PROVIDER_TIMEOUTS);
     expect(config.codex.slots).toBe(DEFAULT_CODEX_SLOTS);
     expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
     expect(config.access).toEqual({ mode: "local" });
     expect(config.retention).toEqual({
-      sensitivePatterns: [],
+      sensitivePatterns: DEFAULT_SENSITIVE_PATTERNS,
       maxTextBytes: DEFAULT_MAX_RETAINED_TEXT_BYTES,
     });
   });
@@ -91,6 +98,10 @@ describe("factory configuration", () => {
         },
       }).retention,
     ).toEqual({ sensitivePatterns: ["token-[0-9]+"], maxTextBytes: 512 });
+    expect(
+      validateConfig({ ...valid, retention: { sensitivePatterns: [] } })
+        .retention?.sensitivePatterns,
+    ).toEqual([]);
     expect(() =>
       validateConfig({
         ...valid,
@@ -106,13 +117,18 @@ describe("factory configuration", () => {
     expect(
       validateConfig({ ...valid, access: { mode: "local" } }).access,
     ).toEqual({ mode: "local" });
+    expect(validateConfig({ ...valid, access: {} }).access).toEqual({
+      mode: "local",
+    });
   });
 
   test("requires a Tailscale operator and defaults its CLI port", () => {
+    const { bindHost: _bindHost, ...withoutBindHost } = valid;
     const config = validateConfig({
-      ...valid,
-      access: { mode: "tailscale", operatorLogin: "operator@example.com" },
+      ...withoutBindHost,
+      access: { operatorLogin: "operator@example.com" },
     });
+    expect(config.bindHost).toBe("127.0.0.1");
     expect(config.access).toEqual({
       mode: "tailscale",
       operatorLogin: "operator@example.com",
@@ -120,13 +136,22 @@ describe("factory configuration", () => {
     });
     expect(() =>
       validateConfig({ ...valid, access: { mode: "tailscale" } }),
-    ).toThrow("required structure");
+    ).toThrow("operatorLogin must be a nonempty login");
     expect(() =>
       validateConfig({
         ...valid,
         access: { mode: "tailscale", operatorLogin: "" },
       }),
     ).toThrow("operatorLogin must be a nonempty login");
+  });
+
+  test("rejects Tailscale-only fields in explicit local mode", () => {
+    expect(() =>
+      validateConfig({
+        ...valid,
+        access: { mode: "local", operatorLogin: "operator@example.com" },
+      }),
+    ).toThrow("Local access does not accept operatorLogin");
   });
 
   test("does not include the configured operator login in validation errors", () => {
