@@ -898,6 +898,35 @@ describe("Attempt inspector", () => {
     vi.mocked(client.loadAttempt)
       .mockResolvedValueOnce(running)
       .mockRejectedValueOnce(new Error("attempt refresh unavailable"));
+    vi.mocked(client.loadTranscript)
+      .mockResolvedValueOnce({
+        items: [
+          {
+            sequence: 1,
+            attemptId: running.id,
+            timestamp: now,
+            role: "agent",
+            text: "First retained work output",
+            truncated: false,
+          },
+        ],
+        watermark: "transcript-running",
+        nextCursor: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            sequence: 2,
+            attemptId: running.id,
+            timestamp: now,
+            role: "agent",
+            text: "Second retained work output",
+            truncated: false,
+          },
+        ],
+        watermark: "transcript-running",
+        nextCursor: null,
+      });
     vi.mocked(client.listAttempts).mockResolvedValue({
       items: [running],
       watermark: "attempts-running",

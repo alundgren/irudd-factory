@@ -51,6 +51,20 @@ export interface CodexProviderOptions {
   ) => Promise<ProcessExit>;
 }
 
+interface PreparedCodex {
+  readonly codexVersion: string;
+  readonly schemaDigest: string;
+}
+
+interface CodexProviderDependencies {
+  readonly prepareCodex?: (request: {
+    readonly prefix: ReadonlyArray<string>;
+    readonly cwd: string;
+    readonly schemaRoot: string;
+    readonly timeouts: ProviderTimeouts;
+  }) => Promise<PreparedCodex>;
+}
+
 /** The Codex executable Factory launches when no prefix is configured. */
 const CODEX_COMMAND = "codex";
 
@@ -233,8 +247,51 @@ function normalizeVersion(stdout: string): string {
   return version.slice(0, 200);
 }
 
+async function prepareCodex(request: {
+  readonly prefix: ReadonlyArray<string>;
+  readonly cwd: string;
+  readonly schemaRoot: string;
+  readonly timeouts: ProviderTimeouts;
+}): Promise<PreparedCodex> {
+  const version = await runManagedCommand({
+    command: [...request.prefix, "--version"],
+    cwd: request.cwd,
+    timeoutMs: request.timeouts.childStartupMs,
+    timeoutCode: "child_startup_timeout",
+  });
+  if (version.code !== 0) {
+    throw new FactoryError({
+      code: "codex_version_failed",
+      message: `codex --version exited with code ${version.code}`,
+    });
+  }
+  const schema = await runManagedCommand({
+    command: [
+      ...request.prefix,
+      "app-server",
+      "generate-json-schema",
+      "--out",
+      request.schemaRoot,
+    ],
+    cwd: request.cwd,
+    timeoutMs: request.timeouts.modelSchemaMs,
+    timeoutCode: "model_schema_timeout",
+  });
+  if (schema.code !== 0) {
+    throw new FactoryError({
+      code: "schema_generation_failed",
+      message: `App Server schema generation exited with code ${schema.code}`,
+    });
+  }
+  return {
+    codexVersion: normalizeVersion(version.stdout),
+    schemaDigest: await inspectSchemas(request.schemaRoot),
+  };
+}
+
 export function makeCodexProvider(
   options: CodexProviderOptions,
+  dependencies: CodexProviderDependencies = {},
 ): ProviderService {
   validateTimeouts(options.timeouts);
   const prefix = options.commandPrefix ?? [CODEX_COMMAND];
@@ -256,38 +313,14 @@ export function makeCodexProvider(
           const runtime = resolve(options.runtimeRoot, input.assignment.id);
           const schemaRoot = join(runtime, "schema");
           await mkdir(schemaRoot, { recursive: true });
-          const version = await runManagedCommand({
-            command: [...prefix, "--version"],
+          const { codexVersion, schemaDigest } = await (
+            dependencies.prepareCodex ?? prepareCodex
+          )({
+            prefix,
             cwd: input.workspace.worktreePath,
-            timeoutMs: options.timeouts.childStartupMs,
-            timeoutCode: "child_startup_timeout",
+            schemaRoot,
+            timeouts: options.timeouts,
           });
-          if (version.code !== 0) {
-            throw new FactoryError({
-              code: "codex_version_failed",
-              message: `codex --version exited with code ${version.code}`,
-            });
-          }
-          const codexVersion = normalizeVersion(version.stdout);
-          const schema = await runManagedCommand({
-            command: [
-              ...prefix,
-              "app-server",
-              "generate-json-schema",
-              "--out",
-              schemaRoot,
-            ],
-            cwd: input.workspace.worktreePath,
-            timeoutMs: options.timeouts.modelSchemaMs,
-            timeoutCode: "model_schema_timeout",
-          });
-          if (schema.code !== 0) {
-            throw new FactoryError({
-              code: "schema_generation_failed",
-              message: `App Server schema generation exited with code ${schema.code}`,
-            });
-          }
-          const schemaDigest = await inspectSchemas(schemaRoot);
           if (signal.aborted) {
             throw new FactoryError({
               code: "service_shutdown",

@@ -23,6 +23,6 @@ export default defineConfig({
   },
   test: {
     include: ["{apps,packages}/**/test/**/*.test.{ts,tsx}"],
-    fileParallelism: false,
+    maxWorkers: 2,
   },
 });
