@@ -4,52 +4,9 @@ import {
 } from "@irudd-factory/application";
 import type { ManagedProcess } from "./process.ts";
 
-/**
- * The Codex App Server methods Factory sends or listens for. Requests and the
- * notification handlers that react to them have to name the same method, so
- * the wire vocabulary is written once here.
- */
-export const APP_SERVER_METHODS = {
-  initialize: "initialize",
-  initialized: "initialized",
-  modelList: "model/list",
-  modelRerouted: "model/rerouted",
-  threadStart: "thread/start",
-  threadSettingsUpdated: "thread/settings/updated",
-  threadTokenUsageUpdated: "thread/tokenUsage/updated",
-  turnStart: "turn/start",
-  turnInterrupt: "turn/interrupt",
-  turnCompleted: "turn/completed",
-  itemStarted: "item/started",
-  itemCompleted: "item/completed",
-  itemRequestApproval: "item/permissions/requestApproval",
-  error: "error",
-} as const;
-
-/** Reported whenever a call outlives the client. */
+import type { AppServerConnection, RpcMessage } from "./connection.ts";
+export * from "./connection.ts";
 const STOPPED_MESSAGE = "Codex App Server client stopped";
-
-/** How Factory identifies itself to the App Server. */
-export const APP_SERVER_CLIENT_NAME = "irudd_factory";
-
-export const REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort";
-
-/**
- * Codex installs a GitHub connector app by default, and its
- * `create_pull_request` tool demands an approval an unattended run has nobody
- * to answer. Factory disables every app at thread start so Codex opens the
- * pull request with `gh` in the sandbox shell instead.
- */
-export const APPS_CONFIG_KEY = "apps";
-export const APPS_DEFAULT_KEY = "_default";
-
-export interface RpcMessage {
-  readonly id?: number | string;
-  readonly method?: string;
-  readonly params?: Record<string, unknown>;
-  readonly result?: unknown;
-  readonly error?: { readonly code?: number; readonly message?: string };
-}
 
 interface Pending {
   readonly resolve: (value: unknown) => void;
@@ -64,10 +21,9 @@ interface Waiter {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
-export class AppServerRpc {
+export class AppServerRpc implements AppServerConnection {
   private readonly child: ManagedProcess;
-  private readonly onApproval: (message: RpcMessage) => void;
-  private readonly onFailure: (error: FactoryError) => void;
+  private readonly failureListeners = new Set<(error: FactoryError) => void>();
   private nextId = 1;
   private readonly pending = new Map<number | string, Pending>();
   private readonly waiters = new Set<Waiter>();
@@ -79,14 +35,14 @@ export class AppServerRpc {
   private outputDrained: Promise<void> = Promise.resolve();
   private stopped = false;
 
-  constructor(
-    child: ManagedProcess,
-    onApproval: (message: RpcMessage) => void,
-    onFailure: (error: FactoryError) => void,
-  ) {
+  constructor(child: ManagedProcess) {
     this.child = child;
-    this.onApproval = onApproval;
-    this.onFailure = onFailure;
+  }
+
+  onFailure(listener: (error: FactoryError) => void): () => void {
+    this.failureListeners.add(listener);
+    if (this.failure) listener(this.failure);
+    return () => this.failureListeners.delete(listener);
   }
 
   start(): void {
@@ -134,7 +90,7 @@ export class AppServerRpc {
     params: Record<string, unknown>,
     timeoutMs: number,
     timeoutCode: FactoryErrorCode,
-  ): Promise<any> {
+  ): Promise<unknown> {
     if (this.failure) return Promise.reject(this.failure);
     if (this.stopped) {
       return Promise.reject(
@@ -281,18 +237,12 @@ export class AppServerRpc {
       this.waiters.delete(waiter);
       waiter.resolve(message);
     }
-    if (
-      message.id !== undefined &&
-      message.method?.toLowerCase().includes("requestapproval")
-    ) {
-      this.onApproval(message);
-    }
   }
 
   private fail(error: FactoryError): void {
     if (!this.failure) {
       this.failure = error;
-      this.onFailure(error);
+      for (const listener of this.failureListeners) listener(error);
     }
     this.rejectActive(this.failure);
   }
