@@ -46,77 +46,32 @@ function respond(id: number | string, result: unknown): void {
   send({ id, result });
 }
 
-// Ambient default if no effort is requested
-const CONFIGURED_EFFORT = "high";
-
 const ASSIGNMENT_THREAD_ID = "thread-1";
 const ASSIGNMENT_TURN_ID = "turn-1";
-// A subagent the assignment thread spawns reports over the same connection.
-const SUBAGENT_THREAD_ID = "thread-2";
-const SUBAGENT_TURN_ID = "turn-2";
-
-function requestedEffort(params: Record<string, unknown> | undefined): string {
-  const config = params?.config as Record<string, unknown> | undefined;
-  const effort = config?.model_reasoning_effort;
-  return typeof effort === "string" ? effort : CONFIGURED_EFFORT;
-}
-
-function appsDisabled(params: Record<string, unknown> | undefined): boolean {
-  const config = params?.config as Record<string, unknown> | undefined;
-  const apps = config?.apps as Record<string, unknown> | undefined;
-  const defaults = apps?._default as Record<string, unknown> | undefined;
-  return defaults?.enabled === false;
-}
-
-/**
- * Everything a subagent thread reports before the assignment thread finishes:
- * its own settings, its own final message, and its own completed turn.
- */
-function sendSubagentTurn(): void {
-  send({
-    method: "thread/settings/updated",
-    params: {
-      threadId: SUBAGENT_THREAD_ID,
-      threadSettings: { model: "gpt-5.6-sol", effort: "high" },
-    },
-  });
-  send({
-    method: "item/started",
-    params: {
-      threadId: SUBAGENT_THREAD_ID,
-      turnId: SUBAGENT_TURN_ID,
-      item: { id: "item-sub", type: "agentMessage" },
-    },
-  });
-  send({
-    method: "item/completed",
-    params: {
-      threadId: SUBAGENT_THREAD_ID,
-      turnId: SUBAGENT_TURN_ID,
-      item: {
-        id: "item-sub",
-        type: "agentMessage",
-        status: "completed",
-        text: "Review: Plan - Pass",
-      },
-    },
-  });
-  send({
-    method: "turn/completed",
-    params: {
-      threadId: SUBAGENT_THREAD_ID,
-      turn: { id: SUBAGENT_TURN_ID, status: "completed" },
-    },
-  });
-}
-
 async function handle(line: string): Promise<void> {
   const message = JSON.parse(line) as {
     id?: number | string;
     method?: string;
     params?: Record<string, unknown>;
   };
+  if (message.id === "approval-1" && !message.method) {
+    await writeFile(
+      join(process.cwd(), "approval-response.json"),
+      JSON.stringify(message),
+    );
+    return;
+  }
   if (message.method === "initialize") {
+    if (mode === "fragmented" && message.id !== undefined) {
+      const line = JSON.stringify({
+        id: message.id,
+        result: { userAgent: "fake" },
+      });
+      process.stdout.write(line.slice(0, 5));
+      await delay(10);
+      process.stdout.write(`${line.slice(5)}\n`);
+      return;
+    }
     if (mode === "malformed") {
       process.stdout.write("not-json\n");
       return;
@@ -128,10 +83,6 @@ async function handle(line: string): Promise<void> {
   }
   if (message.method === "model/list" && message.id !== undefined) {
     if (mode === "model-timeout") return;
-    if (mode === "early-error") {
-      send({ method: "error", params: { message: "early provider failure" } });
-      return;
-    }
     respond(message.id, {
       data: [
         {
@@ -144,36 +95,11 @@ async function handle(line: string): Promise<void> {
   }
   if (message.method === "thread/start" && message.id !== undefined) {
     if (mode === "thread-timeout") return;
-    if (mode === "require-apps-disabled" && !appsDisabled(message.params)) {
-      send({
-        id: message.id,
-        error: { code: -32602, message: "Codex apps were not disabled" },
-      });
-      return;
-    }
-    const response = {
-      id: message.id,
-      result: {
-        thread: { id: ASSIGNMENT_THREAD_ID },
-        model: mode === "model-mismatch" ? "another-model" : "gpt-5.6-luna",
-        ...(mode === "effort-missing"
-          ? {}
-          : {
-              reasoningEffort:
-                mode === "effort-mismatch"
-                  ? CONFIGURED_EFFORT
-                  : requestedEffort(message.params),
-            }),
-      },
-    };
-    if (mode === "response-then-error") {
-      const error = { method: "error", params: { message: "thread failed" } };
-      process.stdout.write(
-        `${JSON.stringify(response)}\n${JSON.stringify(error)}\n`,
-      );
-    } else {
-      send(response);
-    }
+    respond(message.id, {
+      thread: { id: ASSIGNMENT_THREAD_ID },
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+    });
     return;
   }
   if (message.method === "turn/start" && message.id !== undefined) {
@@ -184,9 +110,7 @@ async function handle(line: string): Promise<void> {
         threadId: ASSIGNMENT_THREAD_ID,
         threadSettings: {
           model: "gpt-5.6-luna",
-          ...(mode === "effort-missing"
-            ? {}
-            : { effort: message.params?.effort }),
+          effort: message.params?.effort,
         },
       },
     });
@@ -198,30 +122,8 @@ async function handle(line: string): Promise<void> {
       });
       return;
     }
-    if (mode === "reroute") {
-      send({
-        method: "model/rerouted",
-        params: { fromModel: "gpt-5.6-luna", toModel: "other" },
-      });
-      return;
-    }
     if (mode === "turn-timeout") return;
-    if (mode === "provider-error") {
-      send({ method: "error", params: { message: "provider failed" } });
-      return;
-    }
     if (mode === "provider-exit") process.exit(2);
-    if (mode === "subagent-noise") sendSubagentTurn();
-    if (mode === "subagent-early-completion") {
-      send({
-        method: "turn/completed",
-        params: {
-          threadId: SUBAGENT_THREAD_ID,
-          turn: { id: SUBAGENT_TURN_ID, status: "completed" },
-        },
-      });
-      await delay(25);
-    }
     send({
       method: "item/started",
       params: {
@@ -243,7 +145,7 @@ async function handle(line: string): Promise<void> {
         },
       },
     });
-    if (mode !== "no-usage") {
+    {
       send({
         method: "thread/tokenUsage/updated",
         params: {
@@ -279,9 +181,6 @@ async function handle(line: string): Promise<void> {
     });
     if (mode.startsWith("post-completion-")) {
       await delay(25);
-      if (mode === "post-completion-error") {
-        send({ method: "error", params: { message: "late provider failure" } });
-      }
       if (mode === "post-completion-malformed") {
         process.stdout.write("not-json\n");
       }

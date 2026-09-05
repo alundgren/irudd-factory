@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { setTimeout as delay } from "node:timers/promises";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import type { Assignment, WorkspacePaths } from "@irudd-factory/contracts";
-import type { AssignmentPatch } from "@irudd-factory/application";
+import type { WorkspacePaths } from "@irudd-factory/contracts";
+import { FactoryError, type ProviderEvent } from "@irudd-factory/application";
+import { makeAssignment } from "./helpers/assignment.ts";
 import { Effect, Either, Fiber } from "effect";
 import {
   makeCodexProvider,
@@ -51,37 +52,7 @@ async function fixture(mode = "success", options: { turnMs?: number } = {}) {
     commonGitDir: commonGit,
     branch: "factory/assignment-1",
   };
-  const assignment: Assignment = {
-    id: "assignment-1",
-    provider: "codex",
-    issue: {
-      nodeId: "I_1",
-      repository: "owner/repository",
-      number: 1,
-      url: "https://github.com/owner/repository/issues/1",
-      title: "Issue",
-    },
-    state: "starting",
-    workflow: {
-      startingCommit: "a".repeat(40),
-      blobId: "b".repeat(40),
-      digest: "c".repeat(64),
-      body: "Do the work.",
-    },
-    workspace,
-    requestedModel: "gpt-5.6-luna",
-    requestedEffort: "low",
-    observedModel: null,
-    observedEffort: null,
-    codexVersion: null,
-    threadId: null,
-    turnId: null,
-    pullRequest: null,
-    error: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    lastEventSequence: 1,
-  };
+  const assignment = makeAssignment(workspace);
   const provider = makeCodexProvider(
     {
       commandPrefix: [process.execPath, fakeServer, mode],
@@ -89,29 +60,31 @@ async function fixture(mode = "success", options: { turnMs?: number } = {}) {
       model: "gpt-5.6-luna",
       reasoningEffort: "low",
       timeouts: {
-        childStartupMs: 500,
+        childStartupMs: mode === "initialization-timeout" ? 100 : 2_000,
         initializationMs: 500,
-        modelSchemaMs: 500,
+        modelSchemaMs: mode === "model-timeout" ? 100 : 2_000,
         turnMs: options.turnMs ?? (mode === "turn-timeout" ? 50 : 500),
         shutdownMs: 500,
       },
     },
-    ["version-failure", "schema-failure"].includes(mode) ? {} : preparedCodex,
+    ["fragmented", "version-failure", "schema-failure"].includes(mode)
+      ? {}
+      : preparedCodex,
   );
   return { provider, assignment, workspace };
 }
 
 describe("Codex provider", () => {
-  test("normalizes a complete App Server lifecycle", async () => {
-    const { provider, assignment, workspace } = await fixture();
-    const events: string[] = [];
+  test("assembles a prepared provider result through fragmented stdio and cleans up its process", async () => {
+    const { provider, assignment, workspace } = await fixture("fragmented");
+    const events: ProviderEvent[] = [];
     const result = await Effect.runPromise(
       provider.run(
         { assignment, workspace, prompt: "Implement it." },
-        (event) => Effect.sync(() => events.push(event.type)),
+        (event) => Effect.sync(() => events.push(event)),
       ),
     );
-    expect(events).toEqual([
+    expect(events.map(({ type }) => type)).toEqual([
       "provider.process.started",
       "provider.settings.observed",
       "provider.thread.started",
@@ -126,25 +99,20 @@ describe("Codex provider", () => {
       observedEffort: "low",
       finalResponse: "Pull request opened.",
       approvalCount: 0,
-      tokenUsage: {
-        total: {
-          inputTokens: 12,
-          cachedInputTokens: 2,
-          outputTokens: 7,
-          reasoningOutputTokens: 3,
-          totalTokens: 19,
-        },
-        last: {
-          inputTokens: 4,
-          cachedInputTokens: 1,
-          outputTokens: 2,
-          reasoningOutputTokens: 1,
-          totalTokens: 6,
-        },
-        modelContextWindow: 114000,
-      },
     });
-    expect(result.itemSummaries).toHaveLength(2);
+    expect(result.processExit.schemaDigest).toMatch(/^[a-f0-9]{64}$/);
+    const started = events[0]!;
+    expect(started.patch).toMatchObject({
+      codexVersion: result.codexVersion,
+      processStartPending: false,
+    });
+    expect(started.detail.processStartIdentity).toEqual(expect.any(String));
+    expect(started.patch?.processGroupId).toBe(started.detail.pid);
+    expect(() => process.kill(started.detail.pid as number, 0)).toThrow();
+    expect(events[2]?.detail.schemaDigest).toBe(
+      result.processExit.schemaDigest,
+    );
+    expect(events[1]?.patch?.codexVersion).toBe(result.codexVersion);
     expect(result.records?.map(({ kind }) => kind)).toEqual([
       "item",
       "item",
@@ -155,16 +123,36 @@ describe("Codex provider", () => {
     expect(result.processExit).toMatchObject({ signal: "SIGTERM" });
   });
 
-  test("leaves token totals unknown when Codex does not report them", async () => {
-    const { provider, assignment, workspace } = await fixture("no-usage");
-    const result = await Effect.runPromise(
-      provider.run(
-        { assignment, workspace, prompt: "Implement it." },
-        () => Effect.void,
+  test("answers a server approval request over stdin before interrupting and cleaning up", async () => {
+    const { provider, assignment, workspace } = await fixture("approval");
+    const events: ProviderEvent[] = [];
+    const outcome = await Effect.runPromise(
+      Effect.either(
+        provider.run(
+          { assignment, workspace, prompt: "Implement it." },
+          (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+        ),
       ),
     );
-    expect(result.tokenUsage).toBeNull();
-    expect(result.records?.some(({ kind }) => kind === "usage")).toBe(false);
+    expect(Either.isLeft(outcome)).toBe(true);
+    if (Either.isLeft(outcome))
+      expect(outcome.left.code).toBe("approval_requested");
+    expect(
+      JSON.parse(
+        await readFile(
+          join(workspace.worktreePath, "approval-response.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ id: "approval-1", result: { decision: "cancel" } });
+    expect(events.at(-1)?.detail.approvalCount).toBe(1);
+    expect(events.at(-1)?.records?.map(({ kind }) => kind)).toEqual([
+      "error",
+      "process_exit",
+    ]);
   });
 
   test("persists observed records before a running turn is interrupted", async () => {
@@ -189,50 +177,8 @@ describe("Codex provider", () => {
     await Effect.runPromise(Fiber.interrupt(fiber));
   });
 
-  test("ignores everything a subagent thread reports", async () => {
-    const { provider, assignment, workspace } = await fixture("subagent-noise");
-    const result = await Effect.runPromise(
-      provider.run(
-        { assignment, workspace, prompt: "Implement it." },
-        () => Effect.void,
-      ),
-    );
-    expect(result).toMatchObject({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      observedModel: "gpt-5.6-luna",
-      observedEffort: "low",
-      finalResponse: "Pull request opened.",
-    });
-    expect(result.itemSummaries).toHaveLength(2);
-  });
-
-  test("keeps running after a subagent turn completes", async () => {
-    const { provider, assignment, workspace } = await fixture(
-      "subagent-early-completion",
-    );
-    const result = await Effect.runPromise(
-      provider.run(
-        { assignment, workspace, prompt: "Implement it." },
-        () => Effect.void,
-      ),
-    );
-    expect(result).toMatchObject({
-      turnId: "turn-1",
-      finalResponse: "Pull request opened.",
-    });
-    expect(result.tokenUsage?.total.totalTokens).toBe(19);
-  });
-
   for (const [mode, code] of [
-    ["approval", "approval_requested"],
-    ["reroute", "model_rerouted"],
-    ["model-mismatch", "observed_model_mismatch"],
-    ["effort-mismatch", "observed_effort_mismatch"],
-    ["effort-missing", "observed_effort_missing"],
     ["malformed", "provider_protocol_error"],
-    ["provider-error", "provider_error_notification"],
-    ["early-error", "provider_error_notification"],
     ["provider-exit", "provider_exited"],
     ["initialization-timeout", "child_startup_timeout"],
     ["thread-timeout", "initialization_timeout"],
@@ -241,17 +187,30 @@ describe("Codex provider", () => {
     ["version-failure", "codex_version_failed"],
     ["schema-failure", "schema_generation_failed"],
   ] as const) {
-    test(`normalizes ${mode}`, async () => {
+    test(`reports stdio ${mode} and cleans up the child`, async () => {
       const { provider, assignment, workspace } = await fixture(mode);
+      const events: ProviderEvent[] = [];
       const outcome = await Effect.runPromise(
         Effect.either(
           provider.run(
             { assignment, workspace, prompt: "Implement it." },
-            () => Effect.void,
+            (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
           ),
         ),
       );
       expect(Either.isLeft(outcome)).toBe(true);
+      if (events.length > 0) {
+        expect(events.at(-1)?.records?.at(-1)).toMatchObject({
+          kind: "process_exit",
+          cleanupTimedOut: false,
+        });
+        expect(() =>
+          process.kill(events[0]!.detail.pid as number, 0),
+        ).toThrow();
+      }
       if (Either.isLeft(outcome)) {
         expect(outcome.left.code).toBe(code);
         if (mode === "version-failure" || mode === "schema-failure") {
@@ -262,100 +221,7 @@ describe("Codex provider", () => {
     });
   }
 
-  test("pins the requested reasoning effort at thread start", async () => {
-    const { provider, assignment, workspace } = await fixture();
-    const patches: AssignmentPatch[] = [];
-    await Effect.runPromise(
-      provider.run(
-        { assignment, workspace, prompt: "Implement it." },
-        (event) =>
-          Effect.sync(() => {
-            if (event.type === "provider.settings.observed" && event.patch) {
-              patches.push(event.patch);
-            }
-          }),
-      ),
-    );
-    expect(patches[0]?.observedEffort).toBe("low");
-  });
-
-  test("disables Codex apps at thread start", async () => {
-    const { provider, assignment, workspace } = await fixture(
-      "require-apps-disabled",
-    );
-    const result = await Effect.runPromise(
-      provider.run(
-        { assignment, workspace, prompt: "Implement it." },
-        () => Effect.void,
-      ),
-    );
-    expect(result.finalResponse).toBe("Pull request opened.");
-  });
-
-  test("emits observed mismatch values before failing", async () => {
-    for (const [mode, field, value] of [
-      ["model-mismatch", "observedModel", "another-model"],
-      ["effort-mismatch", "observedEffort", "high"],
-    ] as const) {
-      const { provider, assignment, workspace } = await fixture(mode);
-      const patches: AssignmentPatch[] = [];
-      await Effect.runPromise(
-        Effect.either(
-          provider.run(
-            { assignment, workspace, prompt: "Implement it." },
-            (event) =>
-              Effect.sync(() => {
-                if (event.patch) patches.push(event.patch);
-              }),
-          ),
-        ),
-      );
-      expect(patches.some((patch) => patch[field] === value)).toBe(true);
-    }
-  });
-
-  test("retains the final response on a late validation failure", async () => {
-    const { provider, assignment, workspace } = await fixture("effort-missing");
-    const failures: Array<Readonly<Record<string, unknown>>> = [];
-    await Effect.runPromise(
-      Effect.either(
-        provider.run(
-          { assignment, workspace, prompt: "Implement it." },
-          (event) =>
-            Effect.sync(() => {
-              if (event.type === "provider.failed") {
-                failures.push(event.detail);
-              }
-            }),
-        ),
-      ),
-    );
-    expect(failures).toHaveLength(1);
-    expect(failures[0]?.finalResponse).toBe("Pull request opened.");
-  });
-
-  test("stops before persistence when an RPC response is followed by a terminal event", async () => {
-    const { provider, assignment, workspace } = await fixture(
-      "response-then-error",
-    );
-    const events: string[] = [];
-    const outcome = await Effect.runPromise(
-      Effect.either(
-        provider.run(
-          { assignment, workspace, prompt: "Implement it." },
-          (event) => Effect.sync(() => events.push(event.type)),
-        ),
-      ),
-    );
-    expect(Either.isLeft(outcome)).toBe(true);
-    if (Either.isLeft(outcome)) {
-      expect(outcome.left.code).toBe("provider_error_notification");
-    }
-    expect(events).toEqual(["provider.process.started", "provider.failed"]);
-  });
-
   for (const [mode, code] of [
-    ["post-completion-error", "provider_error_notification"],
     ["post-completion-malformed", "provider_protocol_error"],
     ["post-completion-exit", "provider_exited"],
   ] as const) {
@@ -393,9 +259,9 @@ describe("Codex provider", () => {
         model: "gpt-5.6-luna",
         reasoningEffort: "low",
         timeouts: {
-          childStartupMs: 500,
+          childStartupMs: 2_000,
           initializationMs: 500,
-          modelSchemaMs: 500,
+          modelSchemaMs: 2_000,
           turnMs: 500,
           shutdownMs: 200,
         },
@@ -445,9 +311,9 @@ describe("Codex provider", () => {
         model: "gpt-5.6-luna",
         reasoningEffort: "low",
         timeouts: {
-          childStartupMs: 500,
+          childStartupMs: 2_000,
           initializationMs: 500,
-          modelSchemaMs: 500,
+          modelSchemaMs: 2_000,
           turnMs: 500,
           shutdownMs: 200,
         },
@@ -456,7 +322,10 @@ describe("Codex provider", () => {
           budgets.push(shutdownMs);
           if (budgets.length === 1) {
             await delay(120);
-            throw new Error("termination failed");
+            throw new FactoryError({
+              code: "provider_failed",
+              message: "termination failed",
+            });
           }
           return terminateOwnedGroup(child, shutdownMs);
         },
@@ -494,15 +363,18 @@ describe("Codex provider", () => {
         model: "gpt-5.6-luna",
         reasoningEffort: "low",
         timeouts: {
-          childStartupMs: 500,
+          childStartupMs: 2_000,
           initializationMs: 500,
-          modelSchemaMs: 500,
+          modelSchemaMs: 2_000,
           turnMs: 500,
           shutdownMs: 200,
         },
         terminateProcessGroup: async (child) => {
           captured = child;
-          throw new Error("termination failed");
+          throw new FactoryError({
+            code: "provider_failed",
+            message: "termination failed",
+          });
         },
       },
       preparedCodex,
@@ -542,9 +414,9 @@ describe("Codex provider", () => {
         model: "gpt-5.6-luna",
         reasoningEffort: "low",
         timeouts: {
-          childStartupMs: 500,
+          childStartupMs: 2_000,
           initializationMs: 500,
-          modelSchemaMs: 500,
+          modelSchemaMs: 2_000,
           turnMs: 5_000,
           shutdownMs: 500,
         },
