@@ -14,8 +14,8 @@ console.
 
 Install dependencies with `vp install --frozen-lockfile`. Copy
 `factory.example.json` to `factory.json` and set the repository, database
-path, workspace root, Codex model, and reasoning effort. Omitted `access`
-defaults to local mode. Local mode accepts any IP-loopback bind address:
+path, workspace root, Codex model, and reasoning effort. Factory binds to
+`127.0.0.1:4317` by default. Omitted `access` selects local mode:
 
 ```json
 {
@@ -30,36 +30,37 @@ an HTTP Origin matching their Host. Ordinary navigation and asset requests may
 omit Origin. The CLI sends no Origin and is accepted on the same listener. Do
 not put this mode behind a proxy or port forward.
 
-To use Tailscale Serve, set the exact expected login and keep `bindHost` at
-`127.0.0.1`:
+To use Tailscale Serve, set the exact expected login. The presence of
+`operatorLogin` selects Tailscale mode:
 
 ```json
 {
-  "bindHost": "127.0.0.1",
   "port": 4317,
   "access": {
-    "mode": "tailscale",
-    "operatorLogin": "operator@example.com",
-    "localCliPort": 4318
+    "operatorLogin": "operator@example.com"
   }
 }
 ```
 
-`localCliPort` is optional and defaults to `4318`. It must differ from `port`.
+Set `access.mode` only to override inference. An omitted `access` object or an
+empty one selects local mode. An access object with `operatorLogin` or
+`localCliPort` selects Tailscale mode. `localCliPort` defaults to `4318` and
+must differ from `port`.
+
 Factory starts both listeners together. The main listener requires the exact
 Tailscale identity and an HTTPS same-origin browser RPC request. The local CLI
 listener accepts only Origin-less RPC and never serves console files.
 
-`port`, `pollIntervalMs`, and `codex.slots` are optional. They default to
-`4317`, `30000`, and `1`. `timeouts` is also optional. You may override any
-subset of these defaults:
+`bindHost`, `port`, `pollIntervalMs`, and `codex.slots` are optional. They
+default to `127.0.0.1`, `4317`, `30000`, and `1`. `timeouts` is also optional.
+You may override any subset of these defaults:
 
 ```json
 {
   "port": 4317,
   "pollIntervalMs": 30000,
   "codex": {
-    "model": "gpt-5.6-luna",
+    "model": "gpt-5.6-sol",
     "reasoningEffort": "medium",
     "slots": 2
   },
@@ -76,7 +77,7 @@ subset of these defaults:
 Every supplied port or timeout must be a positive integer. Ports must be at
 most `65535`. `pollIntervalMs` accepts `1000` through `3600000`, and slots
 accepts `1` through `32`. Normal startup requires a nonempty `repositories`
-array, `databasePath`, `workspaceRoot`, `bindHost`, `codex.model`, and
+array, `databasePath`, `workspaceRoot`, `codex.model`, and
 `codex.reasoningEffort`.
 
 Retained free text defaults to 65,536 bytes per entry. Configure regular
@@ -92,10 +93,47 @@ Factory writes transcript and error text:
 }
 ```
 
+When `retention.sensitivePatterns` is omitted, Factory filters GitHub classic
+tokens, GitHub fine-grained tokens, and OpenAI keys using these expressions:
+
+```json
+["ghp_[A-Za-z0-9_]+", "github_pat_[A-Za-z0-9_]+", "sk-[A-Za-z0-9_-]+"]
+```
+
+Supply an empty array to disable those defaults.
+
 Factory appends `[truncated]` when an entry exceeds the byte limit. These
 filters reduce accidental retention, but they cannot make transcripts public.
 Agent messages may repeat any repository or machine file the agent could read.
 Treat the database, transcripts, branches, and worktrees as sensitive data.
+
+## Redeploy checked-out main
+
+The repository includes `redploy-main.example.sh`. Copy it once to the ignored
+VM-specific filename and make that copy executable:
+
+```sh
+cp redploy-main.example.sh redploy-main.sh
+chmod 700 redploy-main.sh
+```
+
+The script expects the `irudd-factory.service` user service and the Tailscale
+CLI listener at `http://127.0.0.1:4318/rpc`. Edit the ignored copy or set
+`FACTORY_SERVICE_NAME`, `FACTORY_RPC_URL`, or `VP_BIN` when the VM differs.
+
+Pull main yourself, then run the script:
+
+```sh
+git switch main
+git pull --ff-only
+./redploy-main.sh
+```
+
+It refuses a non-main branch, tracked changes, or a commit that differs from
+the local `origin/main` ref. It installs the locked dependencies, runs checks
+and tests, builds the console, restarts the user service, and waits up to ten
+seconds for the CLI snapshot. A failed validation leaves the existing process
+running. A failed restart prints the service status and its latest journal.
 
 ## Start and inspect Factory
 

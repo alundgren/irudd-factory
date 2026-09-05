@@ -23,6 +23,11 @@ export const DEFAULT_POLL_INTERVAL_MS = 30_000;
 export const MIN_POLL_INTERVAL_MS = 1_000;
 export const MAX_POLL_INTERVAL_MS = 3_600_000;
 export const DEFAULT_MAX_RETAINED_TEXT_BYTES = 64 * 1024;
+export const DEFAULT_SENSITIVE_PATTERNS = Object.freeze([
+  "ghp_[A-Za-z0-9_]+",
+  "github_pat_[A-Za-z0-9_]+",
+  "sk-[A-Za-z0-9_-]+",
+]);
 export const DEFAULT_PROVIDER_TIMEOUTS: ProviderTimeouts = Object.freeze({
   childStartupMs: 10_000,
   initializationMs: 10_000,
@@ -55,14 +60,13 @@ const RawTimeouts = Schema.Struct({
   shutdownMs: Schema.optional(Schema.Number),
 });
 
-const RawAccess = Schema.Union(
-  Schema.Struct({ mode: Schema.Literal(LOCAL_ACCESS_MODE) }),
-  Schema.Struct({
-    mode: Schema.Literal(TAILSCALE_ACCESS_MODE),
-    operatorLogin: Schema.String,
-    localCliPort: Schema.optional(Schema.Number),
-  }),
-);
+const RawAccess = Schema.Struct({
+  mode: Schema.optional(
+    Schema.Literal(LOCAL_ACCESS_MODE, TAILSCALE_ACCESS_MODE),
+  ),
+  operatorLogin: Schema.optional(Schema.String),
+  localCliPort: Schema.optional(Schema.Number),
+});
 
 const RawRetention = Schema.Struct({
   sensitivePatterns: Schema.optional(Schema.Array(Schema.String)),
@@ -73,7 +77,7 @@ const RawConfig = Schema.Struct({
   repositories: Schema.Array(RawRepository),
   databasePath: Schema.String,
   workspaceRoot: Schema.String,
-  bindHost: Schema.String,
+  bindHost: Schema.optional(Schema.String),
   access: Schema.optional(RawAccess),
   port: Schema.optional(Schema.Number),
   pollIntervalMs: Schema.optional(Schema.Number),
@@ -194,26 +198,29 @@ export function validateConfig(
   } catch {
     throw invalidStructure();
   }
-  const access = raw.access ?? { mode: LOCAL_ACCESS_MODE };
-  if (
-    access.mode === TAILSCALE_ACCESS_MODE &&
-    raw.bindHost !== IPV4_LOOPBACK_HOST
-  ) {
+  const bindHost = raw.bindHost ?? IPV4_LOOPBACK_HOST;
+  const accessMode =
+    raw.access?.mode ??
+    (raw.access?.operatorLogin !== undefined ||
+    raw.access?.localCliPort !== undefined
+      ? TAILSCALE_ACCESS_MODE
+      : LOCAL_ACCESS_MODE);
+  if (accessMode === TAILSCALE_ACCESS_MODE && bindHost !== IPV4_LOOPBACK_HOST) {
     throw new FactoryError({
       code: "non_loopback_bind_rejected",
       message: "Tailscale access requires bindHost to equal 127.0.0.1",
     });
   }
-  const ipv4 = raw.bindHost.split(".").map(Number);
+  const ipv4 = bindHost.split(".").map(Number);
   const loopback =
-    raw.bindHost === "::1" ||
+    bindHost === "::1" ||
     (ipv4.length === 4 &&
       ipv4[0] === 127 &&
       ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255));
   if (!loopback) {
     throw new FactoryError({
       code: "non_loopback_bind_rejected",
-      message: `Factory only accepts a loopback bind address, got ${raw.bindHost}`,
+      message: `Factory only accepts a loopback bind address, got ${bindHost}`,
     });
   }
   const port = raw.port ?? DEFAULT_PORT;
@@ -223,11 +230,25 @@ export function validateConfig(
       message: "port must be an integer from 1 through 65535",
     });
   }
-  if (access.mode === TAILSCALE_ACCESS_MODE) {
+  let resolvedAccess: NonNullable<FactoryConfig["access"]>;
+  if (accessMode === LOCAL_ACCESS_MODE) {
     if (
-      access.operatorLogin.length === 0 ||
-      access.operatorLogin.trim() !== access.operatorLogin ||
-      /[\r\n]/.test(access.operatorLogin)
+      raw.access?.operatorLogin !== undefined ||
+      raw.access?.localCliPort !== undefined
+    ) {
+      throw new FactoryError({
+        code: "config_invalid",
+        message: "Local access does not accept operatorLogin or localCliPort",
+      });
+    }
+    resolvedAccess = { mode: LOCAL_ACCESS_MODE };
+  } else {
+    const operatorLogin = raw.access?.operatorLogin;
+    if (
+      operatorLogin === undefined ||
+      operatorLogin.length === 0 ||
+      operatorLogin.trim() !== operatorLogin ||
+      /[\r\n]/.test(operatorLogin)
     ) {
       throw new FactoryError({
         code: "config_invalid",
@@ -235,6 +256,16 @@ export function validateConfig(
           "access.operatorLogin must be a nonempty login without surrounding whitespace",
       });
     }
+    resolvedAccess = {
+      mode: TAILSCALE_ACCESS_MODE,
+      operatorLogin,
+      localCliPort: boundedInteger(
+        raw.access?.localCliPort ?? DEFAULT_LOCAL_CLI_PORT,
+        "access.localCliPort",
+        1,
+        65_535,
+      ),
+    };
   }
   validateCodex(raw.codex);
   if (raw.repositories.length === 0) {
@@ -279,18 +310,6 @@ export function validateConfig(
     MIN_POLL_INTERVAL_MS,
     MAX_POLL_INTERVAL_MS,
   );
-  const resolvedAccess =
-    access.mode === LOCAL_ACCESS_MODE
-      ? access
-      : {
-          ...access,
-          localCliPort: boundedInteger(
-            access.localCliPort ?? DEFAULT_LOCAL_CLI_PORT,
-            "access.localCliPort",
-            1,
-            65_535,
-          ),
-        };
   if (
     resolvedAccess.mode === TAILSCALE_ACCESS_MODE &&
     resolvedAccess.localCliPort === port
@@ -322,14 +341,15 @@ export function validateConfig(
     repositories,
     databasePath: resolve(configDirectory, raw.databasePath),
     workspaceRoot: resolve(configDirectory, raw.workspaceRoot),
-    bindHost: raw.bindHost,
+    bindHost,
     access: resolvedAccess,
     port,
     pollIntervalMs,
     codex: { ...raw.codex, slots },
     timeouts: resolveTimeouts(raw.timeouts),
     retention: {
-      sensitivePatterns: raw.retention?.sensitivePatterns ?? [],
+      sensitivePatterns:
+        raw.retention?.sensitivePatterns ?? DEFAULT_SENSITIVE_PATTERNS,
       maxTextBytes,
     },
   };
