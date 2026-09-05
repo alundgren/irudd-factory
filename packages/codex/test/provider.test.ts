@@ -26,6 +26,14 @@ const fakeServer = join(
   "fake-app-server.ts",
 );
 
+const preparedCodex = {
+  prepareCodex: () =>
+    Promise.resolve({
+      codexVersion: "codex-cli fake-1.0.0",
+      schemaDigest: "d".repeat(64),
+    }),
+};
+
 async function fixture(mode = "success", options: { turnMs?: number } = {}) {
   const root = await mkdtemp(join(tmpdir(), "factory-codex-test-"));
   roots.push(root);
@@ -74,19 +82,22 @@ async function fixture(mode = "success", options: { turnMs?: number } = {}) {
     updatedAt: "2026-01-01T00:00:00.000Z",
     lastEventSequence: 1,
   };
-  const provider = makeCodexProvider({
-    commandPrefix: [process.execPath, fakeServer, mode],
-    runtimeRoot: join(root, "runtime"),
-    model: "gpt-5.6-luna",
-    reasoningEffort: "low",
-    timeouts: {
-      childStartupMs: 500,
-      initializationMs: 500,
-      modelSchemaMs: 500,
-      turnMs: options.turnMs ?? (mode === "turn-timeout" ? 50 : 500),
-      shutdownMs: 500,
+  const provider = makeCodexProvider(
+    {
+      commandPrefix: [process.execPath, fakeServer, mode],
+      runtimeRoot: join(root, "runtime"),
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      timeouts: {
+        childStartupMs: 500,
+        initializationMs: 500,
+        modelSchemaMs: 500,
+        turnMs: options.turnMs ?? (mode === "turn-timeout" ? 50 : 500),
+        shutdownMs: 500,
+      },
     },
-  });
+    ["version-failure", "schema-failure"].includes(mode) ? {} : preparedCodex,
+  );
   return { provider, assignment, workspace };
 }
 
@@ -241,7 +252,13 @@ describe("Codex provider", () => {
         ),
       );
       expect(Either.isLeft(outcome)).toBe(true);
-      if (Either.isLeft(outcome)) expect(outcome.left.code).toBe(code);
+      if (Either.isLeft(outcome)) {
+        expect(outcome.left.code).toBe(code);
+        if (mode === "version-failure" || mode === "schema-failure") {
+          expect(outcome.left.message).not.toContain("sensitive");
+          expect(outcome.left.message).not.toContain("stderr");
+        }
+      }
     });
   }
 
@@ -364,53 +381,37 @@ describe("Codex provider", () => {
     });
   }
 
-  test("does not retain command stderr in normalized failures", async () => {
-    for (const mode of ["version-failure", "schema-failure"]) {
-      const { provider, assignment, workspace } = await fixture(mode);
-      const outcome = await Effect.runPromise(
-        Effect.either(
-          provider.run(
-            { assignment, workspace, prompt: "Implement it." },
-            () => Effect.void,
-          ),
-        ),
-      );
-      expect(Either.isLeft(outcome)).toBe(true);
-      if (Either.isLeft(outcome)) {
-        expect(outcome.left.message).not.toContain("sensitive");
-        expect(outcome.left.message).not.toContain("stderr");
-      }
-    }
-  });
-
   test("does not start a second wait after full-budget cleanup", async () => {
     const { assignment, workspace } = await fixture("interrupt-timeout");
     let captured: ManagedProcess | undefined;
     let terminationReturnedAt = 0;
     const patches: Array<string | undefined> = [];
-    const provider = makeCodexProvider({
-      commandPrefix: [process.execPath, fakeServer, "interrupt-timeout"],
-      runtimeRoot: join(dirname(workspace.worktreePath), "deadline-runtime"),
-      model: "gpt-5.6-luna",
-      reasoningEffort: "low",
-      timeouts: {
-        childStartupMs: 500,
-        initializationMs: 500,
-        modelSchemaMs: 500,
-        turnMs: 500,
-        shutdownMs: 200,
+    const provider = makeCodexProvider(
+      {
+        commandPrefix: [process.execPath, fakeServer, "interrupt-timeout"],
+        runtimeRoot: join(dirname(workspace.worktreePath), "deadline-runtime"),
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        timeouts: {
+          childStartupMs: 500,
+          initializationMs: 500,
+          modelSchemaMs: 500,
+          turnMs: 500,
+          shutdownMs: 200,
+        },
+        terminateProcessGroup: async (child, shutdownMs) => {
+          captured = child;
+          await delay(shutdownMs);
+          terminationReturnedAt = performance.now();
+          return {
+            code: null,
+            signal: "SIGKILL",
+            cleanupTimedOut: true,
+          };
+        },
       },
-      terminateProcessGroup: async (child, shutdownMs) => {
-        captured = child;
-        await delay(shutdownMs);
-        terminationReturnedAt = performance.now();
-        return {
-          code: null,
-          signal: "SIGKILL",
-          cleanupTimedOut: true,
-        };
-      },
-    });
+      preparedCodex,
+    );
     try {
       const outcome = await Effect.runPromise(
         Effect.either(
@@ -437,28 +438,31 @@ describe("Codex provider", () => {
     const { assignment, workspace } = await fixture();
     let captured: ManagedProcess | undefined;
     const budgets: number[] = [];
-    const provider = makeCodexProvider({
-      commandPrefix: [process.execPath, fakeServer, "success"],
-      runtimeRoot: join(dirname(workspace.worktreePath), "rejection-runtime"),
-      model: "gpt-5.6-luna",
-      reasoningEffort: "low",
-      timeouts: {
-        childStartupMs: 500,
-        initializationMs: 500,
-        modelSchemaMs: 500,
-        turnMs: 500,
-        shutdownMs: 200,
+    const provider = makeCodexProvider(
+      {
+        commandPrefix: [process.execPath, fakeServer, "success"],
+        runtimeRoot: join(dirname(workspace.worktreePath), "rejection-runtime"),
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        timeouts: {
+          childStartupMs: 500,
+          initializationMs: 500,
+          modelSchemaMs: 500,
+          turnMs: 500,
+          shutdownMs: 200,
+        },
+        terminateProcessGroup: async (child, shutdownMs) => {
+          captured = child;
+          budgets.push(shutdownMs);
+          if (budgets.length === 1) {
+            await delay(120);
+            throw new Error("termination failed");
+          }
+          return terminateOwnedGroup(child, shutdownMs);
+        },
       },
-      terminateProcessGroup: async (child, shutdownMs) => {
-        captured = child;
-        budgets.push(shutdownMs);
-        if (budgets.length === 1) {
-          await delay(120);
-          throw new Error("termination failed");
-        }
-        return terminateOwnedGroup(child, shutdownMs);
-      },
-    });
+      preparedCodex,
+    );
     try {
       const outcome = await Effect.runPromise(
         Effect.either(
@@ -483,23 +487,26 @@ describe("Codex provider", () => {
     const { assignment, workspace } = await fixture();
     let captured: ManagedProcess | undefined;
     const patches: Array<string | undefined> = [];
-    const provider = makeCodexProvider({
-      commandPrefix: [process.execPath, fakeServer, "success"],
-      runtimeRoot: join(dirname(workspace.worktreePath), "rejection-runtime"),
-      model: "gpt-5.6-luna",
-      reasoningEffort: "low",
-      timeouts: {
-        childStartupMs: 500,
-        initializationMs: 500,
-        modelSchemaMs: 500,
-        turnMs: 500,
-        shutdownMs: 200,
+    const provider = makeCodexProvider(
+      {
+        commandPrefix: [process.execPath, fakeServer, "success"],
+        runtimeRoot: join(dirname(workspace.worktreePath), "rejection-runtime"),
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        timeouts: {
+          childStartupMs: 500,
+          initializationMs: 500,
+          modelSchemaMs: 500,
+          turnMs: 500,
+          shutdownMs: 200,
+        },
+        terminateProcessGroup: async (child) => {
+          captured = child;
+          throw new Error("termination failed");
+        },
       },
-      terminateProcessGroup: async (child) => {
-        captured = child;
-        throw new Error("termination failed");
-      },
-    });
+      preparedCodex,
+    );
     try {
       const outcome = await Effect.runPromise(
         Effect.either(
@@ -528,24 +535,27 @@ describe("Codex provider", () => {
     });
     let captured: ManagedProcess | undefined;
     let terminateCalls = 0;
-    const provider = makeCodexProvider({
-      commandPrefix: [process.execPath, fakeServer, "turn-timeout"],
-      runtimeRoot: join(dirname(workspace.worktreePath), "interrupt-runtime"),
-      model: "gpt-5.6-luna",
-      reasoningEffort: "low",
-      timeouts: {
-        childStartupMs: 500,
-        initializationMs: 500,
-        modelSchemaMs: 500,
-        turnMs: 5_000,
-        shutdownMs: 500,
+    const provider = makeCodexProvider(
+      {
+        commandPrefix: [process.execPath, fakeServer, "turn-timeout"],
+        runtimeRoot: join(dirname(workspace.worktreePath), "interrupt-runtime"),
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        timeouts: {
+          childStartupMs: 500,
+          initializationMs: 500,
+          modelSchemaMs: 500,
+          turnMs: 5_000,
+          shutdownMs: 500,
+        },
+        terminateProcessGroup: async (child, shutdownMs) => {
+          captured = child;
+          terminateCalls += 1;
+          return terminateOwnedGroup(child, shutdownMs);
+        },
       },
-      terminateProcessGroup: async (child, shutdownMs) => {
-        captured = child;
-        terminateCalls += 1;
-        return terminateOwnedGroup(child, shutdownMs);
-      },
-    });
+      preparedCodex,
+    );
     let turnStarted = false;
     const fiber = Effect.runFork(
       provider.run(
